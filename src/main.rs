@@ -72,6 +72,7 @@ fn new_pcc_schema() -> HashMap<String, TagType> {
 }
 
 impl Pcc {
+    // create a new Pcc object
     pub fn new(config: &PccConfig) -> Pcc {
         Pcc {
             config: config.clone(),
@@ -80,6 +81,7 @@ impl Pcc {
         }
     }
 
+    // recursively read PCC file data into Pcc object
     pub fn read(&mut self, relpath: &str) -> io::Result<()> {
         let mut abspath = PathBuf::from(&self.config.datadir);
         abspath.push(relpath);
@@ -127,6 +129,7 @@ impl Pcc {
         Ok(())
     }
 
+    // display all data in data dictionary
     pub fn display(&self) {
         for (key, val) in &self.dict {
             println!("{}={}", key, val);
@@ -135,17 +138,18 @@ impl Pcc {
 }
 
 fn main() {
+    // parse command line options
     let args = Args::parse();
 
+    // create new Pcc object
     let pcc_cfg = PccConfig {
         datadir: args.datadir.clone(),
     };
-
     let mut pcc = Pcc::new(&pcc_cfg);
 
+    // recursively read all PCC and LST data, starting at toplevel file
     pcc.read(&args.pccfile).expect("Toplevel PCC I/O error");
 
+    // debug: display data dictionary
     pcc.display();
-
-    println!("pcgtools ended.");
 }

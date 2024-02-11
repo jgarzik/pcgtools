@@ -86,20 +86,36 @@ impl Pcc {
         for line_res in rdr.lines() {
             let line = line_res.expect("BufReader parse failed");
 
+            // comments and empty lines
             let ch = line.chars().next();
-            match ch {
-                None | Some('#') => {}
-                _ => {
-                    let sor = line.split_once(':');
-                    match sor {
-                        None => return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon")),
-                        Some((lhs, rhs)) => {
-                            if !self.pcc_schema.contains_key(lhs) {
-                                return Err(Error::new(ErrorKind::Other, "PCC invalid key"));
-                            }
-                            self.dict.insert(lhs.to_string(), rhs.to_string());
-                        }
-                    }
+            if ch.is_none() || ch == Some('#') {
+                continue;
+            }
+
+            // split on ':'
+            let sor = line.split_once(':');
+            if sor.is_none() {
+                return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon"));
+            }
+
+            let (lhs, rhs) = sor.unwrap();
+
+            // is this a known key?
+            let tagtype_res = self.pcc_schema.get(lhs);
+            match tagtype_res {
+                Some(_tagtype) => {}
+                None => return Err(Error::new(ErrorKind::Other, "PCC invalid key")),
+            }
+
+            // store in global data dictionary
+            let tag = self.dict.get_mut(lhs);
+            match tag {
+                None => {
+                    self.dict.insert(lhs.to_string(), rhs.to_string());
+                }
+                Some(val) => {
+                    val.push_str("\n");
+                    val.push_str(rhs);
                 }
             }
         }

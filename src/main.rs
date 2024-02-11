@@ -39,40 +39,44 @@ pub struct Pcc {
     pcc_schema: HashMap<String, TagType>,
 }
 
+fn new_pcc_schema() -> HashMap<String, TagType> {
+    HashMap::from([
+        (String::from("!PRECAMPAIGN"), TagType::Text),
+        (String::from("BOOKTYPE"), TagType::Text),
+        (String::from("CAMPAIGN"), TagType::Text),
+        (String::from("COPYRIGHT"), TagType::Text),
+        (String::from("COVER"), TagType::Text),
+        (String::from("FORWARDREF"), TagType::Text),
+        (String::from("GAMEMODE"), TagType::Text),
+        (String::from("GENRE"), TagType::Text),
+        (String::from("INFOTEXT"), TagType::Bool),
+        (String::from("ISOGL"), TagType::Bool),
+        (String::from("ISLICENSED"), TagType::Bool),
+        (String::from("KEY"), TagType::Text),
+        (String::from("LOGO"), TagType::Text),
+        (String::from("PCC"), TagType::ReadPcc),
+        (String::from("PUBNAMELONG"), TagType::Text),
+        (String::from("PUBNAMESHORT"), TagType::Text),
+        (String::from("PUBNAMEWEB"), TagType::Text),
+        (String::from("RANK"), TagType::Number),
+        (String::from("SETTING"), TagType::Text),
+        (String::from("SHOWINMENU"), TagType::Text),
+        (String::from("SOURCEDATE"), TagType::Date),
+        (String::from("SOURCELONG"), TagType::Text),
+        (String::from("SOURCESHORT"), TagType::Text),
+        (String::from("SOURCEWEB"), TagType::Text),
+        (String::from("STATUS"), TagType::Text),
+        (String::from("TYPE"), TagType::Text),
+        (String::from("URL"), TagType::Text),
+    ])
+}
+
 impl Pcc {
     pub fn new(config: &PccConfig) -> Pcc {
         Pcc {
             config: config.clone(),
             dict: HashMap::new(),
-            pcc_schema: HashMap::from([
-                (String::from("!PRECAMPAIGN"), TagType::Text),
-                (String::from("BOOKTYPE"), TagType::Text),
-                (String::from("CAMPAIGN"), TagType::Text),
-                (String::from("COPYRIGHT"), TagType::Text),
-                (String::from("COVER"), TagType::Text),
-                (String::from("FORWARDREF"), TagType::Text),
-                (String::from("GAMEMODE"), TagType::Text),
-                (String::from("GENRE"), TagType::Text),
-                (String::from("INFOTEXT"), TagType::Bool),
-                (String::from("ISOGL"), TagType::Bool),
-                (String::from("ISLICENSED"), TagType::Bool),
-                (String::from("KEY"), TagType::Text),
-                (String::from("LOGO"), TagType::Text),
-                (String::from("PCC"), TagType::ReadPcc),
-                (String::from("PUBNAMELONG"), TagType::Text),
-                (String::from("PUBNAMESHORT"), TagType::Text),
-                (String::from("PUBNAMEWEB"), TagType::Text),
-                (String::from("RANK"), TagType::Number),
-                (String::from("SETTING"), TagType::Text),
-                (String::from("SHOWINMENU"), TagType::Text),
-                (String::from("SOURCEDATE"), TagType::Date),
-                (String::from("SOURCELONG"), TagType::Text),
-                (String::from("SOURCESHORT"), TagType::Text),
-                (String::from("SOURCEWEB"), TagType::Text),
-                (String::from("STATUS"), TagType::Text),
-                (String::from("TYPE"), TagType::Text),
-                (String::from("URL"), TagType::Text),
-            ]),
+            pcc_schema: new_pcc_schema(),
         }
     }
 

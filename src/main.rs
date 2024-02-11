@@ -2,10 +2,10 @@ extern crate clap;
 
 use clap::Parser;
 use std::{
+    collections::HashMap,
     fs::File,
     io,
-    io::{prelude::*, BufReader},
-    path::Path,
+    io::{prelude::*, BufReader, Error, ErrorKind},
     path::PathBuf,
 };
 
@@ -22,39 +22,56 @@ struct Args {
 
 #[derive(Clone)]
 pub struct PccConfig {
-    toplevel: String,
     datadir: String,
 }
 
 pub struct Pcc {
     config: PccConfig,
-}
-
-fn lines_from_file(filename: impl AsRef<Path>) -> io::Result<Vec<String>> {
-    let file = File::open(filename)?;
-    let buf = BufReader::new(file);
-    Ok(buf
-        .lines()
-        .map(|l| l.expect("Could not parse line"))
-        .collect())
+    dict: HashMap<String, String>,
 }
 
 impl Pcc {
     pub fn new(config: &PccConfig) -> Pcc {
         Pcc {
             config: config.clone(),
+            dict: HashMap::new(),
         }
     }
 
-    pub fn read(&self, relpath: &str) -> io::Result<()> {
+    pub fn read(&mut self, relpath: &str) -> io::Result<()> {
         let mut abspath = PathBuf::from(&self.config.datadir);
         abspath.push(relpath);
 
         println!("PCC-read-lines({})", abspath.as_path().display());
 
-        let _lines = lines_from_file(abspath.to_str().expect("BUG"))?;
+        let file = File::open(abspath)?;
+        let rdr = BufReader::new(file);
+
+        for line_res in rdr.lines() {
+            let line = line_res.expect("BufReader parse failed");
+
+            let ch = line.chars().next();
+            match ch {
+                None | Some('#') => {}
+                _ => {
+                    let sor = line.split_once(':');
+                    match sor {
+                        None => return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon")),
+                        Some((lhs, rhs)) => {
+                            self.dict.insert(lhs.to_string(), rhs.to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
+    }
+
+    pub fn display(&self) {
+        for (key, val) in &self.dict {
+            println!("{}={}", key, val);
+        }
     }
 }
 
@@ -62,13 +79,14 @@ fn main() {
     let args = Args::parse();
 
     let pcc_cfg = PccConfig {
-        toplevel: args.pccfile.clone(),
         datadir: args.datadir.clone(),
     };
 
-    let pcc = Pcc::new(&pcc_cfg);
+    let mut pcc = Pcc::new(&pcc_cfg);
 
     pcc.read(&args.pccfile).expect("Toplevel PCC I/O error");
 
-    println!("Hello, world!");
+    pcc.display();
+
+    println!("pcgtools ended.");
 }

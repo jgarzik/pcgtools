@@ -116,9 +116,12 @@ impl Pcc {
             // store in global data dictionary
             let tag = self.dict.get_mut(lhs);
             match tag {
+                // new key; store in hashmap
                 None => {
                     self.dict.insert(lhs.to_string(), rhs.to_string());
                 }
+
+                // existing key; append to string value
                 Some(val) => {
                     val.push_str("\n");
                     val.push_str(rhs);

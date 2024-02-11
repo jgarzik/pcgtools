@@ -106,12 +106,13 @@ impl Pcc {
 
             let (lhs, rhs) = sor.unwrap();
 
-            // is this a known key?
+            // is this tag in the known schema?
             let tagtype_res = self.pcc_schema.get(lhs);
-            match tagtype_res {
-                Some(_tagtype) => {}
-                None => return Err(Error::new(ErrorKind::Other, "PCC invalid key")),
+            if tagtype_res.is_none() {
+                return Err(Error::new(ErrorKind::Other, "PCC invalid key"));
             }
+
+            // let tagtype = tagtype_res.unwrap();
 
             // store in global data dictionary
             let tag = self.dict.get_mut(lhs);

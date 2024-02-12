@@ -6,7 +6,6 @@ use std::{
     fs::File,
     io,
     io::{prelude::*, BufReader, Error, ErrorKind},
-    path::PathBuf,
 };
 
 #[derive(Parser, Debug)]
@@ -23,6 +22,7 @@ struct Args {
 enum TagType {
     Bool,
     Date,
+    List,
     Number,
     Text,
     ReadPcc,
@@ -46,9 +46,12 @@ fn new_pcc_schema() -> HashMap<String, TagType> {
         (String::from("CAMPAIGN"), TagType::Text),
         (String::from("COPYRIGHT"), TagType::Text),
         (String::from("COVER"), TagType::Text),
+        (String::from("DESC"), TagType::Text),
+        (String::from("DYNAMIC"), TagType::Text),
         (String::from("FORWARDREF"), TagType::Text),
         (String::from("GAMEMODE"), TagType::Text),
         (String::from("GENRE"), TagType::Text),
+        (String::from("HELP"), TagType::Text),
         (String::from("INFOTEXT"), TagType::Bool),
         (String::from("ISOGL"), TagType::Bool),
         (String::from("ISLICENSED"), TagType::Bool),
@@ -68,6 +71,31 @@ fn new_pcc_schema() -> HashMap<String, TagType> {
         (String::from("STATUS"), TagType::Text),
         (String::from("TYPE"), TagType::Text),
         (String::from("URL"), TagType::Text),
+        (String::from("ABILITY"), TagType::List),
+        (String::from("ABILITYCATEGORY"), TagType::List),
+        (String::from("ALIGNMENT"), TagType::List),
+        (String::from("ARMORPROF"), TagType::List),
+        (String::from("CLASS"), TagType::List),
+        (String::from("COMPANIONMOD"), TagType::List),
+        (String::from("DATATABLE"), TagType::List),
+        (String::from("DATACONTROL"), TagType::List), // includes wildcards?
+        (String::from("DEITY"), TagType::List),
+        (String::from("DOMAIN"), TagType::List),
+        (String::from("EQUIPMENT"), TagType::List),
+        (String::from("EQUIPMOD"), TagType::List),
+        (String::from("GLOBALMODIFIER"), TagType::List),
+        (String::from("KIT"), TagType::List),
+        (String::from("LANGUAGE"), TagType::List),
+        (String::from("RACE"), TagType::List),
+        (String::from("SAVE"), TagType::List),
+        (String::from("SHIELDPROF"), TagType::List),
+        (String::from("SIZE"), TagType::List),
+        (String::from("SKILL"), TagType::List),
+        (String::from("SPELL"), TagType::List),
+        (String::from("STAT"), TagType::List),
+        (String::from("TEMPLATE"), TagType::List),
+        (String::from("VARIABLE"), TagType::List),
+        (String::from("WEAPONPROF"), TagType::List),
     ])
 }
 
@@ -82,11 +110,18 @@ impl Pcc {
     }
 
     // recursively read PCC file data into Pcc object
-    pub fn read(&mut self, relpath: &str) -> io::Result<()> {
-        let mut abspath = PathBuf::from(&self.config.datadir);
-        abspath.push(relpath);
+    pub fn read(&mut self, pccpath: &str, is_relative: bool) -> io::Result<()> {
+        let mut fpath = String::new();
 
-        let file = File::open(abspath)?;
+        if is_relative {
+            fpath.push_str(&self.config.datadir);
+        }
+
+        fpath.push_str(pccpath);
+
+        println!("Pcc.read({})", fpath);
+
+        let file = File::open(fpath)?;
         let rdr = BufReader::new(file);
 
         for line_res in rdr.lines() {
@@ -109,10 +144,29 @@ impl Pcc {
             // is this tag in the known schema?
             let tagtype_res = self.pcc_schema.get(lhs);
             if tagtype_res.is_none() {
-                return Err(Error::new(ErrorKind::Other, "PCC invalid key"));
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("PCC invalid key {}", lhs),
+                ));
             }
 
-            // let tagtype = tagtype_res.unwrap();
+            let tagtype = tagtype_res.unwrap();
+            match tagtype {
+                TagType::ReadPcc => {
+                    // relative path indicated by leading '@'
+                    let (is_rel, fpath);
+                    if rhs.chars().nth(0) == Some('@') {
+                        is_rel = true;
+                        fpath = &rhs[1..];
+                    } else {
+                        is_rel = false;
+                        fpath = &rhs;
+                    }
+
+                    self.read(fpath, is_rel)?;
+                }
+                _ => {}
+            }
 
             // store in global data dictionary
             let tag = self.dict.get_mut(lhs);
@@ -145,14 +199,17 @@ fn main() {
     // parse command line options
     let args = Args::parse();
 
+    let mut datadir = args.datadir.clone();
+    if datadir.chars().last() != Some('/') {
+        datadir.push_str("/"); // todo: windows
+    }
+
     // create new Pcc object
-    let pcc_cfg = PccConfig {
-        datadir: args.datadir.clone(),
-    };
+    let pcc_cfg = PccConfig { datadir };
     let mut pcc = Pcc::new(&pcc_cfg);
 
     // recursively read all PCC and LST data, starting at toplevel file
-    pcc.read(&args.pccfile).expect("Toplevel PCC I/O error");
+    pcc.read(&args.pccfile, true).expect("PCC.read I/O error");
 
     // debug: display data dictionary
     pcc.display();

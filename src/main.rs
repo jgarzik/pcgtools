@@ -120,6 +120,14 @@ impl Pcc {
         }
     }
 
+    // Read a single LST record
+    fn read_lst_line(&mut self, line: &str) -> io::Result<()> {
+        let mut tags: Vec<&str> = line.split('\t').collect();
+        let ident = tags.remove(0);
+        println!("ID={}, {:?}", ident, tags);
+        Ok(())
+    }
+
     // Read LST file into data dictionary
     pub fn read_lst(&mut self, basedir: &str, lstpath: &str, lstopts: &str) -> io::Result<()> {
         let mut fpath = String::new();
@@ -166,7 +174,7 @@ impl Pcc {
                 continue;
             }
 
-            // TODO
+            self.read_lst_line(&line)?;
         }
 
         Ok(())

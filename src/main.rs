@@ -6,6 +6,7 @@ use std::{
     fs::File,
     io,
     io::{prelude::*, BufReader, Error, ErrorKind},
+    path::Path,
 };
 
 #[derive(Parser, Debug)]
@@ -37,6 +38,13 @@ pub struct Pcc {
     config: PccConfig,
     dict: HashMap<String, String>,
     pcc_schema: HashMap<String, TagType>,
+}
+
+fn dir_from_path(full_path: &str) -> Option<String> {
+    let path = Path::new(full_path);
+    path.parent() // Get the parent directory as Option<&Path>
+        .and_then(|p| p.to_str()) // Convert &Path to Option<&str>
+        .map(|s| s.to_string()) // Convert &str to String
 }
 
 fn new_pcc_schema() -> HashMap<String, TagType> {
@@ -112,6 +120,58 @@ impl Pcc {
         }
     }
 
+    // Read LST file into data dictionary
+    pub fn read_lst(&mut self, basedir: &str, lstpath: &str, lstopts: &str) -> io::Result<()> {
+        let mut fpath = String::new();
+
+        let prefix = lstpath.chars().next().expect("Empty LST path");
+        match prefix {
+            // todo - don't know how to handle these wildcarded list files yet
+            '*' => {
+                println!("Pcc.read_lst({}) - SKIPPING", lstpath);
+                return Ok(());
+            }
+
+            // absolute path
+            '/' => {
+                fpath.push_str(lstpath);
+            }
+
+            // base directory is toplevel data dir
+            '@' => {
+                let relpath = &lstpath[1..];
+                fpath.push_str(&self.config.datadir);
+                fpath.push_str(relpath);
+            }
+
+            // "local file", in the same directory as PCC file
+            _ => {
+                fpath.push_str(basedir);
+                fpath.push_str("/");
+                fpath.push_str(lstpath);
+            }
+        }
+
+        println!("Pcc.read_lst({}, \"{}\")", fpath, lstopts);
+
+        let file = File::open(fpath)?;
+        let rdr = BufReader::new(file);
+
+        for line_res in rdr.lines() {
+            let line = line_res.expect("BufReader.lst parse failed");
+
+            // comments and empty lines
+            let ch = line.chars().next();
+            if ch.is_none() || ch == Some('#') {
+                continue;
+            }
+
+            // TODO
+        }
+
+        Ok(())
+    }
+
     // recursively read PCC file data into Pcc object
     pub fn read(&mut self, pccpath: &str, is_relative: bool) -> io::Result<()> {
         let mut fpath = String::new();
@@ -125,6 +185,8 @@ impl Pcc {
         if fpath.contains("\\") {
             fpath = fpath.replace("\\", "/");
         }
+
+        let basedir = dir_from_path(&fpath).unwrap();
 
         println!("Pcc.read({})", fpath);
 
@@ -169,6 +231,7 @@ impl Pcc {
 
             let tagtype = tagtype_res.unwrap();
             match tagtype {
+                // input included PCC file
                 TagType::ReadPcc => {
                     // relative path indicated by leading '@'
                     let (is_rel, fpath);
@@ -182,21 +245,29 @@ impl Pcc {
 
                     self.read(fpath, is_rel)?;
                 }
-                _ => {}
-            }
 
-            // store in global data dictionary
-            let tag = self.dict.get_mut(lhs);
-            match tag {
-                // new key; store in hashmap
-                None => {
-                    self.dict.insert(lhs.to_string(), rhs.to_string());
-                }
+                // read LST file
+                TagType::List => match rhs.split_once('|') {
+                    None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
+                    Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
+                },
 
-                // existing key; append to string value
-                Some(val) => {
-                    val.push_str("\n");
-                    val.push_str(rhs);
+                // handle other data types
+                TagType::Bool | TagType::Date | TagType::Number | TagType::Text => {
+                    // store in global data dictionary
+                    let tag = self.dict.get_mut(lhs);
+                    match tag {
+                        // new key; store in hashmap
+                        None => {
+                            self.dict.insert(lhs.to_string(), rhs.to_string());
+                        }
+
+                        // existing key; append to string value
+                        Some(val) => {
+                            val.push_str("\n");
+                            val.push_str(rhs);
+                        }
+                    }
                 }
             }
         }

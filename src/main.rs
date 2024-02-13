@@ -15,7 +15,7 @@ struct Args {
     /// Pathname of PCC file to input
     pccfile: String,
 
-    /// Directory where PCC and LST files are found
+    /// Base directory where PCC and LST files are found
     #[arg(short, long, default_value = ".")]
     datadir: String,
 }

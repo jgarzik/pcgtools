@@ -23,10 +23,10 @@ struct Args {
 enum PccTag {
     Bool,
     Date,
-    List,
+    LstFile,
     Number,
     Text,
-    ReadPcc,
+    PccFile,
 }
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ fn new_pcc_schema() -> HashMap<String, PccTag> {
         (String::from("ISLICENSED"), PccTag::Bool),
         (String::from("KEY"), PccTag::Text),
         (String::from("LOGO"), PccTag::Text),
-        (String::from("PCC"), PccTag::ReadPcc),
+        (String::from("PCC"), PccTag::PccFile),
         (String::from("PUBNAMELONG"), PccTag::Text),
         (String::from("PUBNAMESHORT"), PccTag::Text),
         (String::from("PUBNAMEWEB"), PccTag::Text),
@@ -81,32 +81,32 @@ fn new_pcc_schema() -> HashMap<String, PccTag> {
         (String::from("STATUS"), PccTag::Text),
         (String::from("TYPE"), PccTag::Text),
         (String::from("URL"), PccTag::Text),
-        (String::from("ABILITY"), PccTag::List),
-        (String::from("ABILITYCATEGORY"), PccTag::List),
-        (String::from("ALIGNMENT"), PccTag::List),
-        (String::from("ARMORPROF"), PccTag::List),
-        (String::from("BIOSET"), PccTag::List),
-        (String::from("CLASS"), PccTag::List),
-        (String::from("COMPANIONMOD"), PccTag::List),
-        (String::from("DATATABLE"), PccTag::List),
-        (String::from("DATACONTROL"), PccTag::List), // includes wildcards?
-        (String::from("DEITY"), PccTag::List),
-        (String::from("DOMAIN"), PccTag::List),
-        (String::from("EQUIPMENT"), PccTag::List),
-        (String::from("EQUIPMOD"), PccTag::List),
-        (String::from("GLOBALMODIFIER"), PccTag::List),
-        (String::from("KIT"), PccTag::List),
-        (String::from("LANGUAGE"), PccTag::List),
-        (String::from("RACE"), PccTag::List),
-        (String::from("SAVE"), PccTag::List),
-        (String::from("SHIELDPROF"), PccTag::List),
-        (String::from("SIZE"), PccTag::List),
-        (String::from("SKILL"), PccTag::List),
-        (String::from("SPELL"), PccTag::List),
-        (String::from("STAT"), PccTag::List),
-        (String::from("TEMPLATE"), PccTag::List),
-        (String::from("VARIABLE"), PccTag::List),
-        (String::from("WEAPONPROF"), PccTag::List),
+        (String::from("ABILITY"), PccTag::LstFile),
+        (String::from("ABILITYCATEGORY"), PccTag::LstFile),
+        (String::from("ALIGNMENT"), PccTag::LstFile),
+        (String::from("ARMORPROF"), PccTag::LstFile),
+        (String::from("BIOSET"), PccTag::LstFile),
+        (String::from("CLASS"), PccTag::LstFile),
+        (String::from("COMPANIONMOD"), PccTag::LstFile),
+        (String::from("DATATABLE"), PccTag::LstFile),
+        (String::from("DATACONTROL"), PccTag::LstFile), // includes wildcards?
+        (String::from("DEITY"), PccTag::LstFile),
+        (String::from("DOMAIN"), PccTag::LstFile),
+        (String::from("EQUIPMENT"), PccTag::LstFile),
+        (String::from("EQUIPMOD"), PccTag::LstFile),
+        (String::from("GLOBALMODIFIER"), PccTag::LstFile),
+        (String::from("KIT"), PccTag::LstFile),
+        (String::from("LANGUAGE"), PccTag::LstFile),
+        (String::from("RACE"), PccTag::LstFile),
+        (String::from("SAVE"), PccTag::LstFile),
+        (String::from("SHIELDPROF"), PccTag::LstFile),
+        (String::from("SIZE"), PccTag::LstFile),
+        (String::from("SKILL"), PccTag::LstFile),
+        (String::from("SPELL"), PccTag::LstFile),
+        (String::from("STAT"), PccTag::LstFile),
+        (String::from("TEMPLATE"), PccTag::LstFile),
+        (String::from("VARIABLE"), PccTag::LstFile),
+        (String::from("WEAPONPROF"), PccTag::LstFile),
     ])
 }
 
@@ -211,7 +211,7 @@ impl Pcc {
         let tagtype = tagtype_res.unwrap();
         match tagtype {
             // input included PCC file
-            PccTag::ReadPcc => {
+            PccTag::PccFile => {
                 // relative path indicated by leading '@'
                 let (is_rel, fpath);
                 if rhs.chars().nth(0) == Some('@') {
@@ -226,7 +226,7 @@ impl Pcc {
             }
 
             // read LST file
-            PccTag::List => match rhs.split_once('|') {
+            PccTag::LstFile => match rhs.split_once('|') {
                 None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
                 Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
             },

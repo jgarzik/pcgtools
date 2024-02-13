@@ -172,6 +172,79 @@ impl Pcc {
         Ok(())
     }
 
+    fn read_pcc_line(&mut self, basedir: &str, line: &str) -> io::Result<()> {
+        // split on ':'
+        let sor = line.split_once(':');
+        if sor.is_none() {
+            return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon"));
+        }
+
+        let mut lhs;
+        let rhs;
+        (lhs, rhs) = sor.unwrap();
+        let _tag_negate;
+
+        if lhs.chars().next() == Some('!') {
+            lhs = &lhs[1..];
+            _tag_negate = true;
+        } else {
+            _tag_negate = false;
+        }
+
+        // is this tag in the known schema?
+        let tagtype_res = self.pcc_schema.get(lhs);
+        if tagtype_res.is_none() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                format!("PCC invalid key {}", lhs),
+            ));
+        }
+
+        let tagtype = tagtype_res.unwrap();
+        match tagtype {
+            // input included PCC file
+            TagType::ReadPcc => {
+                // relative path indicated by leading '@'
+                let (is_rel, fpath);
+                if rhs.chars().nth(0) == Some('@') {
+                    is_rel = true;
+                    fpath = &rhs[1..];
+                } else {
+                    is_rel = false;
+                    fpath = &rhs;
+                }
+
+                self.read(fpath, is_rel)?;
+            }
+
+            // read LST file
+            TagType::List => match rhs.split_once('|') {
+                None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
+                Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
+            },
+
+            // handle other data types
+            TagType::Bool | TagType::Date | TagType::Number | TagType::Text => {
+                // store in global data dictionary
+                let tag = self.dict.get_mut(lhs);
+                match tag {
+                    // new key; store in hashmap
+                    None => {
+                        self.dict.insert(lhs.to_string(), rhs.to_string());
+                    }
+
+                    // existing key; append to string value
+                    Some(val) => {
+                        val.push_str("\n");
+                        val.push_str(rhs);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     // recursively read PCC file data into Pcc object
     pub fn read(&mut self, pccpath: &str, is_relative: bool) -> io::Result<()> {
         let mut fpath = String::new();
@@ -202,74 +275,7 @@ impl Pcc {
                 continue;
             }
 
-            // split on ':'
-            let sor = line.split_once(':');
-            if sor.is_none() {
-                return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon"));
-            }
-
-            let mut lhs;
-            let rhs;
-            (lhs, rhs) = sor.unwrap();
-            let _tag_negate;
-
-            if lhs.chars().next() == Some('!') {
-                lhs = &lhs[1..];
-                _tag_negate = true;
-            } else {
-                _tag_negate = false;
-            }
-
-            // is this tag in the known schema?
-            let tagtype_res = self.pcc_schema.get(lhs);
-            if tagtype_res.is_none() {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("PCC invalid key {}", lhs),
-                ));
-            }
-
-            let tagtype = tagtype_res.unwrap();
-            match tagtype {
-                // input included PCC file
-                TagType::ReadPcc => {
-                    // relative path indicated by leading '@'
-                    let (is_rel, fpath);
-                    if rhs.chars().nth(0) == Some('@') {
-                        is_rel = true;
-                        fpath = &rhs[1..];
-                    } else {
-                        is_rel = false;
-                        fpath = &rhs;
-                    }
-
-                    self.read(fpath, is_rel)?;
-                }
-
-                // read LST file
-                TagType::List => match rhs.split_once('|') {
-                    None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
-                    Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
-                },
-
-                // handle other data types
-                TagType::Bool | TagType::Date | TagType::Number | TagType::Text => {
-                    // store in global data dictionary
-                    let tag = self.dict.get_mut(lhs);
-                    match tag {
-                        // new key; store in hashmap
-                        None => {
-                            self.dict.insert(lhs.to_string(), rhs.to_string());
-                        }
-
-                        // existing key; append to string value
-                        Some(val) => {
-                            val.push_str("\n");
-                            val.push_str(rhs);
-                        }
-                    }
-                }
-            }
+            self.read_pcc_line(&basedir, &line)?;
         }
 
         Ok(())

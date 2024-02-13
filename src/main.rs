@@ -41,9 +41,10 @@ pub struct Pcc {
 
 fn new_pcc_schema() -> HashMap<String, TagType> {
     HashMap::from([
-        (String::from("!PRECAMPAIGN"), TagType::Text),
+        (String::from("PRECAMPAIGN"), TagType::Text),
         (String::from("BOOKTYPE"), TagType::Text),
         (String::from("CAMPAIGN"), TagType::Text),
+        (String::from("COMPANIONLIST"), TagType::Text),
         (String::from("COPYRIGHT"), TagType::Text),
         (String::from("COVER"), TagType::Text),
         (String::from("DESC"), TagType::Text),
@@ -52,6 +53,7 @@ fn new_pcc_schema() -> HashMap<String, TagType> {
         (String::from("GAMEMODE"), TagType::Text),
         (String::from("GENRE"), TagType::Text),
         (String::from("HELP"), TagType::Text),
+        (String::from("HIDETYPE"), TagType::Text),
         (String::from("INFOTEXT"), TagType::Bool),
         (String::from("ISOGL"), TagType::Bool),
         (String::from("ISLICENSED"), TagType::Bool),
@@ -75,6 +77,7 @@ fn new_pcc_schema() -> HashMap<String, TagType> {
         (String::from("ABILITYCATEGORY"), TagType::List),
         (String::from("ALIGNMENT"), TagType::List),
         (String::from("ARMORPROF"), TagType::List),
+        (String::from("BIOSET"), TagType::List),
         (String::from("CLASS"), TagType::List),
         (String::from("COMPANIONMOD"), TagType::List),
         (String::from("DATATABLE"), TagType::List),
@@ -119,6 +122,10 @@ impl Pcc {
 
         fpath.push_str(pccpath);
 
+        if fpath.contains("\\") {
+            fpath = fpath.replace("\\", "/");
+        }
+
         println!("Pcc.read({})", fpath);
 
         let file = File::open(fpath)?;
@@ -139,7 +146,17 @@ impl Pcc {
                 return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon"));
             }
 
-            let (lhs, rhs) = sor.unwrap();
+            let mut lhs;
+            let rhs;
+            (lhs, rhs) = sor.unwrap();
+            let _tag_negate;
+
+            if lhs.chars().next() == Some('!') {
+                lhs = &lhs[1..];
+                _tag_negate = true;
+            } else {
+                _tag_negate = false;
+            }
 
             // is this tag in the known schema?
             let tagtype_res = self.pcc_schema.get(lhs);

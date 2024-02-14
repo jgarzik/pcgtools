@@ -134,19 +134,13 @@ impl Pcc {
 
         let prefix = lstpath.chars().next().expect("Empty LST path");
         match prefix {
-            // todo - don't know how to handle these wildcarded list files yet
-            '*' => {
-                println!("Pcc.read_lst({}) - SKIPPING", lstpath);
-                return Ok(());
-            }
-
             // absolute path
             '/' => {
                 fpath.push_str(lstpath);
             }
 
             // base directory is toplevel data dir
-            '@' => {
+            '@' | '*' => {
                 let relpath = &lstpath[1..];
                 fpath.push_str(&self.config.datadir);
                 fpath.push_str(relpath);

@@ -15,18 +15,18 @@ struct Args {
     /// Pathname of PCC file to input
     pccfile: String,
 
-    /// Directory where PCC and LST files are found
+    /// Base directory where PCC and LST files are found
     #[arg(short, long, default_value = ".")]
     datadir: String,
 }
 
-enum TagType {
+enum PccTag {
     Bool,
     Date,
-    List,
+    LstFile,
     Number,
     Text,
-    ReadPcc,
+    PccFile,
 }
 
 #[derive(Clone)]
@@ -37,7 +37,7 @@ pub struct PccConfig {
 pub struct Pcc {
     config: PccConfig,
     dict: HashMap<String, String>,
-    pcc_schema: HashMap<String, TagType>,
+    pcc_schema: HashMap<String, PccTag>,
 }
 
 fn dir_from_path(full_path: &str) -> Option<String> {
@@ -47,66 +47,66 @@ fn dir_from_path(full_path: &str) -> Option<String> {
         .map(|s| s.to_string()) // Convert &str to String
 }
 
-fn new_pcc_schema() -> HashMap<String, TagType> {
+fn new_pcc_schema() -> HashMap<String, PccTag> {
     HashMap::from([
-        (String::from("PRECAMPAIGN"), TagType::Text),
-        (String::from("BOOKTYPE"), TagType::Text),
-        (String::from("CAMPAIGN"), TagType::Text),
-        (String::from("COMPANIONLIST"), TagType::Text),
-        (String::from("COPYRIGHT"), TagType::Text),
-        (String::from("COVER"), TagType::Text),
-        (String::from("DESC"), TagType::Text),
-        (String::from("DYNAMIC"), TagType::Text),
-        (String::from("FORWARDREF"), TagType::Text),
-        (String::from("GAMEMODE"), TagType::Text),
-        (String::from("GENRE"), TagType::Text),
-        (String::from("HELP"), TagType::Text),
-        (String::from("HIDETYPE"), TagType::Text),
-        (String::from("INFOTEXT"), TagType::Bool),
-        (String::from("ISOGL"), TagType::Bool),
-        (String::from("ISLICENSED"), TagType::Bool),
-        (String::from("KEY"), TagType::Text),
-        (String::from("LOGO"), TagType::Text),
-        (String::from("PCC"), TagType::ReadPcc),
-        (String::from("PUBNAMELONG"), TagType::Text),
-        (String::from("PUBNAMESHORT"), TagType::Text),
-        (String::from("PUBNAMEWEB"), TagType::Text),
-        (String::from("RANK"), TagType::Number),
-        (String::from("SETTING"), TagType::Text),
-        (String::from("SHOWINMENU"), TagType::Text),
-        (String::from("SOURCEDATE"), TagType::Date),
-        (String::from("SOURCELONG"), TagType::Text),
-        (String::from("SOURCESHORT"), TagType::Text),
-        (String::from("SOURCEWEB"), TagType::Text),
-        (String::from("STATUS"), TagType::Text),
-        (String::from("TYPE"), TagType::Text),
-        (String::from("URL"), TagType::Text),
-        (String::from("ABILITY"), TagType::List),
-        (String::from("ABILITYCATEGORY"), TagType::List),
-        (String::from("ALIGNMENT"), TagType::List),
-        (String::from("ARMORPROF"), TagType::List),
-        (String::from("BIOSET"), TagType::List),
-        (String::from("CLASS"), TagType::List),
-        (String::from("COMPANIONMOD"), TagType::List),
-        (String::from("DATATABLE"), TagType::List),
-        (String::from("DATACONTROL"), TagType::List), // includes wildcards?
-        (String::from("DEITY"), TagType::List),
-        (String::from("DOMAIN"), TagType::List),
-        (String::from("EQUIPMENT"), TagType::List),
-        (String::from("EQUIPMOD"), TagType::List),
-        (String::from("GLOBALMODIFIER"), TagType::List),
-        (String::from("KIT"), TagType::List),
-        (String::from("LANGUAGE"), TagType::List),
-        (String::from("RACE"), TagType::List),
-        (String::from("SAVE"), TagType::List),
-        (String::from("SHIELDPROF"), TagType::List),
-        (String::from("SIZE"), TagType::List),
-        (String::from("SKILL"), TagType::List),
-        (String::from("SPELL"), TagType::List),
-        (String::from("STAT"), TagType::List),
-        (String::from("TEMPLATE"), TagType::List),
-        (String::from("VARIABLE"), TagType::List),
-        (String::from("WEAPONPROF"), TagType::List),
+        (String::from("PRECAMPAIGN"), PccTag::Text),
+        (String::from("BOOKTYPE"), PccTag::Text),
+        (String::from("CAMPAIGN"), PccTag::Text),
+        (String::from("COMPANIONLIST"), PccTag::Text),
+        (String::from("COPYRIGHT"), PccTag::Text),
+        (String::from("COVER"), PccTag::Text),
+        (String::from("DESC"), PccTag::Text),
+        (String::from("DYNAMIC"), PccTag::Text),
+        (String::from("FORWARDREF"), PccTag::Text),
+        (String::from("GAMEMODE"), PccTag::Text),
+        (String::from("GENRE"), PccTag::Text),
+        (String::from("HELP"), PccTag::Text),
+        (String::from("HIDETYPE"), PccTag::Text),
+        (String::from("INFOTEXT"), PccTag::Bool),
+        (String::from("ISOGL"), PccTag::Bool),
+        (String::from("ISLICENSED"), PccTag::Bool),
+        (String::from("KEY"), PccTag::Text),
+        (String::from("LOGO"), PccTag::Text),
+        (String::from("PCC"), PccTag::PccFile),
+        (String::from("PUBNAMELONG"), PccTag::Text),
+        (String::from("PUBNAMESHORT"), PccTag::Text),
+        (String::from("PUBNAMEWEB"), PccTag::Text),
+        (String::from("RANK"), PccTag::Number),
+        (String::from("SETTING"), PccTag::Text),
+        (String::from("SHOWINMENU"), PccTag::Text),
+        (String::from("SOURCEDATE"), PccTag::Date),
+        (String::from("SOURCELONG"), PccTag::Text),
+        (String::from("SOURCESHORT"), PccTag::Text),
+        (String::from("SOURCEWEB"), PccTag::Text),
+        (String::from("STATUS"), PccTag::Text),
+        (String::from("TYPE"), PccTag::Text),
+        (String::from("URL"), PccTag::Text),
+        (String::from("ABILITY"), PccTag::LstFile),
+        (String::from("ABILITYCATEGORY"), PccTag::LstFile),
+        (String::from("ALIGNMENT"), PccTag::LstFile),
+        (String::from("ARMORPROF"), PccTag::LstFile),
+        (String::from("BIOSET"), PccTag::LstFile),
+        (String::from("CLASS"), PccTag::LstFile),
+        (String::from("COMPANIONMOD"), PccTag::LstFile),
+        (String::from("DATATABLE"), PccTag::LstFile),
+        (String::from("DATACONTROL"), PccTag::LstFile), // includes wildcards?
+        (String::from("DEITY"), PccTag::LstFile),
+        (String::from("DOMAIN"), PccTag::LstFile),
+        (String::from("EQUIPMENT"), PccTag::LstFile),
+        (String::from("EQUIPMOD"), PccTag::LstFile),
+        (String::from("GLOBALMODIFIER"), PccTag::LstFile),
+        (String::from("KIT"), PccTag::LstFile),
+        (String::from("LANGUAGE"), PccTag::LstFile),
+        (String::from("RACE"), PccTag::LstFile),
+        (String::from("SAVE"), PccTag::LstFile),
+        (String::from("SHIELDPROF"), PccTag::LstFile),
+        (String::from("SIZE"), PccTag::LstFile),
+        (String::from("SKILL"), PccTag::LstFile),
+        (String::from("SPELL"), PccTag::LstFile),
+        (String::from("STAT"), PccTag::LstFile),
+        (String::from("TEMPLATE"), PccTag::LstFile),
+        (String::from("VARIABLE"), PccTag::LstFile),
+        (String::from("WEAPONPROF"), PccTag::LstFile),
     ])
 }
 
@@ -134,19 +134,13 @@ impl Pcc {
 
         let prefix = lstpath.chars().next().expect("Empty LST path");
         match prefix {
-            // todo - don't know how to handle these wildcarded list files yet
-            '*' => {
-                println!("Pcc.read_lst({}) - SKIPPING", lstpath);
-                return Ok(());
-            }
-
             // absolute path
             '/' => {
                 fpath.push_str(lstpath);
             }
 
             // base directory is toplevel data dir
-            '@' => {
+            '@' | '*' => {
                 let relpath = &lstpath[1..];
                 fpath.push_str(&self.config.datadir);
                 fpath.push_str(relpath);
@@ -211,7 +205,7 @@ impl Pcc {
         let tagtype = tagtype_res.unwrap();
         match tagtype {
             // input included PCC file
-            TagType::ReadPcc => {
+            PccTag::PccFile => {
                 // relative path indicated by leading '@'
                 let (is_rel, fpath);
                 if rhs.chars().nth(0) == Some('@') {
@@ -226,13 +220,13 @@ impl Pcc {
             }
 
             // read LST file
-            TagType::List => match rhs.split_once('|') {
+            PccTag::LstFile => match rhs.split_once('|') {
                 None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
                 Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
             },
 
             // handle other data types
-            TagType::Bool | TagType::Date | TagType::Number | TagType::Text => {
+            PccTag::Bool | PccTag::Date | PccTag::Number | PccTag::Text => {
                 // store in global data dictionary
                 let tag = self.dict.get_mut(lhs);
                 match tag {

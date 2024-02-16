@@ -11,6 +11,7 @@
 extern crate clap;
 
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
@@ -30,6 +31,7 @@ struct Args {
     datadir: String,
 }
 
+#[derive(Serialize, Deserialize)]
 enum PccTag {
     Bool,
     Date,
@@ -39,6 +41,7 @@ enum PccTag {
     PccFile,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct PccList {
     _ident: String,
     attrib: Vec<(String, String)>,
@@ -53,6 +56,7 @@ impl PccList {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub enum PccDatum {
     Text(String),
     List(PccList),
@@ -67,11 +71,12 @@ impl PccDatum {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PccConfig {
     datadir: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Pcc {
     config: PccConfig,
     dict: HashMap<String, PccDatum>,
@@ -385,12 +390,7 @@ impl Pcc {
 
     // display all data in data dictionary
     pub fn display(&self) {
-        for (key, datum) in &self.dict {
-            match datum {
-                PccDatum::Text(textstr) => println!("{}={}", key, textstr),
-                _ => {}
-            }
-        }
+        println!("{}", serde_json::to_string_pretty(self).unwrap());
     }
 }
 

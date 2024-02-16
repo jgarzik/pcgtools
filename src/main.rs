@@ -150,7 +150,7 @@ impl Pcc {
     }
 
     // Read a single LST record
-    fn read_lst_line(&mut self, line: &str) -> io::Result<()> {
+    fn read_lst_line(&mut self, _datum: &mut PccDatum, line: &str) -> io::Result<()> {
         let mut tags: Vec<&str> = line.split('\t').collect();
         let raw_ident = tags.remove(0);
         let is_mod = raw_ident.ends_with(".MOD");
@@ -176,6 +176,7 @@ impl Pcc {
     ) -> io::Result<()> {
         let mut fpath = String::new();
 
+        // parse path prefixes
         let prefix = lstpath.chars().next().expect("Empty LST path");
         match prefix {
             // absolute path
@@ -200,9 +201,31 @@ impl Pcc {
 
         println!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
 
+        let mut datum;
+
+        // Does the List record already exist?  if not, create a new one.
+        // Due to "second mutable borrow" issue, we must remove from
+        // HashMap, and then insert back into HashMap when we're done.
+        if !self.dict.contains_key(pcc_tag) {
+            datum = PccDatum::List(PccList::new(pcc_tag));
+        } else {
+            datum = self.dict.remove(pcc_tag).unwrap();
+        }
+
+        // record type check
+        match &datum {
+            PccDatum::List(_val) => {}
+            _ => {
+                // todo: technically an error, not a panic
+                panic!("key is not a list");
+            }
+        }
+
+        // open and buffer list file input data
         let file = File::open(fpath)?;
         let rdr = BufReader::new(file);
 
+        // iterate through each text file line
         for line_res in rdr.lines() {
             let line = line_res.expect("BufReader.lst parse failed");
 
@@ -212,8 +235,11 @@ impl Pcc {
                 continue;
             }
 
-            self.read_lst_line(&line)?;
+            // parse line
+            self.read_lst_line(&mut datum, &line)?;
         }
+
+        self.dict.insert(pcc_tag.to_string(), datum);
 
         Ok(())
     }

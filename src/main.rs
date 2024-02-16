@@ -29,6 +29,25 @@ enum PccTag {
     PccFile,
 }
 
+pub struct PccList {
+    _ident: String,
+    _attrib: Vec<(String, String)>,
+}
+
+impl PccList {
+    pub fn new(ident: &str) -> PccList {
+        PccList {
+            _ident: String::from(ident),
+            _attrib: Vec::new(),
+        }
+    }
+}
+
+pub enum PccDatum {
+    Text(String),
+    List(PccList),
+}
+
 #[derive(Clone)]
 pub struct PccConfig {
     datadir: String,
@@ -36,7 +55,7 @@ pub struct PccConfig {
 
 pub struct Pcc {
     config: PccConfig,
-    dict: HashMap<String, String>,
+    dict: HashMap<String, PccDatum>,
     pcc_schema: HashMap<String, PccTag>,
 }
 
@@ -123,13 +142,28 @@ impl Pcc {
     // Read a single LST record
     fn read_lst_line(&mut self, line: &str) -> io::Result<()> {
         let mut tags: Vec<&str> = line.split('\t').collect();
-        let ident = tags.remove(0);
-        println!("ID={}, {:?}", ident, tags);
+        let raw_ident = tags.remove(0);
+        let is_mod = raw_ident.ends_with(".MOD");
+        let ident;
+        if is_mod {
+            ident = &raw_ident[0..(raw_ident.len() - 4)];
+        } else {
+            ident = &raw_ident;
+        }
+
+        println!("ID={}, is_mod {}", ident, is_mod);
+
         Ok(())
     }
 
     // Read LST file into data dictionary
-    pub fn read_lst(&mut self, basedir: &str, lstpath: &str, lstopts: &str) -> io::Result<()> {
+    pub fn read_lst(
+        &mut self,
+        pcc_tag: &str,
+        basedir: &str,
+        lstpath: &str,
+        lstopts: &str,
+    ) -> io::Result<()> {
         let mut fpath = String::new();
 
         let prefix = lstpath.chars().next().expect("Empty LST path");
@@ -154,7 +188,7 @@ impl Pcc {
             }
         }
 
-        println!("Pcc.read_lst({}, \"{}\")", fpath, lstopts);
+        println!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
 
         let file = File::open(fpath)?;
         let rdr = BufReader::new(file);
@@ -221,8 +255,8 @@ impl Pcc {
 
             // read LST file
             PccTag::LstFile => match rhs.split_once('|') {
-                None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
-                Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
+                None => self.read_lst(lhs, &basedir, rhs, String::from("").as_str())?,
+                Some((lstpath, lstopts)) => self.read_lst(lhs, &basedir, lstpath, lstopts)?,
             },
 
             // handle other data types
@@ -232,14 +266,18 @@ impl Pcc {
                 match tag {
                     // new key; store in hashmap
                     None => {
-                        self.dict.insert(lhs.to_string(), rhs.to_string());
+                        self.dict
+                            .insert(lhs.to_string(), PccDatum::Text(rhs.to_string()));
                     }
 
                     // existing key; append to string value
-                    Some(val) => {
-                        val.push_str("\n");
-                        val.push_str(rhs);
-                    }
+                    Some(datum) => match datum {
+                        PccDatum::Text(val) => {
+                            val.push_str("\n");
+                            val.push_str(rhs);
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
@@ -285,8 +323,11 @@ impl Pcc {
 
     // display all data in data dictionary
     pub fn display(&self) {
-        for (key, val) in &self.dict {
-            println!("{}={}", key, val);
+        for (key, datum) in &self.dict {
+            match datum {
+                PccDatum::Text(textstr) => println!("{}={}", key, textstr),
+                _ => {}
+            }
         }
     }
 }

@@ -41,14 +41,14 @@ enum PccTag {
 
 pub struct PccList {
     _ident: String,
-    _attrib: Vec<(String, String)>,
+    attrib: Vec<(String, String)>,
 }
 
 impl PccList {
     pub fn new(ident: &str) -> PccList {
         PccList {
             _ident: String::from(ident),
-            _attrib: Vec::new(),
+            attrib: Vec::new(),
         }
     }
 }
@@ -56,6 +56,15 @@ impl PccList {
 pub enum PccDatum {
     Text(String),
     List(PccList),
+}
+
+impl PccDatum {
+    pub fn as_mut_list(&mut self) -> Option<&mut PccList> {
+        match self {
+            PccDatum::List(l) => Some(l),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -150,9 +159,9 @@ impl Pcc {
     }
 
     // Read a single LST record
-    fn read_lst_line(&mut self, _datum: &mut PccDatum, line: &str) -> io::Result<()> {
-        let mut tags: Vec<&str> = line.split('\t').collect();
-        let raw_ident = tags.remove(0);
+    fn read_lst_line(&mut self, datum: &mut PccDatum, line: &str) -> io::Result<()> {
+        let mut attribs: Vec<&str> = line.split('\t').collect();
+        let raw_ident = attribs.remove(0);
         let is_mod = raw_ident.ends_with(".MOD");
         let ident;
         if is_mod {
@@ -161,7 +170,24 @@ impl Pcc {
             ident = &raw_ident;
         }
 
+        let lst = datum.as_mut_list().unwrap();
+
         println!("ID={}, is_mod {}", ident, is_mod);
+
+        for attrib in &attribs {
+            match attrib.split_once(':') {
+                None => {
+                    if !attrib.trim().is_empty() {
+                        println!("\t{}", attrib);
+                        lst.attrib.push((attrib.to_string(), String::from("")));
+                    }
+                }
+                Some((akey, aval)) => {
+                    println!("\t{}={}", akey, aval);
+                    lst.attrib.push((akey.to_string(), aval.to_string()));
+                }
+            }
+        }
 
         Ok(())
     }

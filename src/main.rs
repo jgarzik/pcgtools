@@ -42,16 +42,31 @@ enum PccTag {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct PccElem {
+    _ident: String,
+    attribs: Vec<(String, String)>,
+}
+
+impl PccElem {
+    fn new(ident: &str) -> PccElem {
+        PccElem {
+            _ident: String::from(ident),
+            attribs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct PccList {
     _ident: String,
-    attrib: Vec<(String, String)>,
+    props: HashMap<String, PccElem>,
 }
 
 impl PccList {
-    pub fn new(ident: &str) -> PccList {
+    fn new(ident: &str) -> PccList {
         PccList {
             _ident: String::from(ident),
-            attrib: Vec::new(),
+            props: HashMap::new(),
         }
     }
 }
@@ -165,8 +180,13 @@ impl Pcc {
 
     // Read a single LST record
     fn read_lst_line(&mut self, datum: &mut PccDatum, line: &str) -> io::Result<()> {
-        let mut attribs: Vec<&str> = line.split('\t').collect();
-        let raw_ident = attribs.remove(0);
+        // split input by <tab> into tokens
+        let mut tokens: Vec<&str> = line.split('\t').collect();
+
+        // the first token is our symbol.  the remainder are attribs.
+        let raw_ident = tokens.remove(0);
+
+        // the ".MOD" suffix triggers update of existing elem
         let is_mod = raw_ident.ends_with(".MOD");
         let ident;
         if is_mod {
@@ -175,24 +195,43 @@ impl Pcc {
             ident = &raw_ident;
         }
 
-        let lst = datum.as_mut_list().unwrap();
+        println!("ID={}, is_mod={}", ident, is_mod);
 
-        println!("ID={}, is_mod {}", ident, is_mod);
-
-        for attrib in &attribs {
-            match attrib.split_once(':') {
+        // gather key=value attribs into a list
+        let mut attribs: Vec<(String, String)> = Vec::new();
+        for token in &tokens {
+            match token.split_once(':') {
                 None => {
-                    if !attrib.trim().is_empty() {
-                        println!("\t{}", attrib);
-                        lst.attrib.push((attrib.to_string(), String::from("")));
+                    if !token.trim().is_empty() {
+                        println!("\t{}", token);
+                        attribs.push((token.to_string(), String::from("")));
                     }
                 }
                 Some((akey, aval)) => {
                     println!("\t{}={}", akey, aval);
-                    lst.attrib.push((akey.to_string(), aval.to_string()));
+                    attribs.push((akey.to_string(), aval.to_string()));
                 }
             }
         }
+
+        // grab ref to list inside datum, for update
+        let lst = datum.as_mut_list().unwrap();
+
+        // remove Elem for update, or create new if nonexistent
+        let mut obj;
+        if lst.props.contains_key(ident) {
+            obj = lst.props.remove(ident).unwrap();
+        } else {
+            obj = PccElem::new(ident);
+        }
+
+        // merge new attribs into master attrib list
+        for attrib in attribs {
+            obj.attribs.push(attrib);
+        }
+
+        // push Elem with new attribs back into List
+        lst.props.insert(ident.to_string(), obj);
 
         Ok(())
     }
@@ -270,6 +309,7 @@ impl Pcc {
             self.read_lst_line(&mut datum, &line)?;
         }
 
+        // finally, replace updated datum in dictionary
         self.dict.insert(pcc_tag.to_string(), datum);
 
         Ok(())

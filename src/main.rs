@@ -233,6 +233,11 @@ impl Pcc {
                     self.aliases.insert(val.to_string(), ident.clone());
                 }
 
+                "KEY" => {
+                    println!("KEY: {}={}", val, ident);
+                    ident = val.to_string();
+                }
+
                 _ => {}
             }
         }

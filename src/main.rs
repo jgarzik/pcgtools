@@ -1,6 +1,17 @@
+//
+// main.rs -- pcgtools core code
+//
+// Copyright (c) 2024 Jeff Garzik
+//
+// This file is part of the pcgtoolssoftware project covered under
+// the MIT License.  For the full license text, please see the LICENSE
+// file in the root directory of this project.
+// SPDX-License-Identifier: MIT
+
 extern crate clap;
 
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
@@ -20,6 +31,7 @@ struct Args {
     datadir: String,
 }
 
+#[derive(Serialize, Deserialize)]
 enum PccTag {
     Bool,
     Date,
@@ -29,14 +41,60 @@ enum PccTag {
     PccFile,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize)]
+pub struct PccElem {
+    _ident: String,
+    attribs: Vec<(String, String)>,
+}
+
+impl PccElem {
+    fn new(ident: &str) -> PccElem {
+        PccElem {
+            _ident: String::from(ident),
+            attribs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PccList {
+    _ident: String,
+    props: HashMap<String, PccElem>,
+}
+
+impl PccList {
+    fn new(ident: &str) -> PccList {
+        PccList {
+            _ident: String::from(ident),
+            props: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum PccDatum {
+    Text(String),
+    List(PccList),
+}
+
+impl PccDatum {
+    pub fn as_mut_list(&mut self) -> Option<&mut PccList> {
+        match self {
+            PccDatum::List(l) => Some(l),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PccConfig {
     datadir: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Pcc {
     config: PccConfig,
-    dict: HashMap<String, String>,
+    dict: HashMap<String, PccDatum>,
     pcc_schema: HashMap<String, PccTag>,
 }
 
@@ -121,17 +179,74 @@ impl Pcc {
     }
 
     // Read a single LST record
-    fn read_lst_line(&mut self, line: &str) -> io::Result<()> {
-        let mut tags: Vec<&str> = line.split('\t').collect();
-        let ident = tags.remove(0);
-        println!("ID={}, {:?}", ident, tags);
+    fn read_lst_line(&mut self, datum: &mut PccDatum, line: &str) -> io::Result<()> {
+        // split input by <tab> into tokens
+        let mut tokens: Vec<&str> = line.split('\t').collect();
+
+        // the first token is our symbol.  the remainder are attribs.
+        let raw_ident = tokens.remove(0);
+
+        // the ".MOD" suffix triggers update of existing elem
+        let is_mod = raw_ident.ends_with(".MOD");
+        let ident;
+        if is_mod {
+            ident = &raw_ident[0..(raw_ident.len() - 4)];
+        } else {
+            ident = &raw_ident;
+        }
+
+        println!("ID={}, is_mod={}", ident, is_mod);
+
+        // gather key=value attribs into a list
+        let mut attribs: Vec<(String, String)> = Vec::new();
+        for token in &tokens {
+            match token.split_once(':') {
+                None => {
+                    if !token.trim().is_empty() {
+                        println!("\t{}", token);
+                        attribs.push((token.to_string(), String::from("")));
+                    }
+                }
+                Some((akey, aval)) => {
+                    println!("\t{}={}", akey, aval);
+                    attribs.push((akey.to_string(), aval.to_string()));
+                }
+            }
+        }
+
+        // grab ref to list inside datum, for update
+        let lst = datum.as_mut_list().unwrap();
+
+        // remove Elem for update, or create new if nonexistent
+        let mut obj;
+        if lst.props.contains_key(ident) {
+            obj = lst.props.remove(ident).unwrap();
+        } else {
+            obj = PccElem::new(ident);
+        }
+
+        // merge new attribs into master attrib list
+        for attrib in attribs {
+            obj.attribs.push(attrib);
+        }
+
+        // push Elem with new attribs back into List
+        lst.props.insert(ident.to_string(), obj);
+
         Ok(())
     }
 
     // Read LST file into data dictionary
-    pub fn read_lst(&mut self, basedir: &str, lstpath: &str, lstopts: &str) -> io::Result<()> {
+    pub fn read_lst(
+        &mut self,
+        pcc_tag: &str,
+        basedir: &str,
+        lstpath: &str,
+        lstopts: &str,
+    ) -> io::Result<()> {
         let mut fpath = String::new();
 
+        // parse path prefixes
         let prefix = lstpath.chars().next().expect("Empty LST path");
         match prefix {
             // absolute path
@@ -154,11 +269,33 @@ impl Pcc {
             }
         }
 
-        println!("Pcc.read_lst({}, \"{}\")", fpath, lstopts);
+        println!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
 
+        let mut datum;
+
+        // Does the List record already exist?  if not, create a new one.
+        // Due to "second mutable borrow" issue, we must remove from
+        // HashMap, and then insert back into HashMap when we're done.
+        if !self.dict.contains_key(pcc_tag) {
+            datum = PccDatum::List(PccList::new(pcc_tag));
+        } else {
+            datum = self.dict.remove(pcc_tag).unwrap();
+        }
+
+        // record type check
+        match &datum {
+            PccDatum::List(_val) => {}
+            _ => {
+                // todo: technically an error, not a panic
+                panic!("key is not a list");
+            }
+        }
+
+        // open and buffer list file input data
         let file = File::open(fpath)?;
         let rdr = BufReader::new(file);
 
+        // iterate through each text file line
         for line_res in rdr.lines() {
             let line = line_res.expect("BufReader.lst parse failed");
 
@@ -168,8 +305,12 @@ impl Pcc {
                 continue;
             }
 
-            self.read_lst_line(&line)?;
+            // parse line
+            self.read_lst_line(&mut datum, &line)?;
         }
+
+        // finally, replace updated datum in dictionary
+        self.dict.insert(pcc_tag.to_string(), datum);
 
         Ok(())
     }
@@ -221,8 +362,8 @@ impl Pcc {
 
             // read LST file
             PccTag::LstFile => match rhs.split_once('|') {
-                None => self.read_lst(&basedir, rhs, String::from("").as_str())?,
-                Some((lstpath, lstopts)) => self.read_lst(&basedir, lstpath, lstopts)?,
+                None => self.read_lst(lhs, &basedir, rhs, String::from("").as_str())?,
+                Some((lstpath, lstopts)) => self.read_lst(lhs, &basedir, lstpath, lstopts)?,
             },
 
             // handle other data types
@@ -232,14 +373,18 @@ impl Pcc {
                 match tag {
                     // new key; store in hashmap
                     None => {
-                        self.dict.insert(lhs.to_string(), rhs.to_string());
+                        self.dict
+                            .insert(lhs.to_string(), PccDatum::Text(rhs.to_string()));
                     }
 
                     // existing key; append to string value
-                    Some(val) => {
-                        val.push_str("\n");
-                        val.push_str(rhs);
-                    }
+                    Some(datum) => match datum {
+                        PccDatum::Text(val) => {
+                            val.push_str("\n");
+                            val.push_str(rhs);
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
@@ -285,9 +430,7 @@ impl Pcc {
 
     // display all data in data dictionary
     pub fn display(&self) {
-        for (key, val) in &self.dict {
-            println!("{}={}", key, val);
-        }
+        println!("{}", serde_json::to_string_pretty(self).unwrap());
     }
 }
 

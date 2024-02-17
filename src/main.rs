@@ -96,6 +96,7 @@ pub struct Pcc {
     config: PccConfig,
     dict: HashMap<String, PccDatum>,
     pcc_schema: HashMap<String, PccTag>,
+    aliases: HashMap<String, String>,
 }
 
 fn dir_from_path(full_path: &str) -> Option<String> {
@@ -175,6 +176,7 @@ impl Pcc {
             config: config.clone(),
             dict: HashMap::new(),
             pcc_schema: new_pcc_schema(),
+            aliases: HashMap::new(),
         }
     }
 
@@ -188,11 +190,20 @@ impl Pcc {
 
         // the ".MOD" suffix triggers update of existing elem
         let is_mod = raw_ident.ends_with(".MOD");
-        let ident;
+        let mut ident;
         if is_mod {
-            ident = &raw_ident[0..(raw_ident.len() - 4)];
+            ident = String::from(&raw_ident[0..(raw_ident.len() - 4)]);
         } else {
-            ident = &raw_ident;
+            ident = String::from(raw_ident);
+        }
+
+        // if ident is an alias, lookup true ident
+        match self.aliases.get(&ident) {
+            None => {}
+            Some(alias) => {
+                println!("ALIAS MATCH: {} => {}", ident, alias);
+                ident = alias.clone();
+            }
         }
 
         println!("ID={}, is_mod={}", ident, is_mod);
@@ -214,15 +225,32 @@ impl Pcc {
             }
         }
 
+        // pre-processing
+        for (key, val) in &attribs {
+            match key.as_str() {
+                "ABB" => {
+                    println!("ALIAS: {}={}", val, ident);
+                    self.aliases.insert(val.to_string(), ident.clone());
+                }
+
+                "KEY" => {
+                    println!("KEY: {}={}", val, ident);
+                    ident = val.to_string();
+                }
+
+                _ => {}
+            }
+        }
+
         // grab ref to list inside datum, for update
         let lst = datum.as_mut_list().unwrap();
 
         // remove Elem for update, or create new if nonexistent
         let mut obj;
-        if lst.props.contains_key(ident) {
-            obj = lst.props.remove(ident).unwrap();
+        if lst.props.contains_key(&ident) {
+            obj = lst.props.remove(&ident).unwrap();
         } else {
-            obj = PccElem::new(ident);
+            obj = PccElem::new(&ident);
         }
 
         // merge new attribs into master attrib list

@@ -9,6 +9,7 @@
 // SPDX-License-Identifier: MIT
 
 extern crate clap;
+extern crate log;
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -201,12 +202,12 @@ impl Pcc {
         match self.aliases.get(&ident) {
             None => {}
             Some(alias) => {
-                println!("ALIAS MATCH: {} => {}", ident, alias);
+                log::debug!("ALIAS MATCH: {} => {}", ident, alias);
                 ident = alias.clone();
             }
         }
 
-        println!("ID={}, is_mod={}", ident, is_mod);
+        log::debug!("ID={}, is_mod={}", ident, is_mod);
 
         // gather key=value attribs into a list
         let mut attribs: Vec<(String, String)> = Vec::new();
@@ -214,12 +215,12 @@ impl Pcc {
             match token.split_once(':') {
                 None => {
                     if !token.trim().is_empty() {
-                        println!("\t{}", token);
+                        log::debug!("\t{}", token);
                         attribs.push((token.to_string(), String::from("")));
                     }
                 }
                 Some((akey, aval)) => {
-                    println!("\t{}={}", akey, aval);
+                    log::debug!("\t{}={}", akey, aval);
                     attribs.push((akey.to_string(), aval.to_string()));
                 }
             }
@@ -229,12 +230,12 @@ impl Pcc {
         for (key, val) in &attribs {
             match key.as_str() {
                 "ABB" => {
-                    println!("ALIAS: {}={}", val, ident);
+                    log::debug!("ALIAS: {}={}", val, ident);
                     self.aliases.insert(val.to_string(), ident.clone());
                 }
 
                 "KEY" => {
-                    println!("KEY: {}={}", val, ident);
+                    log::debug!("KEY: {}={}", val, ident);
                     ident = val.to_string();
                 }
 
@@ -297,7 +298,7 @@ impl Pcc {
             }
         }
 
-        println!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
+        log::debug!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
 
         let mut datum;
 
@@ -436,7 +437,7 @@ impl Pcc {
 
         let basedir = dir_from_path(&fpath).unwrap();
 
-        println!("Pcc.read({})", fpath);
+        log::debug!("Pcc.read({})", fpath);
 
         let file = File::open(fpath)?;
         let rdr = BufReader::new(file);
@@ -463,6 +464,8 @@ impl Pcc {
 }
 
 fn main() {
+    env_logger::builder().format_timestamp(None).init();
+
     // parse command line options
     let args = Args::parse();
 

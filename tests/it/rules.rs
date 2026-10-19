@@ -111,3 +111,24 @@ fn class_and_skill_type_prerequisites() {
     assert!(!check(&tess, "PRESKILL:1,TYPE=Craft=3"));
     assert!(!check(&s.ch, "PRESKILL:1,TYPE=Craft"));
 }
+
+#[test]
+fn carried_weight_without_saved_weights() {
+    // the editor saves items without a WT; their data weight counts
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("equip add \"Tin Shield\"").unwrap();
+    s.exec("equip wear \"Tin Shield\"").unwrap();
+    s.exec("equip add \"Wooden Spoon\" 3").unwrap();
+    s.exec("equip wear \"Wooden Spoon\" Carried").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let spoon: f64 = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Wooden Spoon")
+        .and_then(|o| o.get("WT"))
+        .and_then(|w| w.parse().ok())
+        .unwrap();
+    // wearing places one of the three spoons
+    assert_eq!(calc.carried_weight(), 5.0 + spoon);
+}

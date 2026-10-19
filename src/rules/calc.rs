@@ -351,13 +351,20 @@ impl<'a> Calc<'a> {
                 continue;
             }
             let Some(item) = &e.item else { continue };
-            let wt: f64 = self
+            let line = self
                 .ch
                 .pcg
                 .lines_tagged("EQUIPNAME")
-                .find(|l| l.head().is_some_and(|h| h.value_text() == *item))
+                .find(|l| l.head().is_some_and(|h| h.value_text() == *item));
+            // the saved weight, else the item's own (files written by
+            // other tools may leave WT out)
+            let wt: f64 = line
                 .and_then(|l| l.text("WT"))
                 .and_then(|w| w.parse().ok())
+                .or_else(|| {
+                    line.and_then(|l| super::equip::EqItem::from_pcg(self, l))
+                        .map(|it| it.weight(self))
+                })
                 .unwrap_or(0.0);
             total += wt * e.quantity.unwrap_or(1.0);
         }

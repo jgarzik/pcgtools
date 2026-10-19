@@ -7,3 +7,5 @@ CATEGORY=FEAT|Steady Hands.MOD	DESC:Hands do not shake.
 CATEGORY=FEAT|QuickStep.COPY=Quicker Step	TYPE:.CLEAR	TYPE:Advanced
 CATEGORY=FEAT|Loud Voice.MOD	DESC:filtered target, no error
 Iron Fist	CATEGORY:FEAT	TYPE:General	UDAM:1d8
+Axe Familiarity	CATEGORY:FEAT	TYPE:General	AUTO:WEAPONPROF|Great Axe	BONUS:WEAPONPROF=Great Axe|WIELDCATEGORY|-1
+Axe Grip	CATEGORY:FEAT	TYPE:General	AUTO:WEAPONPROF|Great Axe

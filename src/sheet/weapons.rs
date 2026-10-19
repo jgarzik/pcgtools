@@ -272,8 +272,49 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
     for (i, w) in out.iter_mut().enumerate() {
         w.index = i;
         w.wield = w.item.wield_category(c);
+        w.wield = wield_bumped(s, w);
     }
     out
+}
+
+/// The wield category after bonuses that make a weapon easier or
+/// harder to wield: `WEAPONPROF=key|WIELDCATEGORY`, the most negative
+/// `WEAPONPROF=TYPE.x|WIELDCATEGORY` over the item's types, and the
+/// item's own `WEAPON|WIELDCATEGORY`.  Each step moves along the game
+/// mode's `UP` and `DOWN` lists; a step off the list leaves no
+/// category.
+fn wield_bumped(s: &SheetCtx, w: &Weapon) -> String {
+    let c = &s.calc;
+    let b = &c.bonus;
+    let mut bump = 0i64;
+    if let Some(p) = prof_of(s, w) {
+        bump += b.total(&format!("WEAPONPROF={}", p.key), "WIELDCATEGORY") as i64;
+        bump += w
+            .item
+            .types(c)
+            .iter()
+            .map(|t| b.total(&format!("WEAPONPROF=TYPE.{}", t), "WIELDCATEGORY") as i64)
+            .min()
+            .unwrap_or(0)
+            .min(0);
+    }
+    bump += w.item.bonus(c, "WEAPON", "WIELDCATEGORY", true) as i64;
+    if bump == 0 {
+        return w.wield.clone();
+    }
+    let Some(gm) = s.ctx.gamemode.as_ref() else {
+        return w.wield.clone();
+    };
+    let dir = if bump > 0 { "UP" } else { "DOWN" };
+    gm.lines("miscinfo.lst", "WIELDCATEGORY")
+        .filter(|l| l.value.eq_ignore_ascii_case(&w.wield))
+        .find_map(|l| l.get(dir))
+        .and_then(|list| {
+            list.split('|')
+                .nth(bump.unsigned_abs() as usize - 1)
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
 }
 
 /// Weapon proficiency of an item.

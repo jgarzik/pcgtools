@@ -1321,6 +1321,7 @@ and non-standard weapons get a single `simple` row instead.
 | critical | threat `21 − CRITRANGE × (doublings + 1) − additions`, shown `low-20`; multiplier `CRITMULT` + `CRITMULTADD` |
 | `num_attacks` | length of the attack sequence + natural extra attacks + `WEAPON.ATTACKS` |
 | `feat/hit`, `feat/damage` | weapon bonuses from feats; for a weapon with no proficiency object, also feat bonuses to `WEAPONPROF=` its name |
+| wield category | `WIELD` adjusted for size, then stepped along the `WIELDCATEGORY` `UP`/`DOWN` lists by `WEAPONPROF=key\|WIELDCATEGORY`, the most negative `WEAPONPROF=TYPE.x\|WIELDCATEGORY` over the item's types, and the item's `WEAPON\|WIELDCATEGORY` |
 | two-handed weapon not held in two hands | `N/A` |
 | game mode with no `Light` or `OneHanded` wield category | to-hit and damage empty for the unarmed strike and weapons with a proficiency (PCGen cannot tell how they are wielded) |
 

@@ -19,6 +19,7 @@ SPELL:tb_spells.lst
 SPELL:tb_spells_mod.lst|PRECAMPAIGN:1,TB
 SPELL:tb_spells_never.lst|PRECAMPAIGN:1,Missing Book
 CLASS:tb_classes.lst
+WEAPONPROF:tb_profs_weapon.lst
 EQUIPMENT:tb_equip.lst|(EXCLUDE:Cursed Spoon)
 EQUIPMOD:tb_eqmods.lst
 DOMAIN:tb_domains.lst

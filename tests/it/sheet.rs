@@ -361,3 +361,30 @@ fn unarmed_damage_from_a_single_die() {
     s.exec("feat add \"Iron Fist\"").unwrap();
     assert_eq!(unarmed(&s).1, "1d8");
 }
+
+#[test]
+fn wield_category_bonuses() {
+    let w = "weapons[0]/weapon[0]";
+    let one_handed = |s: &pcgtools::repl::Session| {
+        let m = sheet_of(s);
+        (
+            at(&m, &format!("{}/melee[0]/w1_h1_p[0]/to_hit[0]", w)).to_string(),
+            at(&m, &format!("{}/melee[0]/w1_h1_p[0]/damage[0]", w)).to_string(),
+        )
+    };
+    let mut s = nova();
+    s.exec("equip add \"Great Axe\"").unwrap();
+    s.exec("equip wear \"Great Axe\"").unwrap();
+    // two-handed: not usable in one hand
+    assert_eq!(one_handed(&s), ("N/A".into(), "N/A".into()));
+    // a bonus to the proficiency makes it one-handed
+    s.exec("feat add \"Axe Familiarity\"").unwrap();
+    assert_eq!(one_handed(&s), ("+0".into(), "1d10".into()));
+
+    // so does the item's own bonus, when its prerequisites pass
+    let mut s = nova();
+    s.exec("equip add \"Great Axe\"").unwrap();
+    s.exec("equip wear \"Great Axe\"").unwrap();
+    s.exec("feat add \"Axe Grip\"").unwrap();
+    assert_eq!(one_handed(&s), ("+0".into(), "1d10".into()));
+}

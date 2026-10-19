@@ -5,3 +5,4 @@ Wooden Spoon.COPY=Silver Spoon	COST:25
 Wooden Spoon	TYPE:Duplicate
 	WT:9
 Copper Pot	KEY:Pot (Copper)	TYPE:Goods.Cookware	COST:2	WT:2
+Great Axe	PROFICIENCY:WEAPON|Great Axe	TYPE:Weapon.Melee.Martial.Slashing	COST:20	WT:8	DAMAGE:1d10	CRITMULT:x3	CRITRANGE:1	WIELD:TwoHanded	SIZE:M	BONUS:WEAPON|WIELDCATEGORY|-1|PREABILITY:1,CATEGORY=FEAT,Axe Grip

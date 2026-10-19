@@ -1995,8 +1995,7 @@ impl<'a> Calc<'a> {
         // abilities stored in the character
         let mut seen: HashSet<(String, String, Vec<String>, &str)> = HashSet::new();
         let mut applied: HashSet<(String, String, Vec<String>)> = HashSet::new();
-        let mut pending: Vec<(String, String, Vec<String>, Option<String>, &'static str)> =
-            Vec::new();
+        let mut pending: Vec<Grant> = Vec::new();
         for a in self.ch.abilities() {
             if a.key.starts_with('*') {
                 continue;
@@ -2596,6 +2595,10 @@ impl<'a> Calc<'a> {
         sheet
     }
 }
+
+/// An ability grant waiting to be resolved: category, key, choices,
+/// owning class, nature.
+type Grant = (String, String, Vec<String>, Option<String>, &'static str);
 
 /// The nature an ability is held with: NORMAL, AUTOMATIC or VIRTUAL.
 fn nature_of(s: &str) -> &'static str {

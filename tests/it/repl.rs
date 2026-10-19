@@ -369,3 +369,34 @@ fn equipment_commands_accept_display_names() {
     ok(&mut s, "equip rm \"Copper Pot\"");
     assert!(s.ch.equipment().is_empty());
 }
+
+#[test]
+fn bonus_skill_points_for_class_and_character_levels() {
+    let gained = |race: bool| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        if race {
+            ok(&mut s, "set align LG");
+            ok(&mut s, "race Tallfolk");
+        }
+        ok(&mut s, "class add Tinker");
+        let first = s.ch.skill_points_left("Tinker");
+        ok(&mut s, "class add Tinker");
+        (first, s.ch.skill_points_left("Tinker") - first)
+    };
+    let (plain1, plain2) = gained(false);
+    let (tall1, tall2) = gained(true);
+    // the race adds 2 at Tinker level 1 and 3 on the class's first
+    // level, and 1 at character level 2
+    assert_eq!(tall1, plain1 + 5.0);
+    assert_eq!(tall2, plain2 + 1.0);
+
+    // the class itself adds one more at its level 4
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    let mut gains = Vec::new();
+    for _ in 0..4 {
+        let before = s.ch.skill_points_left("Tinker");
+        ok(&mut s, "class add Tinker");
+        gains.push(s.ch.skill_points_left("Tinker") - before);
+    }
+    assert_eq!(gains[3], gains[2] + 1.0, "{:?}", gains);
+}

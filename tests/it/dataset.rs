@@ -75,7 +75,7 @@ fn objects_and_operations() {
     assert_eq!(t.get("HD"), Some("8"));
     assert!(t.values("FACT").any(|v| v == "Abb|Tnk"));
     let levels: Vec<&str> = t.sublines.iter().map(|s| s.value.as_str()).collect();
-    assert_eq!(levels, vec!["1:REPEATLEVEL:1", "1", "3", "5"]);
+    assert_eq!(levels, vec!["1:REPEATLEVEL:1", "1", "3", "4", "5"]);
     assert_eq!(t.children.len(), 1);
     assert_eq!(t.children[0].sublines.len(), 1);
 

@@ -1641,6 +1641,44 @@ impl<'a> Calc<'a> {
         sp * mult
     }
 
+    /// Bonus skill points (SKILLPOOL) a level of a class adds on top of
+    /// the class's points: what the class's own SKILLPOOL|NUMBER adds at
+    /// this class level, SKILLPOOL|CLASS.x on the class's first level,
+    /// SKILLPOOL|CLASS.x;LEVEL.n and SKILLPOOL|LEVEL.n for the character
+    /// level.  Targets may be written with '=' for '.'.
+    pub fn bonus_skill_points(&self, cls: &'a Object, class_level: u32, char_level: u32) -> f64 {
+        let src = self.sources.iter().find(|x| std::ptr::eq(x.obj, cls));
+        let env = Ctx { calc: self, src };
+        let own = |level: u32| -> f64 {
+            if level == 0 {
+                return 0.0;
+            }
+            self.class_tokens(cls, level)
+                .into_iter()
+                .filter(|t| t.tag == "BONUS")
+                .filter_map(|t| Bonus::parse(&t.value).ok())
+                .filter(|b| {
+                    b.category.eq_ignore_ascii_case("SKILLPOOL")
+                        && b.targets.iter().any(|t| t.eq_ignore_ascii_case("NUMBER"))
+                })
+                .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
+                .filter_map(|b| b.expr().ok().map(|e| eval(&e, &env)))
+                .map(f64::trunc)
+                .sum()
+        };
+        let total = |target: &str| {
+            self.bonus.total("SKILLPOOL", target)
+                + self.bonus.total("SKILLPOOL", &target.replace('.', "="))
+        };
+        let mut points = own(class_level) - own(class_level - 1);
+        if class_level == 1 {
+            points += total(&format!("CLASS.{}", cls.key));
+        }
+        points += total(&format!("CLASS.{};LEVEL.{}", cls.key, class_level));
+        points += total(&format!("LEVEL.{}", char_level));
+        points
+    }
+
     /// The character's deity: the one named in the character file, else
     /// the data's default deity (DEFAULTVARIABLEVALUE:DEITY|key).
     pub fn deity(&self) -> Option<&'a Object> {

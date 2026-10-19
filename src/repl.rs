@@ -496,9 +496,17 @@ impl Session {
                         let mut c = self.calc();
                         c.run();
                         let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
+                        let char_level = self.ch.total_level() + 1;
+                        let class_level = self
+                            .ch
+                            .classes()
+                            .iter()
+                            .find(|x| x.name.eq_ignore_ascii_case(&key))
+                            .map_or(1, |x| x.level + 1);
                         (
                             c.hit_die(o),
-                            c.skill_points_for_level(o, self.ch.total_level() + 1),
+                            c.skill_points_for_level(o, char_level)
+                                + c.bonus_skill_points(o, class_level, char_level),
                         )
                     };
                     let hp: i64 = match w.get(3).filter(|v| !v.starts_with("--")) {

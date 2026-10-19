@@ -208,6 +208,18 @@ reported per game mode and sheet section; `ORACLE_ONLY=name`,
 `ORACLE_SECTION=section` and `ORACLE_VERBOSE=1` narrow the comparison
 and print the differences.
 
+Reference tests go further: each scenario in `tests/scenarios.txt`
+builds a character with the editor, has PCGen itself export that
+character's sheet, and requires every value to match the sheet
+pcgtools builds. They need a PCGen build (`./gradlew jar copyToLibs`
+in a PCGen checkout, with the JavaFX jars in `mods/lib`) and a Java
+runtime that can run it:
+
+    PCGEN_ROOT=~/src/pcg PCGEN_REF=~/src/pcg/pcgen cargo test --release reference
+
+`REF_ONLY=name` runs one scenario and `REF_VERBOSE=1` prints every
+difference; `PCGEN_JAVA` or `JAVA_HOME` selects the Java runtime.
+
 Continuous integration runs both: the plain test suite, and the corpus
 tests against PCGen data checked out at a pinned revision.
 

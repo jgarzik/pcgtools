@@ -1,0 +1,181 @@
+# Characters built with the editor and checked against PCGen's own
+# sheet for them (tests/it/reference.rs).
+#
+# == name            starts a scenario (also the character's name)
+# gamemode MODE      game mode of the new character
+# campaign KEY       a campaign to use (repeatable)
+# anything else      an editor command, as typed in `pcgtools repl`
+
+== fighter_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 16
+set stat DEX 13
+set stat CON 14
+race Dwarf
+set align LN
+class add Fighter
+class add Fighter
+feat add "Power Attack"
+feat add Cleave
+skill Climb 4
+equip add "Chainmail"
+equip wear "Chainmail"
+equip add "Waraxe (Dwarven)"
+equip wear "Waraxe (Dwarven)"
+
+== wizard_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 17
+set stat DEX 14
+set stat CON 12
+race Elf
+set align CG
+class add Wizard
+class add Wizard
+class add Wizard
+skill Concentration 6
+skill Spellcraft 6
+spell add Wizard "Magic Missile"
+spell add Wizard "Mage Armor"
+spell add Wizard "Web"
+equip add Quarterstaff
+equip wear Quarterstaff
+
+== multiclass_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 16
+set stat WIS 12
+race Human
+set align N
+class add Rogue
+class add Rogue
+class add Ranger
+skill Hide 5
+skill "Move Silently" 5
+equip add "Leather"
+equip wear "Leather"
+equip add "Shortbow"
+equip wear "Shortbow"
+equip add "Arrows (20)"
+
+== cleric_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat WIS 16
+set stat CON 14
+race "None Selected"
+class add Cleric
+class add Cleric
+equip add "Mace, Heavy"
+equip wear "Mace, Heavy"
+
+== fighter_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 16
+set stat DEX 14
+set stat CON 14
+race Human
+set align LN
+class add Fighter
+class add Fighter
+class add Fighter
+feat add "Power Attack"
+feat add "Weapon Focus" Longsword
+skill Climb 3
+equip add "Chain Shirt"
+equip wear "Chain Shirt"
+equip add Longsword
+equip wear Longsword
+
+== sorcerer_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat CHA 17
+set stat DEX 14
+race Elf
+set align CN
+class add Sorcerer
+class add Sorcerer
+spell add Sorcerer "Magic Missile"
+spell add Sorcerer "Shield"
+
+== soldier_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+set stat STR 16
+set stat CON 14
+race Human
+class add Soldier
+class add Soldier
+
+== modern_human
+gamemode Modern
+campaign MSRD - Basics
+set stat STR 14
+set stat DEX 14
+race Human
+class add "Strong Hero"
+class add "Strong Hero"
+
+== fighter_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat STR 16
+set stat DEX 14
+set stat CON 14
+race Dwarf
+set align LN
+class add Fighter
+class add Fighter
+equip add "Chain Mail"
+equip wear "Chain Mail"
+equip add Longsword
+equip wear Longsword
+
+== fighter_pf2
+gamemode Pathfinder_2
+campaign PF2 - Core Rulebook
+set stat STR 16
+race Human
+class add Fighter
+
+== gunslinger_deadlands
+gamemode Deadlands
+campaign PE - Deadlands Core Rulebook - Deadlands D20
+set stat DEX 16
+race Human
+class add Gunslinger
+
+== explorer_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+race Human
+class add Explorer
+
+== gunslinger_gaslight
+gamemode Gaslight
+campaign BPI ~ Gaslight
+race Human
+class add Gunslinger
+
+== assassin_killshot
+gamemode Killshot
+campaign Killshot - The Director's Cut
+race Human
+class add Assassin
+
+== fighter_sagaborn
+gamemode Sagaborn
+campaign Sagaborn - Sagaborn Roleplaying System
+race Human
+class add Fighter
+
+== soldier_spycraft
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+class add Soldier

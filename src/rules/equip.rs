@@ -794,7 +794,7 @@ impl<'a> EqItem<'a> {
     }
 
     /// What a copy carrying temporary bonuses adds to its name on
-    /// weapon and armor lists: " [source]".
+    /// weapon and armor lists: " \[source\]".
     pub fn applied_name(&self) -> String {
         match &self.temporary {
             Some((src, _)) => format!(" [{}]", src),

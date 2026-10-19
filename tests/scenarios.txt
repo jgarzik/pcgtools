@@ -301,3 +301,20 @@ race Kasatha
 class add Soldier
 class add Soldier
 feat add "Double Draw"
+
+== theurge_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+set stat WIS 15
+race Human
+set align TN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Cleric
+class add Cleric
+class add Cleric
+skill "Knowledge (Arcana)" 6 Wizard
+skill "Knowledge (Religion)" 6 Cleric
+class add "Mystic Theurge"

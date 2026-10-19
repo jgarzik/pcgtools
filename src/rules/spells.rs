@@ -148,7 +148,18 @@ impl<'a> Spells<'a> {
                     Some(k) if k.eq_ignore_ascii_case("DOMAIN") => 'D',
                     _ => continue,
                 };
-                let rest: Vec<&str> = parts.collect();
+                // trailing prerequisites gate the whole grant
+                let is_pre = |p: &&str| {
+                    Prereq::is_pre_tag(p.split(':').next().unwrap_or("")) || p.starts_with("!PRE")
+                };
+                let (pres, rest): (Vec<&str>, Vec<&str>) = parts.partition(is_pre);
+                if !pres
+                    .iter()
+                    .filter_map(|p| Prereq::parse(p).ok())
+                    .all(|p| calc.passes(&p, Some(src)))
+                {
+                    continue;
+                }
                 for pair in rest.chunks(2) {
                     let [lv, names] = pair else { continue };
                     let Some((list, lvl)) = lv.rsplit_once('=') else {
@@ -593,7 +604,18 @@ impl<'a> Spells<'a> {
                 {
                     continue;
                 }
-                let rest: Vec<&str> = parts.collect();
+                // trailing prerequisites gate the whole grant
+                let is_pre = |p: &&str| {
+                    Prereq::is_pre_tag(p.split(':').next().unwrap_or("")) || p.starts_with("!PRE")
+                };
+                let (pres, rest): (Vec<&str>, Vec<&str>) = parts.partition(is_pre);
+                if !pres
+                    .iter()
+                    .filter_map(|p| Prereq::parse(p).ok())
+                    .all(|p| calc.passes(&p, Some(src)))
+                {
+                    continue;
+                }
                 for pair in rest.chunks(2) {
                     let [lv, names] = pair else { continue };
                     let Some((list, lvl)) = lv.rsplit_once('=') else {

@@ -281,3 +281,42 @@ fn context_prerequisites() {
     assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook Kit"));
     assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook%"));
 }
+
+#[test]
+fn spell_type_prerequisites() {
+    let tinker = ["class add Tinker"];
+    let tinker_slot = ["class add Tinker", "feat add \"Spell Spring\" --force"];
+    // a level of a spell type the character can cast (or knows)
+    assert!(!meets(&tinker, "PRESPELLTYPE:1,Arcane=1"));
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:1,Arcane=1"));
+    // the level is exact
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:1,Arcane=2"));
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:1,ANY=1"));
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:1,Divine=1"));
+    // the count is how many spells of that level: two slots
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:2,Arcane=1"));
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:3,Arcane=1"));
+    // a class that neither memorizes nor has a known table, but can
+    // cast, counts as unlimited
+    assert!(meets(&["class add Chanter"], "PRESPELLTYPE:1,Divine=1"));
+    assert!(meets(&["class add Chanter"], "PRESPELLTYPE:5,Divine=4"));
+    assert!(!meets(&[], "PRESPELLTYPE:1,ANY=0"));
+}
+
+#[test]
+fn spell_level_grants_check_their_prerequisites() {
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("class add Tinker").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let sp = pcgtools::rules::spells::Spells::new(&calc);
+    let glow = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Spell, "Glow")
+        .unwrap();
+    // its own level, and only the grant whose prerequisite holds
+    let mut levels = sp.levels_on('C', "Tinker", glow);
+    levels.sort();
+    assert_eq!(levels, vec![1, 3]);
+}

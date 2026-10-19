@@ -2650,6 +2650,59 @@ impl<'a> Calc<'a> {
                     false
                 }
             }),
+            // spells of a type at exactly a level: what classes of the
+            // type know there, else what they can cast; summed over the
+            // items, the count being how many are needed
+            "SPELLTYPE" => {
+                use super::spells::{cast_per_day, known_at, spell_type, Spells};
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<&String> = args.iter().skip(1).collect();
+                let mut sum = 0.0;
+                for item in &items {
+                    let Some((t, lv)) = item.trim().split_once('=') else {
+                        continue;
+                    };
+                    let level = num(lv) as i64;
+                    let (mut known, mut cast) = (0.0, 0.0);
+                    for (cls, _) in &self.classes {
+                        let Some(st) = spell_type(cls) else { continue };
+                        if !(t.eq_ignore_ascii_case("ANY") || st.eq_ignore_ascii_case(t)) {
+                            continue;
+                        }
+                        // casting without memorizing or a known table
+                        // has no limit
+                        let memorizes = !cls
+                            .get("MEMORIZE")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('N'));
+                        let known_table = cls
+                            .sublines
+                            .iter()
+                            .any(|sl| sl.tokens.iter().any(|t| t.tag == "KNOWN"));
+                        if !memorizes
+                            && !known_table
+                            && (0..=9).any(|l| cast_per_day(self, cls, l, true) > 0)
+                        {
+                            known = f64::INFINITY;
+                            break;
+                        }
+                        let can = cast_per_day(self, cls, level, true);
+                        cast += can as f64;
+                        known += known_at(self, cls, level, 0) as f64;
+                        if can > 0 {
+                            known += Spells::specialty_known(self, cls, level) as f64;
+                        }
+                    }
+                    let v = if known != 0.0 { known } else { cast };
+                    if v >= 1.0 {
+                        sum += v;
+                    }
+                }
+                if items.len() == 1 && n <= 1.0 {
+                    sum >= 1.0
+                } else {
+                    sum >= n
+                }
+            }
             // exactly one class keeps (or does not keep) a spellbook
             "SPELLBOOK" => {
                 let want = args

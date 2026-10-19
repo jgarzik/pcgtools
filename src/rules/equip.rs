@@ -823,9 +823,10 @@ impl<'a> EqItem<'a> {
             .iter()
             .filter_map(|l| Some((l.get("SIZEDIFF")?.trim().parse().ok()?, l.value.as_str())))
             .collect();
-        // conditional switches take precedence over size differences
-        let switches = lines.iter().any(|l| l.get("SWITCH").is_some());
-        if !by_diff.is_empty() && !switches {
+        // size differences decide only for items that do not say how
+        // they are wielded, or when the game mode sizes weapons as
+        // objects; otherwise conditional switches adjust WIELD
+        if !by_diff.is_empty() && (base.is_empty() || calc.rule("SIZEOBJ")) {
             let (Some(item), Some(pc)) = (pos(&self.size), pos(&calc.size_key())) else {
                 return base;
             };
@@ -842,6 +843,8 @@ impl<'a> EqItem<'a> {
                 .map(|(_, n)| n.to_string())
                 .unwrap_or(base);
         }
+        // the last switch whose prerequisites pass wins
+        let mut wield = base.clone();
         for l in &lines {
             if !l.value.eq_ignore_ascii_case(&base) {
                 continue;
@@ -854,10 +857,10 @@ impl<'a> EqItem<'a> {
                 .filter_map(|(t, v)| Prereq::from_token(t, v).ok())
                 .all(|p| self.passes(calc, &p, None));
             if ok {
-                return to.to_string();
+                wield = to.to_string();
             }
         }
-        base
+        wield
     }
 
     /// Name with the modified part: `Claw (Natural/Primary)`.

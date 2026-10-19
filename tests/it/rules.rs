@@ -386,3 +386,38 @@ fn monster_hit_dice_advance_size() {
     assert_eq!(size_after(4), "L");
     assert_eq!(size_after(5), "H");
 }
+
+#[test]
+fn wield_categories_of_items_with_wield_ignore_size() {
+    // a small character with a medium item that says how it is wielded:
+    // size differences are only for items without WIELD
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("race Gearling").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    assert_eq!(calc.size_key(), "S");
+    let cog = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Throwing Cog")
+        .unwrap();
+    let item = pcgtools::rules::equip::EqItem::from_data(&calc, cog);
+    assert_eq!(item.size, "M");
+    assert_eq!(item.wield_category(&calc), "Light");
+}
+
+#[test]
+fn last_matching_wield_switch_wins() {
+    // two switches for Light items hold for a Cogbeast; the later wins
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("race Cogbeast").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let cog = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Throwing Cog")
+        .unwrap();
+    let item = pcgtools::rules::equip::EqItem::from_data(&calc, cog);
+    assert_eq!(item.wield_category(&calc), "OneHanded");
+}

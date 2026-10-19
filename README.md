@@ -157,9 +157,12 @@ checkouts when `PCGEN_ROOT` names a directory containing `pcgen/`
 They round-trip every data and character file, load every campaign,
 check prerequisite and bonus syntax across the data, and compare
 derived statistics with the expected character sheets in PCGen's test
-suite. For the game modes covered by the comparison gate, every
-compared value (attack bonus, saves, hit points, armor class, skills)
-must match; other game modes are reported for information.
+suite. In every game mode, the core values (attack bonus, saves, hit
+points, armor class, skills) must match; match counts for every other
+section of the sheet are reported per game mode.
+
+Continuous integration runs both: the plain test suite, and the corpus
+tests against PCGen data checked out at a pinned revision.
 
 `tools/gen_catalog.py PCGEN_ROOT > src/catalog/tags.tsv` regenerates
 the tag catalog. It records facts only: tag names, where they are

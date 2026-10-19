@@ -16,6 +16,7 @@
 
 pub mod error;
 pub mod legacy;
+pub mod lst;
 pub mod text;
 
 pub use error::{Diagnostic, Diagnostics, Error, Result, Severity};

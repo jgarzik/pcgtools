@@ -33,6 +33,12 @@ enum Command {
         datadir: String,
     },
 
+    /// Parse a data file and print its syntax tree as JSON
+    Parse {
+        /// File to parse
+        file: PathBuf,
+    },
+
     /// Verify that files survive a parse/write cycle byte-for-byte
     Roundtrip {
         /// Files or directories to check
@@ -78,6 +84,32 @@ fn cmd_roundtrip(paths: &[PathBuf]) -> pcgtools::Result<bool> {
     Ok(ok)
 }
 
+fn cmd_parse(file: &Path) -> pcgtools::Result<bool> {
+    use pcgtools::lst::{Head, LstFile};
+    use serde_json::json;
+
+    let lf = LstFile::read(file)?;
+    let recs: Vec<serde_json::Value> = lf
+        .records()
+        .iter()
+        .map(|r| {
+            let toks: Vec<serde_json::Value> = r
+                .tokens()
+                .iter()
+                .map(|t| json!({"tag": t.tag, "value": t.value}))
+                .collect();
+            json!({
+                "line": r.line_no(),
+                "kind": r.kind(),
+                "head": r.head().map(Head::parse),
+                "tokens": toks,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&recs).unwrap());
+    Ok(true)
+}
+
 fn cmd_dump(pccfile: &str, datadir: &str) -> pcgtools::Result<bool> {
     let mut datadir = datadir.to_string();
     if !datadir.ends_with('/') {
@@ -97,6 +129,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let res = match &cli.cmd {
         Command::Dump { pccfile, datadir } => cmd_dump(pccfile, datadir),
+        Command::Parse { file } => cmd_parse(file),
         Command::Roundtrip { paths } => cmd_roundtrip(paths),
     };
 

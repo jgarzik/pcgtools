@@ -1081,6 +1081,7 @@ impl Session {
                 _ => {}
             }
         }
+        self.ch.add_kit(&kit.key);
         Ok(format!("applied kit {}: {}", kit.key, done.join(", ")))
     }
 

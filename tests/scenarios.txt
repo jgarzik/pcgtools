@@ -290,3 +290,14 @@ class add Wizard
 class add Wizard
 class add Wizard
 ability add "Special Ability|+1 Level 1 Spell Cast" Wizard
+
+== kasatha_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+campaign Starfinder Character Operations Manual
+set stat DEX 16
+set stat STR 14
+race Kasatha
+class add Soldier
+class add Soldier
+feat add "Double Draw"

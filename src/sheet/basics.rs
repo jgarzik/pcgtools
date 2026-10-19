@@ -535,19 +535,7 @@ fn race_type(s: &SheetCtx) -> String {
 }
 
 fn reach(s: &SheetCtx, units: &Units) -> Element {
-    let c = &s.calc;
-    let mut r = 5.0;
-    for src in c.sources.iter().filter(|x| {
-        matches!(
-            x.kind,
-            crate::rules::calc::SrcKind::Race | crate::rules::calc::SrcKind::Template
-        )
-    }) {
-        if let Some(v) = src.obj.get("REACH") {
-            r = v.trim().parse().unwrap_or(r);
-        }
-    }
-    r += c.bonus.total("COMBAT", "REACH");
+    let mut r = s.calc.natural_reach();
     if let Some(v) = s.vars.controls.get("PCREACH") {
         if let Some(x) = s.vars.get(&crate::rules::vars::system::Owner::global(), v) {
             r = x.as_f64();

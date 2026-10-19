@@ -92,6 +92,7 @@ const ORDER: &[&str] = &[
     "CHARACTERASSET",
     "CHARACTERMAGIC",
     "CHARACTERDMNOTES",
+    "KIT",
     "NOTE",
     "AGESET",
 ];
@@ -728,6 +729,11 @@ impl Character {
 
     pub fn add_domain(&mut self, name: &str) {
         self.insert_ordered("DOMAIN", PcgLine::new(vec![Elem::text("DOMAIN", name)]));
+    }
+
+    /// Record a kit as applied.
+    pub fn add_kit(&mut self, key: &str) {
+        self.insert_ordered("KIT", PcgLine::new(vec![Elem::text("KIT", key)]));
     }
 
     /// Add a domain granted by a class at one of its levels.

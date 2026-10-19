@@ -196,3 +196,88 @@ fn spellcast_bonus_targets_written_with_equals() {
     assert_eq!(per_day("Chanter", 2, false), [2, 2, 1]);
     assert_eq!(per_day("Chanter", 2, true), [2, 3, 2]);
 }
+
+/// Whether a new character, after editor commands, meets a
+/// prerequisite.
+fn meets(cmds: &[&str], pre: &str) -> bool {
+    use pcgtools::token::pre::Prereq;
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    for c in cmds {
+        s.exec(c).unwrap();
+    }
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    calc.passes(&Prereq::parse(pre).unwrap(), None)
+}
+
+#[test]
+fn spellcaster_kind_prerequisites() {
+    let tinker = ["class add Tinker"];
+    let chanter = ["class add Chanter"];
+    // PRESPELLCAST: spell type, or whether a class memorizes
+    // (default yes); several arguments are alternatives
+    assert!(meets(&tinker, "PRESPELLCAST:TYPE=Arcane"));
+    assert!(!meets(&tinker, "PRESPELLCAST:TYPE=Divine"));
+    assert!(meets(&tinker, "PRESPELLCAST:TYPE=Divine,MEMORIZE=Y"));
+    assert!(meets(&chanter, "PRESPELLCAST:MEMORIZE=N"));
+    assert!(!meets(&chanter, "PRESPELLCAST:MEMORIZE=Y"));
+    assert!(!meets(&[], "PRESPELLCAST:TYPE=Arcane"));
+    // PRESPELLBOOK: exactly one class keeps (or does not keep) a book
+    assert!(meets(&tinker, "PRESPELLBOOK:YES"));
+    assert!(!meets(&chanter, "PRESPELLBOOK:YES"));
+    assert!(meets(&chanter, "PRESPELLBOOK:NO"));
+    assert!(meets(
+        &["class add Tinker", "class add Chanter"],
+        "PRESPELLBOOK:NO"
+    ));
+}
+
+#[test]
+fn body_and_defense_prerequisites() {
+    let tall = ["set align LG", "race Tallfolk"];
+    // bare HANDS/LEGS compare at least
+    assert!(meets(&tall, "PREHANDS:4"));
+    assert!(!meets(&[], "PREHANDS:4"));
+    assert!(meets(&[], "PRELEGS:2"));
+    // reach: the race's (5 if it gives none), and its comparisons
+    assert!(meets(&tall, "PREREACH:10"));
+    assert!(meets(&tall, "PREREACHEQ:10"));
+    assert!(!meets(&["race Gearling"], "PREREACHGTEQ:10"));
+    assert!(meets(&["race Gearling"], "PREREACHEQ:5"));
+    // spell resistance
+    assert!(meets(&tall, "PRESRGTEQ:5"));
+    assert!(!meets(&tall, "PRESRGT:5"));
+    assert!(meets(&[], "PRESRLT:1"));
+    // hit points
+    assert!(meets(&["class add Tinker 6"], "PREHP:6"));
+    assert!(!meets(&["class add Tinker 6"], "PREHP:7"));
+}
+
+#[test]
+fn class_level_max_prerequisites() {
+    let two = ["class add Tinker", "class add Tinker"];
+    assert!(meets(&two, "PRECLASSLEVELMAX:1,Tinker=2"));
+    assert!(!meets(&two, "PRECLASSLEVELMAX:1,Tinker=1"));
+    // a class the character lacks is at level 0
+    assert!(meets(&two, "PRECLASSLEVELMAX:1,Chanter=1"));
+    assert!(meets(&two, "!PRECLASSLEVELMAX:1,Tinker=1"));
+    // with several items the negation has no effect (as in PCGen)
+    assert!(meets(&two, "!PRECLASSLEVELMAX:1,Tinker=1,Chanter=1"));
+}
+
+#[test]
+fn context_prerequisites() {
+    // a wield category can only be judged on an item; on a character
+    // it fails, negated or not
+    assert!(!meets(&[], "PREWIELD:1,Light"));
+    assert!(!meets(&[], "!PREWIELD:1,Light"));
+    // campaigns in use
+    assert!(meets(&[], "PRECAMPAIGN:1,TB"));
+    assert!(!meets(&[], "PRECAMPAIGN:1,OLD"));
+    assert!(meets(&[], "PRECAMPAIGN:1,BOOKTYPE=Core Rules"));
+    assert!(meets(&[], "!PRECAMPAIGN:1,OLD"));
+    // kits applied (recorded in the file); a trailing % is a prefix
+    assert!(!meets(&[], "PREKIT:1,Cook Kit"));
+    assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook Kit"));
+    assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook%"));
+}

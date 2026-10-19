@@ -365,6 +365,9 @@ pub struct Dataset {
     /// source date each object was defined with, by kind and index key
     #[serde(skip)]
     dates: HashMap<(FileKind, String), String>,
+    /// the campaigns loaded, for PRECAMPAIGN on objects
+    #[serde(skip)]
+    pub campaigns: crate::campaign::PreCampaignContext,
 }
 
 /// Deferred operations collected while loading the files of a kind.
@@ -395,6 +398,7 @@ impl Dataset {
         let mut ds = Dataset {
             allow_dupes: plan.allow_dupes.clone(),
             source_dates: plan.source_dates.clone(),
+            campaigns: plan.campaigns_in_use.clone(),
             ..Default::default()
         };
         for (kind, files) in &plan.files {

@@ -1349,6 +1349,48 @@ impl<'a> Calc<'a> {
     }
 
     /// Spell resistance: the best SR of any source, plus MISC|SR.
+    /// Natural reach: the race's (5 if it gives none), replaced by the
+    /// last template giving one, plus COMBAT|REACH bonuses.
+    pub fn natural_reach(&self) -> f64 {
+        let mut r = 5.0;
+        for src in self
+            .sources
+            .iter()
+            .filter(|x| matches!(x.kind, SrcKind::Race | SrcKind::Template))
+        {
+            if let Some(v) = src.obj.get("REACH") {
+                r = v.trim().parse().unwrap_or(r);
+            }
+        }
+        r + self.bonus.total("COMBAT", "REACH")
+    }
+
+    /// Spell resistance not counting what equipment gives (as SR
+    /// prerequisites judge it).
+    pub fn innate_spell_resistance(&self) -> f64 {
+        let mut best = 0.0f64;
+        for s in self
+            .sources
+            .iter()
+            .filter(|s| !matches!(s.kind, SrcKind::Equipment | SrcKind::EquipMod))
+        {
+            for t in s.tokens.iter().filter(|t| t.tag == "SR") {
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                best = best.max(eval_str(&t.value, &env));
+            }
+        }
+        best.trunc()
+            + self
+                .bonus
+                .total_where("MISC", "SR", |src| {
+                    !matches!(src.kind.as_str(), "Equipment" | "EquipMod")
+                })
+                .trunc()
+    }
+
     pub fn spell_resistance(&self) -> i64 {
         let mut best = 0.0f64;
         for s in &self.sources {
@@ -2191,7 +2233,14 @@ impl<'a> Calc<'a> {
 
     pub fn passes(&self, p: &Prereq, src: Option<&Src<'a>>) -> bool {
         let r = self.passes_inner(p, src);
-        r != p.negated
+        match upper(&p.kind).as_str() {
+            // a wield category is only known on an item: on a character
+            // the test fails, negated or not
+            "WIELD" => false,
+            // PCGen inverts a several-item test twice, so `!` is lost
+            "CLASSLEVELMAX" if p.args().len() > 2 => r,
+            _ => r != p.negated,
+        }
     }
 
     fn count_items(&self, args: &[String], f: impl Fn(&str) -> bool) -> bool {
@@ -2554,14 +2603,116 @@ impl<'a> Calc<'a> {
                 sum += self.skill_ranks(lastskill);
                 sum >= num(total)
             }
-            "LEGSEQ" | "LEGSGT" | "LEGSGTEQ" | "LEGSLT" | "LEGSLTEQ" | "LEGSNEQ" => {
+            // a bare limb, reach or SR kind means at least
+            "LEGS" | "LEGSEQ" | "LEGSGT" | "LEGSGTEQ" | "LEGSLT" | "LEGSLTEQ" | "LEGSNEQ" => {
                 let legs = self.limbs("LEGS", 2.0);
-                args.first().is_none_or(|a| cmp(&kind[4..], legs, num(a)))
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[4..]), legs, num(a)))
             }
-            "HANDSEQ" | "HANDSGT" | "HANDSGTEQ" | "HANDSLT" | "HANDSLTEQ" | "HANDSNEQ" => {
+            "HANDS" | "HANDSEQ" | "HANDSGT" | "HANDSGTEQ" | "HANDSLT" | "HANDSLTEQ"
+            | "HANDSNEQ" => {
                 let hands = self.limbs("HANDS", 2.0);
-                args.first().is_none_or(|a| cmp(&kind[5..], hands, num(a)))
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[5..]), hands, num(a)))
             }
+            "REACH" | "REACHEQ" | "REACHGT" | "REACHGTEQ" | "REACHLT" | "REACHLTEQ"
+            | "REACHNEQ" => {
+                let reach = self.natural_reach();
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[5..]), reach, num(a)))
+            }
+            "SR" | "SREQ" | "SRGT" | "SRGTEQ" | "SRLT" | "SRLTEQ" | "SRNEQ" => {
+                let sr = self.innate_spell_resistance();
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[2..]), sr, num(a)))
+            }
+            "HP" => args
+                .first()
+                .is_none_or(|a| self.hit_points() as f64 >= num(a)),
+            // classes by spell type, or by whether they memorize spells
+            // (they do unless they say otherwise); any argument will do
+            "SPELLCAST" => args.iter().any(|a| {
+                let a = a.trim();
+                if let Some(t) = a.strip_prefix("TYPE=") {
+                    self.classes.iter().any(|(o, _)| {
+                        super::spells::spell_type(o)
+                            .unwrap_or("None")
+                            .eq_ignore_ascii_case(t)
+                    })
+                } else if let Some(m) = a.strip_prefix("MEMORIZE=") {
+                    let want = !m.to_ascii_uppercase().starts_with('N');
+                    self.classes.iter().any(|(o, _)| {
+                        !o.get("MEMORIZE")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('N'))
+                            == want
+                    })
+                } else {
+                    false
+                }
+            }),
+            // exactly one class keeps (or does not keep) a spellbook
+            "SPELLBOOK" => {
+                let want = args
+                    .first()
+                    .is_some_and(|a| a.trim().to_ascii_uppercase().starts_with('Y'));
+                self.classes
+                    .iter()
+                    .filter(|(o, _)| {
+                        o.get("SPELLBOOK")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('Y'))
+                            == want
+                    })
+                    .count()
+                    == 1
+            }
+            // each class at most a level (a bare class: at most the count)
+            "CLASSLEVELMAX" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<&String> = args.iter().skip(1).collect();
+                let at_most = |a: &str| {
+                    let (c, max) = match a.split_once('=') {
+                        Some((c, m)) if !c.eq_ignore_ascii_case("TYPE") => (c, num(m)),
+                        _ => (a, n),
+                    };
+                    let level = if let Some(t) =
+                        c.strip_prefix("TYPE=").or_else(|| c.strip_prefix("TYPE."))
+                    {
+                        self.classes
+                            .iter()
+                            .filter(|(o, _)| o.is_type(t))
+                            .map(|(_, l)| *l)
+                            .max()
+                            .unwrap_or(0)
+                    } else if c.eq_ignore_ascii_case("ANY") {
+                        self.classes.iter().map(|(_, l)| *l).max().unwrap_or(0)
+                    } else {
+                        self.class_level(c)
+                    };
+                    level as f64 <= max
+                };
+                let passed = items.iter().filter(|a| at_most(a.trim())).count() as f64;
+                if items.len() == 1 {
+                    passed >= 1.0
+                } else {
+                    passed >= n
+                }
+            }
+            // kits the character was given; `Name%` matches a prefix
+            "KIT" => self.count_items(args, |a| {
+                self.ch
+                    .pcg
+                    .lines_tagged("KIT")
+                    .filter_map(|l| l.head().map(|h| h.value_text()))
+                    .any(|k| match a.strip_suffix('%') {
+                        Some(pre) => k.to_lowercase().starts_with(&pre.to_lowercase()),
+                        None => k.eq_ignore_ascii_case(a),
+                    })
+            }),
+            "CAMPAIGN" => self
+                .ds
+                .campaigns
+                .eval(&format!("PRECAMPAIGN:{}", args.join(",")))
+                .unwrap_or(true),
             "VISION" => self.count_items(args, |a| {
                 let (t, _) = a.split_once('=').unwrap_or((a, ""));
                 self.sources.iter().any(|s| {
@@ -3641,7 +3792,7 @@ impl<'a> Calc<'a> {
         total as i64
     }
 
-    fn hit_points(&self) -> i64 {
+    pub fn hit_points(&self) -> i64 {
         // CON-style bonus: BONUS:HP|BONUS from stats only
         let mut con = 0.0;
         for s in self.sources.iter().filter(|s| s.kind == SrcKind::Stat) {
@@ -3982,6 +4133,16 @@ fn level_number(v: &str) -> u32 {
         .next()
         .and_then(|x| x.trim().parse().ok())
         .unwrap_or(0)
+}
+
+/// A comparison operator from a prerequisite kind's suffix (none
+/// meaning at least).
+fn op_of(suffix: &str) -> &str {
+    if suffix.is_empty() {
+        "GTEQ"
+    } else {
+        suffix
+    }
 }
 
 #[cfg(test)]

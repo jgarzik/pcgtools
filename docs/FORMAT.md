@@ -13,7 +13,7 @@ Contents:
 3. [LST data files](#3-lst-data-files)
 4. [PCC campaign files](#4-pcc-campaign-files)
 5. [Per-kind structure and loading](#5-per-kind-structure-and-loading)
-6. Token value syntax (TBD)
+6. [Token value syntax](#6-token-value-syntax)
 7. Game mode files (TBD)
 8. PCG character files (TBD)
 
@@ -490,3 +490,133 @@ Each object records the source tags from the file's header line
 (`SOURCELONG`, `SOURCESHORT`, `SOURCEWEB`, `SOURCEDATE`) unless the
 object's own tokens supply them. `SOURCEPAGE` is normally given per
 object.
+
+---
+
+## 6. Token value syntax
+
+Token values have their own small languages, built from a few shared
+separators.
+
+### 6.1 Separators and grouping
+
+| Separator | Typical role |
+|---|---|
+| `|` | separates the fields of a token (`ABILITY:Cat|Nature|Key`) |
+| `,` | separates list items within a field (`TYPE=A,TYPE=B`) |
+| `.` | separates type names (`TYPE:Weapon.Melee.Martial`) |
+| `=` | attaches a qualifier or value (`CL=Fighter`, `STR=13`) |
+| `[ ]` | groups a nested token, as in `PREMULT` |
+| `( )` | groups text that may contain separators (`Sword (Long)`), and formula sub-expressions |
+
+Separators inside `[]` or `()` never split the enclosing value. A
+value may not begin or end with a separator, nor contain two in a row
+(`a||b`); PCGen rejects such tokens.
+
+### 6.2 Prerequisites
+
+Any object token list may include prerequisites. An object (or a
+sub-part such as a BONUS) applies only if all its prerequisites pass.
+
+```
+prereq   = [ "!" ] "PRE" kind ":" body ;
+body     = arg { "," arg } ;
+pre-mult = [ "!" ] "PREMULT:" count "," "[" prereq "]" { "," "[" prereq "]" } ;
+```
+
+* `!` negates the result.
+* Most kinds are *list* prerequisites: `PREkind:count,item,item...`
+  passes when at least *count* items are satisfied. Items may be
+  `TYPE=x` (anything of that type), `ANY`, or `key=value` comparisons
+  such as `CLASS:1,Fighter=4` (Fighter at level 4 or more).
+* `PREMULT` combines other prerequisites: it passes when at least
+  *count* of the bracketed prerequisites pass. Nesting is allowed.
+* Comparison kinds use a suffix: `PREVARGT`, `PREVARGTEQ`, `PREVAREQ`,
+  `PREVARLT`, `PREVARLTEQ`, `PREVARNEQ` take pairs
+  `formula,formula{,formula,formula}`. Similar families exist for
+  sizes, hands, legs, and others.
+* Some kinds take `MIN=`/`MAX=` options instead of a count
+  (`PRELEVEL:MIN=5`).
+* `PRETEXT:...` is never checked; it documents a requirement that the
+  user must judge.
+
+Common kinds: `ABILITY`, `ALIGN`, `ARMORPROF`, `BASEATTACK` (as `PREBAB`),
+`CHECK`, `CLASS`, `CSKILL`, `DEITY`, `DOMAIN`, `EQUIP`, `FACT`,
+`GENDER`, `HD`, `ITEM`, `LANG`, `LEVEL`, `MOVE`, `PCLEVEL`, `RACE`,
+`SIZE`, `SKILL`, `SPELL`, `SPELLCAST`, `STAT`, `TEMPLATE`, `TEXT`,
+`TYPE`, `VAR`, `VISION`, `WEAPONPROF`.
+
+### 6.3 BONUS
+
+```
+BONUS:category|target{,target}|formula{|option}
+option = "TYPE=" name [ ".STACK" | ".REPLACE" ] | prereq ;
+```
+
+A bonus adds the value of *formula* to each *target* within
+*category*, for example `BONUS:COMBAT|AC|2|TYPE=Armor` or
+`BONUS:SKILL|Climb,Swim|4|PRESIZEGTEQ:L`. Common categories:
+`ABILITYPOOL`, `CASTERLEVEL`, `CHECKS`/`SAVE`, `COMBAT` (`AC`, `TOHIT`,
+`DAMAGE`, `BASEAB`, `INITIATIVE`, ...), `HP`, `MOVEADD`, `MOVEMULT`,
+`SIZEMOD`, `SKILL`, `SKILLPOINTS`, `SKILLRANK`, `SPELLCAST`,
+`SPELLKNOWN`, `STAT`, `VAR`, `WEAPON`, `WEAPONPROF`.
+
+Typed bonuses do not stack: of several bonuses with the same type to
+the same target, only the largest applies, unless the game mode
+declares that type stacking. `TYPE=x.STACK` forces stacking for one
+bonus; `.REPLACE` makes it replace other bonuses of that type.
+Untyped bonuses always stack.
+
+### 6.4 Sub-token tags
+
+Several tags select a sub-token by the first `|`-field of their value:
+
+| Tag | Example | Meaning |
+|---|---|---|
+| `ADD` | `ADD:FEAT|1|TYPE=Combat` | grant choices when the object is gained |
+| `AUTO` | `AUTO:LANG|Common` | grant something automatically |
+| `CHOOSE` | `CHOOSE:SKILL|TYPE=Craft` | ask the user to choose; the choice is referred to as `%LIST` or `%CHOICE` |
+| `REMOVE` | `REMOVE:FEAT|1|Dodge` | remove choices |
+| `TEMPBONUS` | `TEMPBONUS:PC|BONUS:...` | a bonus the user can toggle |
+
+`CHOOSE` may be prefixed with `NUMCHOICES=n|` to limit how many
+choices may be made.
+
+### 6.5 Formulas
+
+Formulas appear in `BONUS`, `DEFINE`, `PREVAR`, and many other places.
+
+```
+expr    = or ;
+or      = and { "||" and } ;
+and     = eq { "&&" eq } ;
+eq      = rel { ( "==" | "!=" ) rel } ;
+rel     = add { ( "<" | ">" | "<=" | ">=" ) add } ;
+add     = mul { ( "+" | "-" ) mul } ;
+mul     = unary { ( "*" | "/" | "%" ) unary } ;
+unary   = ( "-" | "+" | "!" ) unary | power ;
+power   = postfix [ "^" unary ] ;
+postfix = atom { "." name | ( "MAX" | "MIN" ) atom } ;
+atom    = number | string | term [ "(" [ expr { "," expr } ] ")" ]
+        | "(" expr { "," expr } ")" ;
+term    = name { "=" text | "[" text "]" } ;
+```
+
+* Comparisons yield 1 or 0, so `1+(LVL>=5)+(LVL>=10)` counts thresholds.
+* Names are variables: values defined with `DEFINE:Name|initial` and
+  raised by `BONUS:VAR|Name|formula`, or built-in terms such as stat
+  abbreviations (`STR` is the modifier), `HD`, `TL` (total level),
+  `CL` (level in the owning class), `BAB`.
+* Legacy terms carry their argument in the name: `CL=Fighter`,
+  `COUNT[FEATTYPE=Metamagic]`, `SKILL.Ride.RANK`.
+* Built-in functions include `floor`, `ceil`, `round`, `min`, `max`,
+  `abs`, `if(cond,then,else)`, `var("name")`, `classlevel("Class")`,
+  `count("ABILITIES", filter...)`, and `skillinfo("RANK","Skill")`.
+* Very old data uses postfix `.TRUNC`/`.INTVAL` and infix `MAX`/`MIN`
+  (`(x)MAX1` meaning the larger of x and 1); `pcgtools` accepts them.
+* Strings are double-quoted.
+
+Newer data also uses a separate typed formula language in `MODIFY`
+tokens and data control files: `MODIFY:var|operation|formula` with
+operations such as `SET`, `ADD`, `MULTIPLY`, `MAX`, `MIN`, and a
+`PRIORITY=n` option. Its expressions use the same operator grammar.

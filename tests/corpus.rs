@@ -145,3 +145,67 @@ fn corpus_datasets() {
         errors
     );
 }
+
+#[test]
+fn corpus_token_syntax() {
+    use pcgtools::lst::{LineKind, LstFile};
+    use pcgtools::token::bonus::Bonus;
+    use pcgtools::token::pre::Prereq;
+
+    let mut pre = (0, 0);
+    let mut bonus = (0, 0);
+    let mut formula = (0, 0);
+    let mut fails: Vec<String> = Vec::new();
+    let mut ffails: Vec<String> = Vec::new();
+    for dir in common::data_dirs() {
+        for f in common::files_with_ext(&dir, &["lst"]) {
+            let lf = LstFile::read(&f).unwrap();
+            for l in &lf.lines {
+                if !matches!(l.kind, LineKind::Record | LineKind::Continuation) {
+                    continue;
+                }
+                for t in l.tokens() {
+                    let v = t.value.unwrap_or("");
+                    if Prereq::is_pre_tag(t.tag) {
+                        pre.0 += 1;
+                        match Prereq::from_token(t.tag, v) {
+                            Ok(p) if p.to_string() == format!("{}:{}", t.tag, v) => pre.1 += 1,
+                            Ok(p) => fails.push(format!("PRE unparse {} => {}", v, p)),
+                            Err(e) => fails.push(format!("PRE {}:{} ({})", t.tag, v, e)),
+                        }
+                    } else if t.tag == "BONUS" {
+                        bonus.0 += 1;
+                        match Bonus::parse(v) {
+                            Ok(b) if b.to_string() == v => {
+                                bonus.1 += 1;
+                                formula.0 += 1;
+                                match b.expr() {
+                                    Ok(_) => formula.1 += 1,
+                                    Err(e) => ffails.push(format!("{} ({})", b.formula, e)),
+                                }
+                            }
+                            Ok(b) => fails.push(format!("BONUS unparse {} => {}", v, b)),
+                            Err(e) => fails.push(format!("BONUS {} ({})", v, e)),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("PRE: {}/{} round-trip", pre.1, pre.0);
+    eprintln!("BONUS: {}/{} round-trip", bonus.1, bonus.0);
+    eprintln!("BONUS formulas: {}/{} parse", formula.1, formula.0);
+    for f in fails.iter().take(15) {
+        eprintln!("  {}", f);
+    }
+    ffails.sort();
+    ffails.dedup();
+    for f in ffails.iter().take(400) {
+        eprintln!("  formula: {}", f);
+    }
+    assert!(pre.1 * 1000 >= pre.0 * 999, "PRE round-trip below 99.9%");
+    assert!(
+        bonus.1 * 1000 >= bonus.0 * 999,
+        "BONUS round-trip below 99.9%"
+    );
+}

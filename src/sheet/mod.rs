@@ -272,6 +272,7 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
         root.push(e);
     }
     root.push(lists::class_features(&s));
+    root.push(gear::equipment(&s));
     root.push(gear::weight_allowance(&s));
     root.push(lists::special_abilities(&s));
     root.push(lists::feats(&s));

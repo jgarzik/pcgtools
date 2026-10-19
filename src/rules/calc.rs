@@ -770,7 +770,7 @@ impl<'a> Calc<'a> {
         })
     }
 
-    fn find_eqmod(&self, key: &str) -> Option<&'a Object> {
+    pub fn find_eqmod(&self, key: &str) -> Option<&'a Object> {
         self.ds.get(FileKind::EquipMod, key).or_else(|| {
             let lk = lower(key);
             self.ds
@@ -1166,6 +1166,13 @@ impl<'a> Calc<'a> {
         eval_str(formula, &env)
     }
 
+    /// Evaluate a formula with extra terms looked up first (for
+    /// equipment formulas: BASECOST, PLUSTOTAL, ...).
+    pub fn eval_with(&self, formula: &str, extra: &dyn Fn(&str) -> Option<f64>) -> f64 {
+        let env = ExtraEnv { calc: self, extra };
+        eval_str(formula, &env)
+    }
+
     /// Hit points gained per level from stats (BONUS:HP|BONUS on stats).
     pub fn hp_stat_bonus(&self) -> i64 {
         self.bonus.total_where("HP", "BONUS", |s| s.kind == "Stat") as i64
@@ -1379,6 +1386,11 @@ impl<'a> Calc<'a> {
         } else {
             score
         })
+    }
+
+    /// Does the game mode define a rule?
+    pub fn rules_known(&self, name: &str) -> bool {
+        self.rules.contains_key(&upper(name))
     }
 
     /// Is a game-mode rule (rules.lst PARM/VAR) on?
@@ -3283,6 +3295,24 @@ fn hand_matches(kind: &str, location: &str) -> bool {
 
 fn si_item(s: &Src<'_>) -> usize {
     s.item.unwrap_or(usize::MAX)
+}
+
+/// Evaluation context with extra terms ahead of the character's.
+struct ExtraEnv<'c, 'a> {
+    calc: &'c Calc<'a>,
+    extra: &'c dyn Fn(&str) -> Option<f64>,
+}
+
+impl Env for ExtraEnv<'_, '_> {
+    fn var(&self, name: &str) -> Option<f64> {
+        (self.extra)(name)
+            .or_else(|| (self.extra)(&upper(name)))
+            .or_else(|| self.calc.var_value(name, None))
+    }
+
+    fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
+        self.calc.call(name, args, None)
+    }
 }
 
 /// Evaluation context: the calculator plus the source being evaluated.

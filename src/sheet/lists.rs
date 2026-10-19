@@ -668,7 +668,7 @@ pub fn class_features(s: &SheetCtx) -> Element {
     }
     if v("RageTimes") >= 1.0 {
         let desc = format!(
-            "The Barbarian gains +{} to Strength, +{} to Constitution, and a +{} morale bonus on Will saves, but suffers a {} penalty to AC for {} rounds. At the end of the rage, the barbarian is fatigued (-2 to Strength, -2 to Dexterity, can't charge or run) for the duration of that encounter. The barbarian can only rage once per encounter. Entering a rage takes no time itself, but the barbarian can only do it during his action.",
+            "The Barbarian gains +{} to Strength, +{} to Constitution, and a +{} morale bonus on Will saves, but suffers a -{} penalty to AC for {} rounds. At the end of the rage, the barbarian is fatigued (-2 to Strength, -2 to Dexterity, can't charge or run) for the duration of that encounter. The barbarian can only rage once per encounter. Entering a rage takes no time itself, but the barbarian can only do it during his action.",
             i("RageStrBonus"),
             i("RageConBonus"),
             i("RageMorale"),

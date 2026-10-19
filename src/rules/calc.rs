@@ -2895,6 +2895,12 @@ impl<'a> Calc<'a> {
                 // held a second way (say, chosen and also granted): listed
                 // under both natures, but its effects apply once
                 let again = !applied.insert((lower(&cat), lower(&obj.key), choices.clone()));
+                // recorded choices an explicit CHOOSE list does not offer
+                // are dropped
+                let choices: Vec<String> = choices
+                    .into_iter()
+                    .filter(|c| c.is_empty() || choose_allows(obj, c))
+                    .collect();
                 let mut s = self.src(SrcKind::Ability, obj);
                 if again && !stacks {
                     s.tokens.clear();
@@ -3410,6 +3416,38 @@ fn skill_list_has(ds: &Dataset, list: &str, sk: &Object, choices: &[String]) -> 
     })
 }
 
+/// Does an object's CHOOSE offer this choice?  Only lists of explicit
+/// names are checked; lists with types, wildcards or formulas offer
+/// anything.
+pub fn choose_allows(obj: &Object, choice: &str) -> bool {
+    let Some(v) = obj.get("CHOOSE") else {
+        return true;
+    };
+    let mut parts = v.split('|');
+    let kind = parts.next().unwrap_or("");
+    if !kind.eq_ignore_ascii_case("SKILL") {
+        return true;
+    }
+    let items: Vec<&str> = parts
+        .filter(|p| {
+            !p.starts_with("TITLE=")
+                && !p.starts_with("NUMCHOICES=")
+                && !p.starts_with("PRE")
+                && !p.starts_with("!PRE")
+        })
+        .collect();
+    let open = items.is_empty()
+        || items.iter().any(|i| {
+            i.contains('=')
+                || i.contains('.')
+                || i.contains('%')
+                || i.contains('[')
+                // keywords: ALL, ANY, CLASS, CROSSCLASS, EXCLUSIVE, ...
+                || i.chars().all(|c| c.is_ascii_uppercase())
+        });
+    open || items.iter().any(|i| i.eq_ignore_ascii_case(choice))
+}
+
 /// The nature an ability is held with: NORMAL, AUTOMATIC or VIRTUAL.
 fn nature_of(s: &str) -> &'static str {
     match s.to_ascii_uppercase().as_str() {
@@ -3598,6 +3636,34 @@ mod tests {
         assert_eq!(split_choice("Plain"), ("Plain", None));
         assert_eq!(split_choice("(odd)"), ("(odd)", None));
         assert_eq!(split_choice("Bad)"), ("Bad)", None));
+    }
+
+    #[test]
+    fn choose_lists() {
+        let mk = |choose: &str| Object {
+            kind: FileKind::Ability,
+            head_tag: None,
+            name: "A".into(),
+            key: "A".into(),
+            category: None,
+            tokens: vec![Tok {
+                tag: "CHOOSE".into(),
+                value: choose.into(),
+                origin: crate::dataset::Origin { file: 0, line: 0 },
+            }],
+            sublines: Vec::new(),
+            children: Vec::new(),
+            source: Vec::new(),
+            origin: crate::dataset::Origin { file: 0, line: 0 },
+            history: Vec::new(),
+        };
+        let o = mk("SKILL|Ability Skill 2|Ability Skill 3|TITLE=Skill");
+        assert!(choose_allows(&o, "Ability Skill 2"));
+        assert!(!choose_allows(&o, "PLEASE MAKE APPROPRIATE SELECTION"));
+        assert!(choose_allows(&mk("SKILL|TYPE=Craft"), "Anything"));
+        assert!(choose_allows(&mk("SKILL|ALL"), "Anything"));
+        assert!(choose_allows(&mk("NOCHOICE"), ""));
+        assert!(choose_allows(&mk("FEAT|Alertness"), "Other"));
     }
 
     #[test]

@@ -101,10 +101,10 @@ Commands (names may be quoted; most accept --force to skip checks):
   kit apply KEY                apply a starting kit
   spell add CLASS SPELL [LEVEL] [BOOK]   add a spell (book: Known Spells)
   spell rm CLASS SPELL [BOOK]  remove a spell (one copy)
-  spell prep CLASS SPELL [LIST] [--level N] [--domain D]
+  spell prep CLASS SPELL [LIST] [--meta FEAT[,FEAT]] [--level N] [--domain D]
                                prepare a known spell (list: Prepared Spells),
-                               needing a free slot
-  spell unprep CLASS SPELL [LIST]
+                               with metamagic feats; needs a free slot
+  spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]
                                remove a prepared copy
   spellbook add NAME | spellbook rm NAME | spellbook ls
                                spell lists and books
@@ -2264,6 +2264,7 @@ impl Session {
     ) -> Result<Outcome> {
         // options with a value, then the positional words
         let mut pos: Vec<&str> = Vec::new();
+        let mut meta: Option<Vec<String>> = None;
         let mut level: Option<i64> = None;
         let mut domain: Option<String> = None;
         let mut it = w.iter().copied();
@@ -2273,6 +2274,11 @@ impl Session {
                     .ok_or_else(|| Error::Other(format!("{} needs a value", x)))
             };
             match x {
+                "--meta" => {
+                    let v = val()?;
+                    meta.get_or_insert_with(Vec::new)
+                        .extend(v.split(',').map(|f| f.trim().to_string()));
+                }
                 "--level" => {
                     let v = val()?;
                     level = Some(
@@ -2281,6 +2287,9 @@ impl Session {
                     );
                 }
                 "--domain" => domain = Some(val()?.to_string()),
+                o if o.starts_with("--") => {
+                    return Err(Error::Other(format!("unknown option {}", o)));
+                }
                 _ => pos.push(x),
             }
         }
@@ -2304,10 +2313,19 @@ impl Session {
             .copied()
             .unwrap_or(spells::PREPARED_BOOK)
             .to_string();
+        let feats: Vec<String> = meta
+            .iter()
+            .flatten()
+            .map(|f| {
+                self.find_in(FileKind::Ability, Some("FEAT"), f)
+                    .map(|o| o.key.clone())
+            })
+            .collect::<Result<_>>()?;
 
         if arg(1)? == "unprep" {
             self.checkpoint();
-            if !self.ch.remove_spell_copy(&spell, &cls, Some(&book), None) {
+            let only = meta.is_some().then_some(feats.as_slice());
+            if !self.ch.remove_spell_copy(&spell, &cls, Some(&book), only) {
                 self.undo.pop();
                 return Err(Error::Other(format!(
                     "{} is not prepared in {}",
@@ -2416,7 +2434,18 @@ impl Session {
             if !fails.is_empty() {
                 fail(format!("does not qualify: {}", fails.join(", ")))?;
             }
-            if let Err(e) = spells::check_prepared_slot(&c, &sps, cls_obj, &book, base, specialty) {
+            for f in &feats {
+                let o = ds.get_in(FileKind::Ability, "FEAT", f).unwrap();
+                if !o.is_type("Metamagic") {
+                    fail(format!("{} is not a metamagic feat", f))?;
+                } else if !c.has_ability(Some("FEAT"), f) {
+                    fail(format!("the character does not have {}", f))?;
+                }
+            }
+            let adjusted = base + spells::metamagic_levels(&c, &feats);
+            if let Err(e) =
+                spells::check_prepared_slot(&c, &sps, cls_obj, &book, adjusted, specialty)
+            {
                 fail(e)?;
             }
             (
@@ -2424,8 +2453,8 @@ impl Session {
                     spell: spell.clone(),
                     class: cls.clone(),
                     book: book.clone(),
-                    level: base,
-                    feats: Vec::new(),
+                    level: adjusted,
+                    feats: feats.clone(),
                     domain: owner_domain.map(|d| d.key.clone()),
                     pages: 0,
                 },

@@ -148,7 +148,8 @@ Commands (`help` in the editor lists them):
     equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
     equip buy NAME [QTY] | equip sell NAME [QTY|all]
     spell add CLASS SPELL [LEVEL] [BOOK] | spell rm CLASS SPELL [BOOK]
-    spell prep CLASS SPELL [LIST] [--level N] [--domain D] | spell unprep CLASS SPELL [LIST]
+    spell prep CLASS SPELL [LIST] [--meta FEAT[,FEAT]] [--level N] [--domain D]
+    spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]
     spellbook add NAME | spellbook rm NAME | spellbook ls
     follower add NAME TYPE RACE [FILE] | follower rm NAME | follower ls
     undo | save [PATH] | quit
@@ -159,7 +160,8 @@ choices must be ones its `CHOOSE` offers; abilities are paid for from
 their category's pool (bonus pools, the race's starting feats and the
 game mode's feat schedule); skill ranks are capped at the level
 maximum and paid for with the class's skill points; a spell is
-prepared only if it is known and a slot of its level is free. `info` shows the
+prepared only if it is known and a slot of its level (raised by any
+metamagic feats it is prepared with) is free. `info` shows the
 pools and skill points left. A class level that offers choices
 (`ADD:` tokens granting spellcasting class levels, abilities, class
 skills or languages) takes them from `--choose`, in order; a choice

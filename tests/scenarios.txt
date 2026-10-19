@@ -589,11 +589,14 @@ class add Wizard
 spell add Wizard "Magic Missile"
 spell add Wizard Shield
 spell add Wizard Web
+spell add Wizard Sleep
+feat add "Extend Spell"
 spell prep Wizard "Magic Missile"
 spell prep Wizard "Magic Missile"
 spell prep Wizard Shield
 spell prep Wizard Web
 spell prep Wizard "Detect Magic"
+spell prep Wizard Sleep --meta "Extend Spell"
 spellbook add Evening
 spell prep Wizard Web Evening
 
@@ -614,3 +617,24 @@ spell prep Cleric "Heat Metal"
 spell prep Cleric Aid
 spell prep Cleric Guidance
 spell prep Cleric Guidance
+
+== wizard_metamagic_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat INT 17
+race Human
+set align LN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Wizard
+class add Wizard
+feat add "Heighten Spell"
+feat add "Extend Spell"
+spell add Wizard "Magic Missile"
+spell add Wizard Sleep
+spell add Wizard "Burning Hands"
+spell prep Wizard "Magic Missile"
+spell prep Wizard Sleep --meta "Heighten Spell"
+spell prep Wizard "Burning Hands" --meta "Extend Spell,Heighten Spell"
+spell prep Wizard "Burning Hands" --meta "Heighten Spell,Extend Spell"

@@ -908,3 +908,42 @@ fn preparing_spells() {
     assert!(pcg_text(&s).contains("SPELLNAME:Ember|TIMES:3|"));
     assert!(err(&mut s, "spell unprep Sage Ember Morning").contains("not prepared"));
 }
+
+#[test]
+fn preparing_spells_with_metamagic() {
+    let mut s = sage();
+    // third level: one level-2 slot, none of level 3
+    ok(&mut s, "class add Sage");
+    let wide = "spell prep Sage Ember --meta \"Wide Spell\"";
+    assert!(err(&mut s, wide).contains("does not have Wide Spell"));
+    ok(&mut s, "ability add \"Wide Spell\" --force");
+    ok(&mut s, "ability add \"Sharp Spell\" --force");
+    ok(&mut s, "ability add \"Spell Spring\" --force");
+    let e = err(&mut s, "spell prep Sage Ember --meta \"Spell Spring\"");
+    assert!(e.contains("not a metamagic feat"), "{}", e);
+    // a feat raises the level of the slot the spell takes
+    assert!(ok(&mut s, wide).contains("(level 2)"));
+    let text = pcg_text(&s);
+    assert!(
+        text.contains(
+            "SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:2|FEATLIST:[FEAT:Wide Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n"
+        ),
+        "{}",
+        text
+    );
+    let both = "spell prep Sage Ember --meta \"Wide Spell,Sharp Spell\"";
+    let e = err(&mut s, both);
+    assert!(e.contains("only prepare 0 spells for level 3"), "{}", e);
+    ok(&mut s, &format!("{} --force", both));
+    assert!(pcg_text(&s).contains("|SPELLLEVEL:3|FEATLIST:[FEAT:Wide Spell|FEAT:Sharp Spell]|"));
+    // copies with and without feats are counted apart
+    ok(&mut s, "spell prep Sage Ember");
+    ok(&mut s, wide.replace("prep", "unprep").as_str());
+    let text = pcg_text(&s);
+    assert!(!text.contains("|SPELLLEVEL:2|"), "{}", text);
+    assert!(
+        text.contains("|BOOK:Prepared Spells|SPELLLEVEL:1|"),
+        "{}",
+        text
+    );
+}

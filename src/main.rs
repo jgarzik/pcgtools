@@ -104,6 +104,42 @@ enum PcgCommand {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Edit a character interactively (or run commands from stdin)
+    Repl {
+        /// Character file to open (or to save a new character to)
+        file: Option<PathBuf>,
+
+        /// Create a new character
+        #[arg(long)]
+        new: bool,
+
+        /// Game mode for a new character
+        #[arg(long, default_value = "Pathfinder")]
+        gamemode: String,
+
+        /// Campaign key for a new character (repeatable)
+        #[arg(long)]
+        campaign: Vec<String>,
+
+        /// Name for a new character
+        #[arg(long, default_value = "New Character")]
+        name: String,
+    },
+
+    /// Run one character editing command, saving the file if it changes
+    Char {
+        /// Character file
+        file: PathBuf,
+
+        /// Write the result here instead of back to the file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// The command, e.g.: class add Fighter
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
     /// Work with PCG character files
     Pcg {
         #[command(subcommand)]
@@ -386,6 +422,25 @@ fn main() -> ExitCode {
         Command::Gamemode { name, file } => {
             cmd::campaign::gamemode(o, name.as_deref(), file.as_deref())
         }
+        Command::Repl {
+            file,
+            new,
+            gamemode,
+            campaign,
+            name,
+        } => {
+            let n = new.then(|| cmd::repl::NewChar {
+                gamemode,
+                campaigns: campaign,
+                name,
+            });
+            cmd::repl::repl(o, file.as_deref(), n)
+        }
+        Command::Char {
+            file,
+            output,
+            command,
+        } => cmd::repl::one_shot(o, file, command, output.as_ref()),
         Command::Pcg { cmd } => match cmd {
             PcgCommand::Show { file } => cmd::pcg::show(o, file),
             PcgCommand::Lint { file } => cmd::pcg::lint(o, file),

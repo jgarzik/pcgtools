@@ -26,7 +26,7 @@ fn fixture_modes() {
 
     // experience tables
     let slow = tm.level_table(None);
-    assert_eq!(slow.len(), 2);
+    assert_eq!(slow.len(), 3);
     assert_eq!(slow[0].class_skill_max, "LEVEL+3");
     let fast = tm.level_table(Some("Fast"));
     assert_eq!(fast.len(), 3);

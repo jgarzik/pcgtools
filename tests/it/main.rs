@@ -11,4 +11,5 @@ mod dataset;
 mod gamemode;
 mod oracle;
 mod pcg;
+mod repl;
 mod rules;

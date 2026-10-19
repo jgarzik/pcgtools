@@ -14,6 +14,7 @@ pub mod data;
 pub mod edit;
 pub mod misc;
 pub mod pcg;
+pub mod repl;
 
 use pcgtools::Diagnostics;
 use std::path::{Path, PathBuf};

@@ -327,3 +327,107 @@ fn pcg_stats_json_and_explain() {
         out
     );
 }
+
+fn pcgtools_stdin(args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcgtools"))
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run pcgtools");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn repl_script_from_stdin() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let out = scratch("scripted.pcg");
+    let script = format!(
+        "set stat MGT 16\nrace Gearling\nclass add Tinker\nfeat add \"Quick Step\"\nbogus\nsave \"{}\"\n",
+        out.display()
+    );
+    let o = pcgtools_stdin(
+        &[
+            "--data-dir",
+            &data_dir(),
+            "--system-dir",
+            &sys,
+            "repl",
+            "--new",
+            "--gamemode",
+            "Testmode",
+            "--campaign",
+            "TB",
+            "--name",
+            "Scripty",
+        ],
+        &script,
+    );
+    // the bad command makes the run fail, but the rest still happens
+    assert!(!o.status.success());
+    assert!(
+        stderr(&o).contains("unknown command 'bogus'"),
+        "{}",
+        stderr(&o)
+    );
+    let text = stdout(&o);
+    assert!(text.contains("Tinker is now level 1"), "{}", text);
+    let saved = std::fs::read_to_string(&out).unwrap();
+    assert!(saved.contains("CHARACTERNAME:Scripty"));
+    assert!(saved.contains("RACE:Gearling"));
+    assert!(saved.contains("KEY:QuickStep"));
+}
+
+#[test]
+fn char_one_shot_writes_output() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let out = scratch("oneshot.pcg");
+    let t = tess();
+    let o = pcgtools(&[
+        "--data-dir",
+        &data_dir(),
+        "--system-dir",
+        &sys,
+        "char",
+        &t,
+        "-o",
+        out.to_str().unwrap(),
+        "class",
+        "add",
+        "Tinker",
+        "3",
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("Tinker is now level 3"));
+    let saved = std::fs::read_to_string(&out).unwrap();
+    assert!(saved.contains("CLASSABILITIESLEVEL:Tinker=3|HITPOINTS:3"));
+    // the original is untouched
+    let orig = std::fs::read_to_string(common::fixture("mini/characters/tess.pcg")).unwrap();
+    assert!(!orig.contains("Tinker=3"));
+
+    // read-only commands do not write
+    let o = pcgtools(&[
+        "--data-dir",
+        &data_dir(),
+        "--system-dir",
+        &sys,
+        "char",
+        &t,
+        "prereq",
+        "feat",
+        "Quick Step",
+    ]);
+    assert_eq!(stdout(&o).trim(), "qualifies for QuickStep");
+}

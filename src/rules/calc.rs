@@ -450,6 +450,21 @@ impl<'a> Calc<'a> {
             + self.bonus.total("MOVEADD", "ALL")
     }
 
+    /// Number of legs or hands, from the race (default `dflt`).
+    fn limbs(&self, tag: &str, dflt: f64) -> f64 {
+        let mut v = self
+            .race()
+            .and_then(|r| r.get(tag))
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(dflt);
+        for s in self.sources.iter().filter(|s| s.kind == SrcKind::Template) {
+            if let Some(x) = s.obj.get(tag).and_then(|x| x.parse().ok()) {
+                v = x;
+            }
+        }
+        v
+    }
+
     /// Movement types and speeds from active objects.
     pub fn movement(&self) -> BTreeMap<String, f64> {
         let mut m = BTreeMap::new();
@@ -594,27 +609,31 @@ impl<'a> Calc<'a> {
             rows = gm.level_table(None);
         }
         let level = self.total_level();
-        let row = rows
+        let class = self.is_class_skill(skill);
+        let field = |r: &crate::gamemode::LevelRow| -> String {
+            if class {
+                r.class_skill_max.clone()
+            } else {
+                r.cross_class_skill_max.clone()
+            }
+        };
+        // the row for this level, else the formula row
+        let f = rows
             .iter()
             .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
+            .map(field)
+            .filter(|f| !f.is_empty())
             .or_else(|| {
                 rows.iter()
                     .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
+                    .map(field)
+                    .filter(|f| !f.is_empty())
             })?;
-        let class = self.is_class_skill(skill);
-        let f = if class {
-            &row.class_skill_max
-        } else {
-            &row.cross_class_skill_max
-        };
-        if f.is_empty() {
-            return None;
-        }
         let env = LevelEnv {
             calc: self,
             level: level as f64,
         };
-        Some(eval_str(f, &env))
+        Some(eval_str(&f, &env))
     }
 
     pub fn is_class_skill(&self, skill: &str) -> bool {
@@ -1283,6 +1302,74 @@ impl<'a> Calc<'a> {
                 self.count_items(args, |a| subs.iter().any(|s| s.eq_ignore_ascii_case(a)))
             }
             "TEXT" => true,
+            "TOTALAB" | "ATT" => args
+                .first()
+                .is_none_or(|a| self.bonus.total("COMBAT", "BASEAB") >= num(a)),
+            "CHECKBASE" => self.count_items(args, |a| {
+                let (k, v) = a.split_once('=').unwrap_or((a, "0"));
+                self.bonus.total("SAVE", &format!("BASE.{}", k)) >= num(v)
+            }),
+            "CHECK" => self.count_items(args, |a| {
+                let (k, v) = a.split_once('=').unwrap_or((a, "0"));
+                self.bonus.total("SAVE", &format!("BASE.{}", k))
+                    + self.bonus.total("SAVE", k)
+                    + self.bonus.total("SAVE", "ALL")
+                    >= num(v)
+            }),
+            "REGION" => {
+                let r = self.ch.pcg.value("REGION").unwrap_or_default();
+                args.iter().any(|a| a.trim().eq_ignore_ascii_case(&r))
+            }
+            "RACETYPE" => self.count_items(args, |a| {
+                self.race()
+                    .is_some_and(|r| r.values("RACETYPE").any(|x| x.eq_ignore_ascii_case(a)))
+            }),
+            "SKILLTOT" => {
+                // PRESKILLTOT:skill,skill=total
+                let Some(last) = args.last() else { return true };
+                let (lastskill, total) = last.split_once('=').unwrap_or((last, "0"));
+                let mut sum = 0.0;
+                for a in &args[..args.len() - 1] {
+                    sum += self.skill_ranks(a);
+                }
+                sum += self.skill_ranks(lastskill);
+                sum >= num(total)
+            }
+            "LEGSEQ" | "LEGSGT" | "LEGSGTEQ" | "LEGSLT" | "LEGSLTEQ" | "LEGSNEQ" => {
+                let legs = self.limbs("LEGS", 2.0);
+                args.first().is_none_or(|a| cmp(&kind[4..], legs, num(a)))
+            }
+            "HANDSEQ" | "HANDSGT" | "HANDSGTEQ" | "HANDSLT" | "HANDSLTEQ" | "HANDSNEQ" => {
+                let hands = self.limbs("HANDS", 2.0);
+                args.first().is_none_or(|a| cmp(&kind[5..], hands, num(a)))
+            }
+            "VISION" => self.count_items(args, |a| {
+                let (t, _) = a.split_once('=').unwrap_or((a, ""));
+                self.sources.iter().any(|s| {
+                    s.tokens
+                        .iter()
+                        .any(|tk| tk.tag == "VISION" && tk.value.to_lowercase().contains(&lower(t)))
+                })
+            }),
+            "SA" => self.count_items(args, |a| {
+                let pat = lower(a.trim_end_matches('%'));
+                self.ability_srcs().any(|s| {
+                    lower(&s.obj.key).starts_with(&pat) || lower(&s.obj.name).starts_with(&pat)
+                })
+            }),
+            "DEITYDOMAIN" => {
+                let d = self
+                    .ch
+                    .deity()
+                    .and_then(|d| self.ds.get(FileKind::Deity, &d));
+                self.count_items(args, |a| {
+                    d.is_some_and(|o| {
+                        o.values("DOMAINS")
+                            .flat_map(|v| v.split([',', '|']))
+                            .any(|x| x.eq_ignore_ascii_case(a))
+                    })
+                })
+            }
             "FACT" => {
                 // PREFACT:n,KIND,Fact=Value[,Fact=Value]
                 let need: usize = args
@@ -1929,6 +2016,21 @@ impl<'a> Calc<'a> {
             }
         }
         total + self.bonus.total("HP", "CURRENTMAX") as i64
+    }
+
+    /// The object's prerequisites that the character fails (after
+    /// [`Calc::run`]), as written.
+    pub fn failing_prereqs(&self, obj: &'a Object) -> Vec<String> {
+        let src = self.src(SrcKind::Ability, obj);
+        obj.tokens
+            .iter()
+            .filter(|t| Prereq::is_pre_tag(&t.tag))
+            .filter(|t| match Prereq::from_token(&t.tag, &t.value) {
+                Ok(p) => !self.passes(&p, Some(&src)),
+                Err(_) => false,
+            })
+            .map(|t| t.text())
+            .collect()
     }
 
     /// Contributions to a bonus key, for explaining a value.

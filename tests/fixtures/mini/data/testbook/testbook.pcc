@@ -7,6 +7,8 @@ RANK:1
 SOURCELONG:Test Book
 SOURCESHORT:TB
 STAT:tb_stats.lst
+ALIGNMENT:tb_align.lst
+RACE:tb_races.lst
 SAVE:tb_saves.lst
 SKILL:tb_skills.lst
 SIZE:tb_sizes.lst

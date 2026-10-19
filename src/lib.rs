@@ -25,6 +25,7 @@ pub mod lst;
 pub mod pcc;
 pub mod pcg;
 pub mod query;
+pub mod repl;
 pub mod rules;
 pub mod text;
 pub mod token;

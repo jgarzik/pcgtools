@@ -182,7 +182,7 @@ pub const DEFAULT_SET_ID: &str = "0.1";
 pub const DEFAULT_SET_NAME: &str = "Default Set";
 
 /// Whether an EQUIPSET id is a set (`0.N`) rather than an item in one.
-fn is_set_root(id: &str) -> bool {
+pub fn is_set_root(id: &str) -> bool {
     id.strip_prefix("0.").is_some_and(|r| !r.contains('.'))
 }
 

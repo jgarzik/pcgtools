@@ -12,6 +12,7 @@ use super::skills::name_order;
 use super::units::{float_text, pattern, trim_zeros, Units};
 use super::{Element, SheetCtx};
 use crate::lst::kind::FileKind;
+use crate::pcg::character::{is_set_root, DEFAULT_SET_NAME};
 use crate::rules::equip::{natural_weapons, EqItem};
 use crate::token::pre::Prereq;
 
@@ -48,6 +49,16 @@ pub(super) struct Placed<'a> {
 /// Master items (one per saved item) and the items placed in the
 /// calculation equipment set, in set order.
 pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
+    let temp =
+        s.ch.pcg
+            .value("USETEMPMODS")
+            .is_none_or(|v| v.eq_ignore_ascii_case("Y"));
+    placed_in(s, &s.ch.calc_equip_set(), temp)
+}
+
+/// Master items and the items placed in an equipment set, with copies
+/// of those carrying temporary bonuses if `temp`.
+fn placed_in<'a>(s: &SheetCtx<'a>, set: &str, temp: bool) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
     let c = &s.calc;
     let pcg = &s.ch.pcg;
     let natural = natural_weapons(c);
@@ -81,8 +92,7 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
             }
             acc
         });
-    let calc_set = s.ch.calc_equip_set();
-    let prefix = format!("{}.", calc_set);
+    let prefix = format!("{}.", set);
     let mut sets: Vec<(String, String, Option<String>, f64)> = pcg
         .lines_tagged("EQUIPSET")
         .filter_map(|l| {
@@ -158,10 +168,7 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
         });
     }
     // copies of items carrying temporary bonuses
-    if pcg
-        .value("USETEMPMODS")
-        .is_none_or(|v| v.eq_ignore_ascii_case("Y"))
-    {
+    if temp {
         for l in pcg.lines_tagged("TEMPBONUS") {
             let Some(target) = l.text("TBTARGET") else {
                 continue;
@@ -458,20 +465,40 @@ pub fn equipment(s: &SheetCtx) -> Element {
             .with(Element::leaf("load", load))
             .with(Element::leaf("capacity", pattern(max, "#.##"))),
     );
+    // every set in turn, each with its own items and temporary-bonus
+    // setting (bonuses stay those of the set used)
     let mut sets = Element::new("equipmentsets");
-    let calc_set = s.ch.calc_equip_set();
-    let set_name =
+    let roots: Vec<(String, String, bool)> =
         s.ch.pcg
             .lines_tagged("EQUIPSET")
-            .find(|l| l.text("ID").as_deref() == Some(calc_set.as_str()))
-            .and_then(|l| l.head().map(|h| h.value_text()))
-            // a character without equipment sets gets a default one
-            .unwrap_or_else(|| "Default Set".into());
-    let mut set = Element::new("equipmentset").attr("name", set_name);
-    for (i, qty) in merged(&items) {
-        set.push(item_element(s, &items, i, false, qty));
+            .filter_map(|l| {
+                let id = l.text("ID")?;
+                is_set_root(&id).then(|| {
+                    (
+                        id,
+                        l.head().map(|h| h.value_text()).unwrap_or_default(),
+                        l.text("USETEMPMODS")
+                            .is_some_and(|v| v.eq_ignore_ascii_case("Y")),
+                    )
+                })
+            })
+            .collect();
+    if roots.is_empty() {
+        // a character without equipment sets gets a default one
+        let mut set = Element::new("equipmentset").attr("name", DEFAULT_SET_NAME);
+        for (i, qty) in merged(&items) {
+            set.push(item_element(s, &items, i, false, qty));
+        }
+        sets.push(set);
     }
-    sets.push(set);
+    for (id, name, temp) in roots {
+        let (_, items) = placed_in(s, &id, temp);
+        let mut set = Element::new("equipmentset").attr("name", name);
+        for (i, qty) in merged(&items) {
+            set.push(item_element(s, &items, i, false, qty));
+        }
+        sets.push(set);
+    }
     out.push(sets);
     out
 }

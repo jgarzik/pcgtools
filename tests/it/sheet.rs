@@ -681,3 +681,61 @@ fn spells_prepared_with_metamagic() {
         [row("Ember [Wide Spell, Sharp Spell]", "1", "14")]
     );
 }
+
+#[test]
+fn one_equipment_set_element_per_set() {
+    let mut s = new_session(&[
+        "equip add \"Tin Shield\"",
+        "equip add \"Wooden Spoon\"",
+        "equip wear \"Wooden Spoon\" Carried",
+        "eqset add Battle",
+        "equip wear \"Tin Shield\" Arm",
+        "eqset add Empty",
+        "eqset use Battle",
+    ]);
+    let m = session_sheet(&s);
+    let set = |i: usize, p: &str| {
+        m.get(&format!(
+            "character/equipment[0]/equipmentsets[0]/equipmentset[{}]/{}",
+            i, p
+        ))
+        .cloned()
+        .unwrap_or_default()
+    };
+    // the items of a set, by name
+    let items = |i: usize| {
+        let pre = format!(
+            "character/equipment[0]/equipmentsets[0]/equipmentset[{}]/item[",
+            i
+        );
+        let mut v: Vec<String> = m
+            .keys()
+            .filter_map(|k| {
+                k.strip_prefix(&pre)?
+                    .split_once(']')
+                    .map(|x| x.0.to_string())
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    // every set, in order, each with its own items
+    assert_eq!(set(0, "@name"), "Default Set");
+    assert_eq!(items(0), ["Wooden Spoon"]);
+    assert_eq!(set(0, "item[Wooden Spoon]/equipped[0]"), "N");
+    assert_eq!(set(1, "@name"), "Battle");
+    assert_eq!(items(1), ["Tin Shield"]);
+    assert_eq!(set(1, "item[Tin Shield]/equipped[0]"), "Y");
+    assert_eq!(set(2, "@name"), "Empty");
+    assert!(items(2).is_empty());
+    // the rest of the sheet is the set used
+    assert!(m.contains_key("character/equipment[0]/item[Tin Shield]/name[0]"));
+    assert!(!m.contains_key("character/equipment[0]/item[Wooden Spoon]/name[0]"));
+    assert_eq!(at(&m, "equipment[0]/total[0]/weight[0]"), "5 lbs.");
+    assert_eq!(at(&m, "armor_class[0]/total[0]"), "11");
+    s.exec("eqset use \"Default Set\"").unwrap();
+    let m = session_sheet(&s);
+    assert!(m.contains_key("character/equipment[0]/item[Wooden Spoon]/name[0]"));
+    assert_eq!(at(&m, "armor_class[0]/total[0]"), "10");
+}

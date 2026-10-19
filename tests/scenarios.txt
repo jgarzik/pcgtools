@@ -655,3 +655,26 @@ spell scribe Wizard Sleep "Spellbook (Wizard's/Blank) #2"
 spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
 spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
 spell scribe Wizard Sleep "Spellbook (Wizard's/Blank)"
+
+== equipment_sets_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 12
+race Human
+set align LN
+class add Fighter
+equip add "Chainmail"
+equip add "Longsword"
+equip add "Shortbow"
+equip wear "Longsword"
+eqset add Travel
+equip wear "Chainmail"
+equip wear "Longsword" Carried
+equip wear "Shortbow" "Both Hands"
+eqset add Junk
+eqset copy Travel Camp
+equip unwear "Chainmail" --set Camp
+eqset rm Junk
+eqset add Empty
+eqset use Travel

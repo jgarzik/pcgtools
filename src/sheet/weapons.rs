@@ -314,6 +314,30 @@ fn weapon_prof_bonus(
     }
 }
 
+/// A weapon with no proficiency matches every bonus to a named
+/// proficiency, each bonus counted once however many it names.
+fn unnamed_prof_bonus(s: &SheetCtx, target: &str, keep: &dyn Fn(&Source) -> bool) -> f64 {
+    let suffix = format!(".{}", target.to_ascii_uppercase());
+    let mut seen: Vec<&str> = Vec::new();
+    let mut total = 0.0;
+    for c in &s.calc.bonus.log {
+        let Some(name) = c
+            .key
+            .strip_prefix("WEAPONPROF=")
+            .and_then(|k| k.strip_suffix(&suffix))
+        else {
+            continue;
+        };
+        if name.starts_with("TYPE.") || !keep(&c.source) || seen.contains(&c.source.origin.as_str())
+        {
+            continue;
+        }
+        seen.push(&c.source.origin);
+        total += c.value;
+    }
+    total
+}
+
 fn all(_: &Source) -> bool {
     true
 }
@@ -1005,13 +1029,13 @@ fn magic(s: &SheetCtx, w: &Weapon, target: &str) -> String {
 }
 
 /// A weapon bonus from feats or from templates.
-fn from_kind(s: &SheetCtx, target: &str, keep: &dyn Fn(&Source) -> bool) -> String {
+fn from_kind(s: &SheetCtx, target: &str, keep: &dyn Fn(&Source) -> bool, extra: i64) -> String {
     let b = &s.calc.bonus;
     let mut v = b.total_where("WEAPON", target, keep);
     if target == "DAMAGE" {
         v -= b.total_where("WEAPON", "DAMAGE-SHORTRANGE", keep);
     }
-    signed(v as i64)
+    signed(v as i64 + extra)
 }
 
 fn feat(src: &Source) -> bool {
@@ -1062,10 +1086,25 @@ fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
             .with(Element::leaf("magic_hit", magic(s, w, "TOHIT")))
             .with(Element::leaf("total_hit", &total)),
     );
+    // the feat column of a weapon without a proficiency also shows
+    // bonuses to named proficiencies (the total does not)
+    let unnamed = |target: &str| {
+        if prof_of(s, w).is_none() && !w.natural() {
+            unnamed_prof_bonus(s, target, &feat) as i64
+        } else {
+            0
+        }
+    };
     e.push(
         Element::new("feat")
-            .with(Element::leaf("hit", from_kind(s, "TOHIT", &feat)))
-            .with(Element::leaf("damage", from_kind(s, "DAMAGE", &feat))),
+            .with(Element::leaf(
+                "hit",
+                from_kind(s, "TOHIT", &feat, unnamed("TOHIT")),
+            ))
+            .with(Element::leaf(
+                "damage",
+                from_kind(s, "DAMAGE", &feat, unnamed("DAMAGE")),
+            )),
     );
     e.add("hand", w.hand.text());
     e.add("num_attacks", num_attacks(s, w));
@@ -1074,8 +1113,11 @@ fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     e.add("special_properties", w.item.special_properties(c));
     e.push(
         Element::new("template")
-            .with(Element::leaf("hit", from_kind(s, "TOHIT", &template)))
-            .with(Element::leaf("damage", from_kind(s, "DAMAGE", &template))),
+            .with(Element::leaf("hit", from_kind(s, "TOHIT", &template, 0)))
+            .with(Element::leaf(
+                "damage",
+                from_kind(s, "DAMAGE", &template, 0),
+            )),
     );
     e.add("type", type_abbrevs(s, w));
     let wt = if w.name == w.item.name && !w.is("Both") {

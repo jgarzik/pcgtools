@@ -871,7 +871,9 @@ fn turning(s: &SheetCtx) -> Vec<Element> {
         let aspect = |name: &str| aspect_value(s, l, name).unwrap_or_default();
         let int = |name: &str| aspect(name).trim().parse::<f64>().unwrap_or(0.0) as i64;
         let check = int("TurnCheck");
-        let mut e = Element::new("turning");
+        let mut e = Element::new("turning")
+            .attr("kind", aspect("TurnKind").to_uppercase())
+            .attr("type", aspect("TurnType").to_uppercase());
         e.add("level", int("TurnLevel"));
         e.add(
             "turn_check",

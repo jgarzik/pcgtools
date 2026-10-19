@@ -452,7 +452,17 @@ pub fn equipment(s: &SheetCtx) -> Element {
             .with(Element::leaf("capacity", pattern(max, "#.##"))),
     );
     let mut sets = Element::new("equipmentsets");
-    let mut set = Element::new("equipmentset");
+    let calc_set =
+        s.ch.pcg
+            .value("CALCEQUIPSET")
+            .unwrap_or_else(|| "0.1".into());
+    let set_name =
+        s.ch.pcg
+            .lines_tagged("EQUIPSET")
+            .find(|l| l.text("ID").as_deref() == Some(calc_set.as_str()))
+            .and_then(|l| l.head().map(|h| h.value_text()))
+            .unwrap_or_default();
+    let mut set = Element::new("equipmentset").attr("name", set_name);
     for (i, qty) in merged(&items) {
         set.push(item_element(s, &items, i, false, qty));
     }

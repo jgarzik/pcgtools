@@ -20,6 +20,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Element {
     pub tag: String,
+    /// attributes, in order
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attrs: Vec<(String, String)>,
     pub text: String,
     pub children: Vec<Element>,
 }
@@ -36,9 +39,16 @@ impl Element {
     pub fn leaf(tag: &str, text: impl ToString) -> Element {
         Element {
             tag: tag.to_string(),
+            attrs: Vec::new(),
             text: text.to_string(),
             children: Vec::new(),
         }
+    }
+
+    /// Add an attribute and return self (builder style).
+    pub fn attr(mut self, name: &str, value: impl ToString) -> Element {
+        self.attrs.push((name.to_string(), value.to_string()));
+        self
     }
 
     /// Append a child and return self (builder style).
@@ -69,11 +79,15 @@ impl Element {
             match reader.read_event() {
                 Ok(Event::Start(e)) => {
                     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                    stack.push(Element::new(&tag));
+                    let mut el = Element::new(&tag);
+                    el.attrs = attributes(&e)?;
+                    stack.push(el);
                 }
                 Ok(Event::Empty(e)) => {
                     let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                    stack.last_mut().unwrap().children.push(Element::new(&tag));
+                    let mut el = Element::new(&tag);
+                    el.attrs = attributes(&e)?;
+                    stack.last_mut().unwrap().children.push(el);
                 }
                 Ok(Event::End(_)) => {
                     let el = stack.pop().unwrap();
@@ -122,6 +136,9 @@ impl Element {
         out.push_str(&pad);
         out.push('<');
         out.push_str(&self.tag);
+        for (k, v) in &self.attrs {
+            out.push_str(&format!(" {}=\"{}\"", k, escape(v)));
+        }
         if self.children.is_empty() && self.text.is_empty() {
             out.push_str("/>\n");
             return;
@@ -161,6 +178,9 @@ impl Element {
     }
 
     fn flatten_into(&self, path: &str, out: &mut Vec<(String, String)>) {
+        for (k, v) in &self.attrs {
+            out.push((format!("{}/@{}", path, k), v.clone()));
+        }
         let text = self.text.trim();
         if self.children.is_empty() {
             out.push((path.to_string(), text.to_string()));
@@ -190,6 +210,21 @@ impl Element {
             c.flatten_into(&format!("{}/{}", path, seg), out);
         }
     }
+}
+
+/// Attributes of a start or empty tag, unescaped.
+fn attributes(e: &quick_xml::events::BytesStart) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for a in e.attributes() {
+        let a = a.map_err(|x| Error::Other(format!("XML attribute: {}", x)))?;
+        let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
+        let v = a
+            .unescape_value()
+            .map_err(|x| Error::Other(format!("XML attribute: {}", x)))?
+            .into_owned();
+        out.push((k, v));
+    }
+    Ok(out)
 }
 
 fn escape(s: &str) -> String {

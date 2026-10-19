@@ -3131,6 +3131,22 @@ impl<'a> Calc<'a> {
                 }
             }
         }
+        // a spellcaster level chosen through the race or a template
+        // raises the chosen class's level for spells (level lines save
+        // that bonus themselves)
+        for tag in ["RACE", "TEMPLATE"] {
+            for l in self.ch.pcg.lines_tagged(tag) {
+                for e in l.elems.iter().flatten().filter(|e| e.tag == "ADD") {
+                    let kids = e.children();
+                    if !kids.iter().any(|c| c.tag == "SPELLCASTER") {
+                        continue;
+                    }
+                    for c in kids.iter().filter(|c| c.tag == "CHOICE") {
+                        saved.push(format!("BONUS|PCLEVEL|{}|1", c.value_text()));
+                    }
+                }
+            }
+        }
         let origin = Source {
             origin: "Saved bonus".into(),
             kind: "Saved".into(),

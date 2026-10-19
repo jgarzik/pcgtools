@@ -14,7 +14,6 @@ Files are read and written losslessly: unmodified bytes (alignment
 TABs, comments, line endings, odd encodings) survive a round trip.
 
 [FORMAT.md](FORMAT.md) describes all of these formats.
-[CHANGELOG.md](CHANGELOG.md) lists what each release brings.
 
 pcgtools is an independent project, not affiliated with or endorsed
 by the PCGen project. It ships no game data.

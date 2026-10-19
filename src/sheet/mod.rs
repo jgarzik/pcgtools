@@ -71,5 +71,8 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
         root.push(e);
     }
     root.push(skills::build(&s));
+    for e in combat::build_after_skills(&s) {
+        root.push(e);
+    }
     root
 }

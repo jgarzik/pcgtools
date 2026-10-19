@@ -53,8 +53,35 @@ pub struct BonusTable {
     /// case; TYPE is upper case, empty for untyped
     entries: BTreeMap<(String, String, Mode), Acc>,
     stacking: HashSet<String>,
-    /// every bonus filed, with a note on where it came from
-    pub log: Vec<(String, String, f64, String)>,
+    /// every bonus filed, with where it came from
+    pub log: Vec<Contribution>,
+}
+
+/// Where a bonus came from.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Source {
+    /// description, e.g. "Ability Dodge"
+    pub origin: String,
+    /// kind of the granting object: Stat, Save, Ability, Equipment,
+    /// EquipMod, Race, Template, Class, TempBonus, ...
+    pub kind: String,
+    /// the object's key
+    pub key: String,
+    /// ability category, for abilities
+    pub category: Option<String>,
+    /// a temporary bonus
+    pub temp: bool,
+}
+
+/// One filed bonus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Contribution {
+    /// `CATEGORY.TARGET`, upper case
+    pub key: String,
+    /// type as written (may end in .STACK/.REPLACE); empty if untyped
+    pub btype: String,
+    pub value: f64,
+    pub source: Source,
 }
 
 fn fractional(cat: &str) -> bool {
@@ -82,40 +109,133 @@ impl BonusTable {
         self.log.clear();
     }
 
-    /// File a bonus and remember its origin.
+    /// File a bonus and remember its source.
     pub fn add_from(
         &mut self,
         category: &str,
         target: &str,
         btype: Option<&str>,
         value: f64,
-        origin: &str,
+        source: &Source,
     ) {
         self.add(category, target, btype, value);
-        self.log.push((
-            format!(
-                "{}.{}",
-                category.to_ascii_uppercase(),
-                target.to_ascii_uppercase()
-            ),
-            btype.unwrap_or("").to_string(),
+        let cat = category.to_ascii_uppercase();
+        let value = if fractional(&cat) {
+            value
+        } else {
+            value.trunc()
+        };
+        self.log.push(Contribution {
+            key: format!("{}.{}", cat, target.to_ascii_uppercase()),
+            btype: btype.unwrap_or("").to_string(),
             value,
-            origin.to_string(),
-        ));
+            source: source.clone(),
+        });
+    }
+
+    fn key_of(category: &str, target: &str) -> String {
+        format!(
+            "{}.{}",
+            category.to_ascii_uppercase(),
+            target.to_ascii_uppercase()
+        )
     }
 
     /// Contributions to `category.target`: (type, value, origin).
     pub fn explain(&self, category: &str, target: &str) -> Vec<(String, f64, String)> {
-        let key = format!(
-            "{}.{}",
-            category.to_ascii_uppercase(),
-            target.to_ascii_uppercase()
-        );
+        let key = BonusTable::key_of(category, target);
         self.log
             .iter()
-            .filter(|(k, _, _, _)| *k == key)
-            .map(|(_, t, v, o)| (t.clone(), *v, o.clone()))
+            .filter(|c| c.key == key)
+            .map(|c| (c.btype.clone(), c.value, c.source.origin.clone()))
             .collect()
+    }
+
+    /// Total of the bonuses to `category.target` whose source passes
+    /// `keep`, with the usual stacking rules applied to just those.
+    pub fn total_where(&self, category: &str, target: &str, keep: impl Fn(&Source) -> bool) -> f64 {
+        let key = BonusTable::key_of(category, target);
+        let mut t = BonusTable {
+            entries: BTreeMap::new(),
+            stacking: self.stacking.clone(),
+            log: Vec::new(),
+        };
+        for c in self.log.iter().filter(|c| c.key == key && keep(&c.source)) {
+            let bt = (!c.btype.is_empty()).then_some(c.btype.as_str());
+            t.add(category, target, bt, c.value);
+        }
+        t.total(category, target)
+    }
+
+    /// Plain sum (no stacking rules) of the bonuses to
+    /// `category.target` whose source passes `keep`.
+    pub fn raw_sum(&self, category: &str, target: &str, keep: impl Fn(&Source) -> bool) -> f64 {
+        let key = BonusTable::key_of(category, target);
+        self.log
+            .iter()
+            .filter(|c| c.key == key && keep(&c.source))
+            .map(|c| c.value)
+            .sum()
+    }
+
+    /// A listing of the bonuses to `category.target` by type, as shown
+    /// on character sheets: `+5, ABILITY +2, BASE +10`.  Zero values
+    /// are left out; untyped bonuses come first, then types in order.
+    pub fn listing(&self, category: &str, target: &str) -> String {
+        let key = BonusTable::key_of(category, target);
+        let sign = |v: i64| format!("{:+}", v);
+        let mut parts: Vec<String> = Vec::new();
+        // keys in sorted order: untyped, then TYPE, TYPE.STACK; the
+        // .REPLACE ones are handled after the rest
+        let mut keys: Vec<(String, Mode)> = self
+            .entries
+            .keys()
+            .filter(|(k, _, _)| *k == key)
+            .map(|(_, t, m)| (t.clone(), *m))
+            .collect();
+        keys.sort_by(|a, b| {
+            let name = |(t, m): &(String, Mode)| match m {
+                Mode::Plain => t.clone(),
+                Mode::Stack => format!("{}.STACK", t),
+                Mode::Replace => format!("{}.REPLACE", t),
+            };
+            name(a).cmp(&name(b))
+        });
+        let mut replaces = Vec::new();
+        for (t, m) in &keys {
+            if *m == Mode::Replace {
+                replaces.push(t.clone());
+                continue;
+            }
+            let v = self.get(&key, t, *m).unwrap_or(0.0) as i64;
+            if v == 0 {
+                continue;
+            }
+            let reason = match m {
+                Mode::Stack => format!("{}.STACK", t),
+                _ => t.clone(),
+            };
+            if reason.is_empty() || reason == "NULL" {
+                parts.push(sign(v));
+            } else {
+                parts.push(format!("{} {}", reason, sign(v)));
+            }
+        }
+        for t in replaces {
+            let base = self.get(&key, &t, Mode::Plain).unwrap_or(0.0)
+                + self.get(&key, &t, Mode::Stack).unwrap_or(0.0);
+            let rep = self.get(&key, &t, Mode::Replace).unwrap_or(0.0);
+            let v = base.max(rep) as i64;
+            if v == 0 {
+                continue;
+            }
+            parts.push(if t.is_empty() {
+                sign(v)
+            } else {
+                format!("{} {}", t, sign(v))
+            });
+        }
+        parts.join(", ")
     }
 
     /// File a bonus.  `btype` may carry a `.STACK` or `.REPLACE`
@@ -277,6 +397,42 @@ mod tests {
         // stack adds on top
         b.add("COMBAT", "BASEAB", Some("Base.STACK"), 1.0);
         assert_eq!(b.total("COMBAT", "BASEAB"), 8.0);
+    }
+
+    #[test]
+    fn filtered_totals_and_listing() {
+        let mut b = t();
+        let src = |kind: &str| Source {
+            kind: kind.into(),
+            ..Default::default()
+        };
+        b.add_from("COMBAT", "AC", Some("Base"), 10.0, &src("Stat"));
+        b.add_from("COMBAT", "AC", Some("Armor"), 5.0, &src("Equipment"));
+        b.add_from("COMBAT", "AC", Some("Armor"), 3.0, &src("Ability"));
+        b.add_from("COMBAT", "AC", None, 2.0, &src("Ability"));
+        b.add_from(
+            "COMBAT",
+            "AC",
+            Some("NaturalArmor.STACK"),
+            4.0,
+            &src("Template"),
+        );
+        b.add_from("COMBAT", "AC", Some("Dodge"), 0.0, &src("Ability"));
+        assert_eq!(b.total("COMBAT", "AC"), 21.0);
+        assert_eq!(
+            b.total_where("COMBAT", "AC", |s| s.kind != "Equipment"),
+            19.0
+        );
+        assert_eq!(b.raw_sum("COMBAT", "AC", |s| s.kind == "Ability"), 5.0);
+        assert_eq!(
+            b.listing("COMBAT", "AC"),
+            "+2, ARMOR +5, BASE +10, NATURALARMOR.STACK +4"
+        );
+        let mut r = t();
+        r.add_from("COMBAT", "BASEAB", Some("Base.REPLACE"), 3.0, &src("Class"));
+        r.add_from("COMBAT", "BASEAB", Some("Base.REPLACE"), 2.0, &src("Class"));
+        assert_eq!(r.listing("COMBAT", "BASEAB"), "BASE +5");
+        assert_eq!(r.explain("COMBAT", "BASEAB").len(), 2);
     }
 
     #[test]

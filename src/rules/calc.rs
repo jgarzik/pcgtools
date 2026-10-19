@@ -17,7 +17,7 @@
 //! variables and `BONUS` tokens, each gated by prerequisites.  Values
 //! depend on each other, so evaluation repeats until nothing changes.
 
-use super::bonus::BonusTable;
+use super::bonus::{BonusTable, Source};
 use super::eval::{eval, eval_str, Env};
 use crate::dataset::{Dataset, Object, Tok};
 use crate::gamemode::GameMode;
@@ -70,6 +70,19 @@ pub struct Src<'a> {
     pub item: Option<usize>,
     /// times the object applies (abilities taken more than once)
     pub times: f64,
+}
+
+impl Src<'_> {
+    /// Description of this source for bonus bookkeeping.
+    pub fn source(&self) -> Source {
+        Source {
+            origin: format!("{:?} {}", self.kind, self.obj.key),
+            kind: format!("{:?}", self.kind),
+            key: self.obj.key.clone(),
+            category: self.obj.category.clone(),
+            temp: false,
+        }
+    }
 }
 
 /// An equipped item.
@@ -567,21 +580,234 @@ impl<'a> Calc<'a> {
             .sum()
     }
 
+    /// Classes taken, with levels, in the order first taken.
+    pub fn classes(&self) -> &[(&'a Object, u32)] {
+        &self.classes
+    }
+
+    /// Damage reduction, e.g. `10/magic; 5/-`: the best value per
+    /// bypass type from DR tokens, plus BONUS:DR|type bonuses.
+    pub fn damage_reduction(&self) -> String {
+        let mut best: BTreeMap<String, (String, f64)> = BTreeMap::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "DR") {
+                let mut parts = t.value.split('|');
+                let Some((v, kind)) = parts.next().and_then(|d| d.split_once('/')) else {
+                    continue;
+                };
+                let pres: Vec<Prereq> = parts.filter_map(|p| Prereq::parse(p).ok()).collect();
+                if !pres.iter().all(|p| self.passes(p, Some(s))) {
+                    continue;
+                }
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                let v = eval_str(v, &env);
+                let e = best
+                    .entry(lower(kind))
+                    .or_insert_with(|| (kind.to_string(), 0.0));
+                e.1 = e.1.max(v);
+            }
+        }
+        let mut out = Vec::new();
+        for (k, (kind, v)) in &best {
+            let v = v + self.bonus.total("DR", k);
+            if v > 0.0 {
+                out.push(format!("{}/{}", v as i64, kind));
+            }
+        }
+        out.join("; ")
+    }
+
+    /// Hit die size of a class, after HITDIE adjustments from the
+    /// race and templates.
+    pub fn hit_die(&self, cls: &Object) -> i64 {
+        let mut die: i64 = cls.get("HD").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let sizes: Vec<(i64, Option<&str>)> = self
+            .gm
+            .and_then(|g| g.misc("DIESIZES"))
+            .unwrap_or("1,2,3,MIN=4,6,8,10,MAX=12,20,100,1000")
+            .split(',')
+            .filter_map(|p| match p.split_once('=') {
+                Some((m, v)) => Some((v.trim().parse().ok()?, Some(m))),
+                None => Some((p.trim().parse().ok()?, None)),
+            })
+            .collect();
+        let lo = sizes
+            .iter()
+            .position(|(_, m)| *m == Some("MIN"))
+            .unwrap_or(0);
+        let hi = sizes
+            .iter()
+            .position(|(_, m)| *m == Some("MAX"))
+            .unwrap_or(sizes.len().saturating_sub(1));
+        for s in self
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SrcKind::Race | SrcKind::Template))
+        {
+            for t in s.tokens.iter().filter(|t| t.tag == "HITDIE") {
+                let mut parts = t.value.split('|');
+                let spec = parts.next().unwrap_or("");
+                let applies = parts.all(|f| {
+                    if let Some(ty) = f.strip_prefix("CLASS.TYPE=") {
+                        cls.is_type(ty)
+                    } else if let Some(c) = f.strip_prefix("CLASS=") {
+                        c.eq_ignore_ascii_case(&cls.key) || c.eq_ignore_ascii_case(&cls.name)
+                    } else {
+                        true
+                    }
+                });
+                if applies {
+                    die = adjust_die(die, spec, &sizes, lo, hi);
+                }
+            }
+        }
+        die
+    }
+
+    /// Effective character level: levels plus level adjustments.
+    pub fn ecl(&self) -> u32 {
+        let mut la = 0.0;
+        for s in self
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SrcKind::Race | SrcKind::Template))
+        {
+            for t in s.tokens.iter().filter(|t| t.tag == "LEVELADJUSTMENT") {
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                la += eval_str(&t.value, &env);
+            }
+        }
+        (self.total_level() as f64 + la).max(0.0) as u32
+    }
+
+    /// Is the stat a non-ability for this character (DEFINESTAT:NONSTAT
+    /// from its race or a template)?
+    pub fn non_stat(&self, abb: &str) -> bool {
+        let mut non = false;
+        for s in self
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SrcKind::Race | SrcKind::Template))
+        {
+            for t in s.tokens.iter().filter(|t| t.tag == "DEFINESTAT") {
+                match t.value.split_once('|') {
+                    Some((k, a)) if a.eq_ignore_ascii_case(abb) => {
+                        if k.eq_ignore_ascii_case("NONSTAT") {
+                            non = true;
+                        } else if k.eq_ignore_ascii_case("STAT") {
+                            non = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        non
+    }
+
+    /// The stat's score before any bonuses.
+    pub fn stat_base(&self, abb: &str) -> f64 {
+        self.stat_base.get(&upper(abb)).copied().unwrap_or(0.0)
+    }
+
+    /// The stat's modifier for a given score.
+    pub fn stat_mod_for(&self, abb: &str, score: f64) -> f64 {
+        let formula = self
+            .ds
+            .get(FileKind::Stat, &upper(abb))
+            .and_then(|s| s.get("STATMOD"))
+            .unwrap_or("floor(SCORE/2)-5");
+        let env = ScoreEnv { calc: self, score };
+        eval_str(formula, &env).floor()
+    }
+
+    /// A variable's value (after [`Calc::run`]).
+    pub fn var(&self, name: &str) -> Option<f64> {
+        self.var_value(name, None)
+    }
+
+    /// Evaluate a formula for the character.
+    pub fn eval_formula(&self, formula: &str) -> f64 {
+        let env = Ctx {
+            calc: self,
+            src: None,
+        };
+        eval_str(formula, &env)
+    }
+
+    /// Hit points gained per level from stats (BONUS:HP|BONUS on stats).
+    pub fn hp_stat_bonus(&self) -> i64 {
+        self.bonus.total_where("HP", "BONUS", |s| s.kind == "Stat") as i64
+    }
+
+    /// Armor check penalty as shown on the sheet: the equipped
+    /// armor's penalties, or the load penalty if worse, plus
+    /// MISC|ACCHECK bonuses.
+    pub fn check_penalty(&self) -> i64 {
+        let mut acp = 0.0;
+        for (i, it) in self.items.iter().enumerate() {
+            let base: f64 = it
+                .obj
+                .get("ACCHECK")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let adj = self.bonus.total(&format!("ITEM{}.EQMARMOR", i), "ACCHECK");
+            if base != 0.0 || adj != 0.0 {
+                acp += (base + adj).min(0.0);
+            }
+        }
+        let load = match self.encumbrance() {
+            1 => -3.0,
+            2 | 3 => -6.0,
+            _ => 0.0,
+        };
+        (acp.min(load) + self.bonus.total("MISC", "ACCHECK")) as i64
+    }
+
+    /// Arcane spell failure chance from equipped items.
+    pub fn spell_failure(&self) -> i64 {
+        let mut total = 0.0;
+        for (i, it) in self.items.iter().enumerate() {
+            total += it
+                .obj
+                .get("SPELLFAILURE")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            total += self
+                .bonus
+                .total(&format!("ITEM{}.EQMARMOR", i), "SPELLFAILURE");
+        }
+        total as i64 + self.bonus.total("MISC", "SPELLFAILURE") as i64
+    }
+
+    /// Spell resistance: the best SR of any source, plus MISC|SR.
+    pub fn spell_resistance(&self) -> i64 {
+        let mut best = 0.0f64;
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "SR") {
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                best = best.max(eval_str(&t.value, &env));
+            }
+        }
+        best as i64 + self.bonus.total("MISC", "SR") as i64
+    }
+
     pub fn stat_score(&self, abb: &str) -> f64 {
         let a = upper(abb);
         self.stat_base.get(&a).copied().unwrap_or(0.0) + self.bonus.total("STAT", &a)
     }
 
     pub fn stat_mod(&self, abb: &str) -> f64 {
-        let a = upper(abb);
-        let score = self.stat_score(&a);
-        let formula = self
-            .ds
-            .get(FileKind::Stat, &a)
-            .and_then(|s| s.get("STATMOD"))
-            .unwrap_or("floor(SCORE/2)-5");
-        let env = ScoreEnv { calc: self, score };
-        eval_str(formula, &env).floor()
+        self.stat_mod_for(abb, self.stat_score(abb))
     }
 
     /// Ranks bought in a skill.
@@ -800,6 +1026,7 @@ impl<'a> Calc<'a> {
         }
         match u.as_str() {
             "TL" | "HD" => return Some(self.total_level() as f64),
+            "ECL" => return Some(self.ecl() as f64),
             "CL" => {
                 return Some(
                     src.and_then(|s| s.class.as_deref())
@@ -1243,7 +1470,11 @@ impl<'a> Calc<'a> {
                         })
                         .collect()
                 } else {
-                    self.items.iter().map(|i| i.obj).collect()
+                    self.items
+                        .iter()
+                        .filter(|i| hand_matches(&kind, &i.location))
+                        .map(|i| i.obj)
+                        .collect()
                 };
                 if let Some(t) = a.strip_prefix("TYPE=").or_else(|| a.strip_prefix("TYPE.")) {
                     items.iter().any(|o| t.split('.').all(|x| o.is_type(x)))
@@ -1839,7 +2070,7 @@ impl<'a> Calc<'a> {
                         };
                         // item-local bonus categories apply to the item
                         if cat.starts_with("EQM") && s.item.is_some() {
-                            let origin = format!("{:?} {}", s.kind, s.obj.key);
+                            let origin = s.source();
                             for tg in &b.targets {
                                 table.add_from(
                                     &format!("ITEM{}.{}", si_item(s), cat),
@@ -1871,7 +2102,7 @@ impl<'a> Calc<'a> {
                             } else {
                                 vec![tg.clone()]
                             };
-                            let origin = format!("{:?} {}", s.kind, s.obj.key);
+                            let origin = s.source();
                             for tg in tgs {
                                 table.add_from(&cat, &tg, btype, v, &origin);
                             }
@@ -1887,10 +2118,14 @@ impl<'a> Calc<'a> {
             if line.text("TBTARGET").as_deref() != Some("PC") {
                 continue;
             }
-            let origin = line
-                .head()
-                .map(|h| format!("TempBonus {}", h.value_text()))
-                .unwrap_or_default();
+            let name = line.head().map(|h| h.value_text()).unwrap_or_default();
+            let origin = Source {
+                origin: format!("TempBonus {}", name),
+                kind: "TempBonus".into(),
+                key: name,
+                category: None,
+                temp: true,
+            };
             let env = Ctx {
                 calc: self,
                 src: None,
@@ -1968,7 +2203,8 @@ impl<'a> Calc<'a> {
         (self.skill_ranks(&sk.key) + b).floor() as i64
     }
 
-    fn ac_of_type(&self, name: &str) -> i64 {
+    /// Armor class of a game-mode AC type (Total, Flatfooted, ...).
+    pub fn ac_of_type(&self, name: &str) -> i64 {
         let Some(gm) = self.gm else {
             return 10 + self.bonus.total("COMBAT", "AC") as i64;
         };
@@ -2148,6 +2384,54 @@ impl<'a> Calc<'a> {
     }
 }
 
+/// Apply one HITDIE adjustment (`12`, `%/2`, `%*2`, `%+1`, `%-1`,
+/// `%up1`, `%down1`) to a die size.
+fn adjust_die(die: i64, spec: &str, sizes: &[(i64, Option<&str>)], lo: usize, hi: usize) -> i64 {
+    let Some(rest) = spec.strip_prefix('%') else {
+        return spec.parse().unwrap_or(die);
+    };
+    let num = |s: &str| s.parse::<i64>().ok();
+    let lower_rest = rest.to_ascii_lowercase();
+    let step = |n: i64| -> i64 {
+        let Some(i) = sizes.iter().position(|(v, _)| *v == die) else {
+            return die;
+        };
+        let j = (i as i64 + n).clamp(lo as i64, hi as i64) as usize;
+        sizes[j].0
+    };
+    if let Some(n) = lower_rest.strip_prefix("up").and_then(num) {
+        step(n)
+    } else if let Some(n) = lower_rest.strip_prefix("down").and_then(num) {
+        step(-n)
+    } else if let Some(n) = rest.strip_prefix('/').and_then(num) {
+        if n == 0 {
+            die
+        } else {
+            die / n
+        }
+    } else if let Some(n) = rest.strip_prefix('*').and_then(num) {
+        die * n
+    } else if let Some(n) = rest.strip_prefix('+').and_then(num) {
+        die + n
+    } else if let Some(n) = rest.strip_prefix('-').and_then(num) {
+        die - n
+    } else {
+        die
+    }
+}
+
+/// Does an equipment location satisfy a PREEQUIP-family test?
+fn hand_matches(kind: &str, location: &str) -> bool {
+    let l = lower(location);
+    match kind {
+        "EQUIPPRIMARY" => l == "primary hand" || l == "natural-primary",
+        "EQUIPSECONDARY" => l.starts_with("secondary hand") || l == "natural-secondary",
+        "EQUIPBOTH" => l == "both hands",
+        "EQUIPTWOWEAPON" => l == "double weapon" || l == "two weapons",
+        _ => true,
+    }
+}
+
 fn si_item(s: &Src<'_>) -> usize {
     s.item.unwrap_or(usize::MAX)
 }
@@ -2212,5 +2496,47 @@ impl Env for ScoreEnv<'_, '_> {
         } else {
             self.calc.var_value(name, None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hit_die_adjustments() {
+        let sizes: Vec<(i64, Option<&str>)> = vec![
+            (1, None),
+            (2, None),
+            (4, Some("MIN")),
+            (6, None),
+            (8, None),
+            (10, None),
+            (12, Some("MAX")),
+            (20, None),
+        ];
+        let a = |d, s| adjust_die(d, s, &sizes, 2, 6);
+        assert_eq!(a(8, "%up1"), 10);
+        assert_eq!(a(8, "%UP2"), 12);
+        assert_eq!(a(12, "%up1"), 12);
+        assert_eq!(a(6, "%down2"), 4);
+        assert_eq!(a(8, "%/2"), 4);
+        assert_eq!(a(8, "%/0"), 8);
+        assert_eq!(a(8, "%*2"), 16);
+        assert_eq!(a(8, "%+2"), 10);
+        assert_eq!(a(8, "%-2"), 6);
+        assert_eq!(a(8, "12"), 12);
+        assert_eq!(a(7, "%up1"), 7);
+        assert_eq!(a(8, "%bogus"), 8);
+    }
+
+    #[test]
+    fn hand_locations() {
+        assert!(hand_matches("EQUIPPRIMARY", "Primary Hand"));
+        assert!(hand_matches("EQUIPSECONDARY", "Secondary Hand 2"));
+        assert!(hand_matches("EQUIPBOTH", "Both Hands"));
+        assert!(!hand_matches("EQUIPBOTH", "Shield"));
+        assert!(hand_matches("EQUIP", "Shield"));
+        assert!(hand_matches("EQUIPTWOWEAPON", "Double Weapon"));
     }
 }

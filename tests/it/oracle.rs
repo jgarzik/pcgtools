@@ -2,9 +2,8 @@
 // (code/testsuite/csheets/*.xml), read in place from PCGEN_ROOT.
 //
 // Every leaf value of every expected sheet is compared with the sheet
-// pcgtools builds; results are reported per game mode and section.
-// Values matching CORE (attack bonus, saves, hit points, armor class,
-// skill totals) must match for the game modes in CORE_MODES.
+// pcgtools builds, and every one must match; results are reported per
+// game mode and section.
 //
 // ORACLE_ONLY=name limits the run to one character, ORACLE_SECTION to
 // one section; ORACLE_VERBOSE=1 prints mismatches (at most
@@ -15,11 +14,7 @@ use pcgtools::context::Context;
 use pcgtools::pcc::resolve::DataDirs;
 use pcgtools::pcg::character::Character;
 use pcgtools::sheet::{self, tree::section, Element};
-use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
-
-const CORE: &str = r"^character/(basics\[[^/]*\]/bab\[0\]|hit_points\[0\]/points\[0\]|armor_class\[0\]/(total|flat|touch)\[0\]|saving_throws\[0\]/saving_throw\[[^/]*\]/total\[0\]|skills\[0\]/skill\[[^/]*\]/skill_mod\[0\])$";
-const CORE_MODES: &[&str] = &["pf", "35e", "3e", "msrd", "sf"];
 
 #[derive(Default)]
 struct Score {
@@ -40,11 +35,9 @@ fn oracle_character_sheets() {
     let only_section = std::env::var("ORACLE_SECTION").ok();
     let verbose = std::env::var("ORACLE_VERBOSE").is_ok();
     let dirs = DataDirs::from_install(&root);
-    let core = Regex::new(CORE).unwrap();
 
     // mode -> section -> score
     let mut scores: BTreeMap<String, BTreeMap<String, Score>> = BTreeMap::new();
-    let mut core_fail = Vec::new();
     let mut shown = Vec::new();
     for xml_path in common::files_with_ext(&csheets, &["xml"]) {
         let stem = xml_path.file_stem().unwrap().to_string_lossy().into_owned();
@@ -74,15 +67,6 @@ fn oracle_character_sheets() {
             if ok {
                 s.ok += 1;
             }
-            if core.is_match(&path) {
-                let c = ms.entry("(core)".to_string()).or_default();
-                c.total += 1;
-                if ok {
-                    c.ok += 1;
-                } else if CORE_MODES.contains(&mode.as_str()) {
-                    core_fail.push(format!("{}: {}", stem, path));
-                }
-            }
         }
         for (p, want, got) in &diff.mismatches {
             if only_section.as_deref().is_none_or(|s| section(p) == s) {
@@ -94,7 +78,6 @@ fn oracle_character_sheets() {
     for (mode, secs) in &scores {
         let (t, o) = secs
             .iter()
-            .filter(|(k, _)| k.as_str() != "(core)")
             .fold((0, 0), |a, (_, s)| (a.0 + s.total, a.1 + s.ok));
         let line: Vec<String> = secs
             .iter()
@@ -112,11 +95,16 @@ fn oracle_character_sheets() {
             eprintln!("  {}", m);
         }
     }
-    if only.is_none() {
-        assert!(
-            core_fail.is_empty(),
-            "core sheet values differ from the oracle:\n{}",
-            core_fail.join("\n")
-        );
-    }
+    assert!(!scores.is_empty(), "no expected sheets were compared");
+    let failed: Vec<&String> = shown.iter().take(400).collect();
+    assert!(
+        shown.is_empty(),
+        "{} sheet values differ from the oracle:\n{}",
+        shown.len(),
+        failed
+            .iter()
+            .map(|x| x.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }

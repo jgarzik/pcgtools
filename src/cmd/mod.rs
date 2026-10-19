@@ -13,6 +13,7 @@ pub mod check;
 pub mod data;
 pub mod edit;
 pub mod misc;
+pub mod pcg;
 
 use pcgtools::Diagnostics;
 use std::path::{Path, PathBuf};

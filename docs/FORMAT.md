@@ -15,7 +15,7 @@ Contents:
 5. [Per-kind structure and loading](#5-per-kind-structure-and-loading)
 6. [Token value syntax](#6-token-value-syntax)
 7. [Game mode files](#7-game-mode-files)
-8. PCG character files (TBD)
+8. [PCG character files](#8-pcg-character-files)
 
 Conventions: `<TAB>` is a horizontal tab (U+0009). Grammar fragments use
 EBNF with `|` for alternation, `[ ]` for optional, and `{ }` for
@@ -675,3 +675,110 @@ equals the mode's key or one of its allowed names (case-insensitive).
 
 `BONUSSTACKS` lists, separated by `.`, the bonus types that stack with
 themselves (see 6.3); the line may repeat.
+
+---
+
+## 8. PCG character files
+
+A PCG file saves one character. It records the choices that define the
+character — which campaigns were loaded, ability scores, race, each
+class level taken, skill ranks bought, abilities chosen, equipment and
+how it is worn, biography — plus some cached values. Derived values
+(attack bonus, saves, armor class, skill totals) are *not* stored;
+they are recomputed from the data when the character is loaded.
+
+### 8.1 Line syntax
+
+The first line identifies the format version, `PCGVERSION:2.0`. (An
+older, colon-separated format beginning with `CAMPAIGNS:` exists in a
+few very old files; it is not described here.) Lines starting with `#`
+are comments; PCGen writes section headings such as `# Character Bio`.
+
+Every other line is a list of elements:
+
+```
+line  = elem { "|" elem } [ "|" ] ;
+elem  = tag ":" ( text | "[" [ line ] "]" ) ;
+```
+
+* The first element names what the line describes:
+  `SKILL:Ride|OUTPUTORDER:3|CLASSBOUGHT:[CLASS:Fighter|RANKS:4.0|COST:1|CLASSSKILL:Y]`.
+* A value in brackets directly after the colon is a nested element
+  list. A nested list may be followed directly by the next element
+  without a `|` (`...]CLASSBOUGHT:[...]`).
+* Brackets that do not directly follow a colon are ordinary text
+  (`EXPRESSION:roll(4,6,[2,3,4])`).
+* A trailing `|` is permitted.
+
+Some lines hold one free-text value occupying the whole rest of the
+line and are never split: the biography and description fields
+(`CHARACTERNAME`, `CHARACTERBIO`, `CITY`, `CATCHPHRASE`, ...), simple
+numbers (`AGE`, `HEIGHT`, `WEIGHT`, `EXPERIENCE`, `MONEY`,
+`POOLPOINTS`), and a few settings (`GAMEMODE`, `TABNAME`,
+`SPELLLIST`, ...).
+
+### 8.2 Escapes
+
+Text values replace structural characters with named entities:
+
+| Character | Entity |
+|---|---|
+| `&` | `&amp;` |
+| `|` | `&pipe;` |
+| `:` | `&colon;` |
+| `[` | `&lbracket;` |
+| `]` | `&rbracket;` |
+| newline | `&nl;` |
+| carriage return | `&cr;` |
+| form feed | `&lf;` |
+
+Free-text whole-line fields escape only `&`, `|` and line breaks.
+Unknown `&...;` sequences are left as they are.
+
+### 8.3 Content
+
+| Line | Meaning |
+|---|---|
+| `CAMPAIGN:key{|CAMPAIGN:key}` | campaigns to load, by campaign key |
+| `VERSION:x.y.z` | program version that saved the file (drives key migration, 8.4) |
+| `GAMEMODE:name` | game mode |
+| `CHARACTERNAME`, `PLAYERNAME`, `AGE`, `GENDER`, `HEIGHT`, `WEIGHT`, `CITY`, ... | biography |
+| `STAT:abb|SCORE:n` | base ability score |
+| `ALIGN:abb` | alignment |
+| `RACE:key` | race |
+| `CLASS:key|LEVEL:n|...` | levels held in a class |
+| `CLASSABILITIESLEVEL:Class=n|HITPOINTS:h|SKILLSGAINED:s|...` | one level gained, in the order gained, with its hit point roll |
+| `EXPERIENCE:n` | experience points |
+| `TEMPLATESAPPLIED:[NAME:key]` | applied template |
+| `SKILL:key|OUTPUTORDER:n{|CLASSBOUGHT:[CLASS:c|RANKS:r|COST:k|CLASSSKILL:Y/N]}` | ranks bought per class |
+| `LANGUAGE:key{|LANGUAGE:key}` | known languages |
+| `ABILITY:pool|TYPE:nature|CATEGORY:cat|KEY:key[|APPLIEDTO:a,b]...` | an ability; *nature* is `NORMAL` (chosen), `AUTOMATIC` or `VIRTUAL` |
+| `FEAT:key|...` | older form of a chosen feat |
+| `USERPOOL:pool|POOLPOINTS:n` | user adjustments to ability pools |
+| `WEAPONPROF:[WEAPON:key{|WEAPON:key}]` | weapon proficiencies |
+| `MONEY:n` | currency |
+| `EQUIPNAME:name|OUTPUTORDER:n|COST:c|WT:w|QUANTITY:q[|CUSTOMIZATION:[BASEITEM:key|DATA:...]]` | an owned item; customized items name their base item |
+| `EQUIPSET:location|ID:a.b.c|VALUE:item|QUANTITY:q` | where an item is placed; IDs form a tree rooted at a set such as `0.1` |
+| `CALCEQUIPSET:id` | the equipment set used for calculations |
+| `DEITY:key|...`, `DOMAIN:key|...` | deity and domains |
+| `SPELLBOOK`, `SPELLNAME`, `SPELLLIST` | spells known and prepared |
+| `NOTE`, `CHARACTERBIO`, `CHARACTERDESC`, ... | notes and descriptions |
+
+Objects are referred to by key; abilities by category and key.
+
+### 8.4 Key migration
+
+Keys in data change over time. Each game mode's `migration.lst` maps
+old keys to new ones, and is applied to characters saved by older
+program versions:
+
+```
+SOURCE:Old Campaign Key<TAB>NEWKEY:New Key<TAB>MAXVER:6.2.0
+RACE:Old Race<TAB>NEWKEY:New Race<TAB>MAXVER:6.08.00
+ABILITY:Category|Old Key<TAB>NEWKEY:New Key<TAB>MAXVER:6.07.05
+EQUIPMENT:Old Item<TAB>NEWKEY:New Item<TAB>MAXVER:6.00.01
+```
+
+A rule applies when the character's `VERSION` is no newer than
+`MAXVER` — or, failing that, no newer than `MAXDEVVER` within the same
+major.minor series — and no older than `MINVER` if given.

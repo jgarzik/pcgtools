@@ -34,6 +34,11 @@ fn is_ext(p: &Path, ext: &str) -> bool {
 }
 
 pub fn parse(file: &Path) -> CmdResult {
+    if is_ext(file, "pcg") {
+        let pcg = pcgtools::pcg::PcgFile::read(file)?;
+        print_json(&pcg);
+        return Ok(true);
+    }
     if is_ext(file, "pcc") {
         let pcc = PccFile::read(file)?;
         print_json(&pcc);

@@ -74,7 +74,28 @@ impl GlobalOpts {
 }
 
 #[derive(Subcommand, Debug)]
+enum PcgCommand {
+    /// Summarize a character
+    Show {
+        /// PCG file
+        file: PathBuf,
+    },
+
+    /// Check a character against its data
+    Lint {
+        /// PCG file
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum Command {
+    /// Work with PCG character files
+    Pcg {
+        #[command(subcommand)]
+        cmd: PcgCommand,
+    },
+
     /// List campaigns (PCC files) found below a directory
     Campaigns {
         /// Directory to scan (default: the data directory)
@@ -351,6 +372,10 @@ fn main() -> ExitCode {
         Command::Gamemode { name, file } => {
             cmd::campaign::gamemode(o, name.as_deref(), file.as_deref())
         }
+        Command::Pcg { cmd } => match cmd {
+            PcgCommand::Show { file } => cmd::pcg::show(o, file),
+            PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
+        },
         Command::Tags { scope } => cmd::check::tags(o, scope.as_deref()),
         Command::Parse { file } => cmd::misc::parse(file),
         Command::Roundtrip { paths } => cmd::misc::roundtrip(paths),

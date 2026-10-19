@@ -250,6 +250,92 @@ impl GameMode {
     }
 }
 
+/// Parse a version string such as `6.07.05` into numbers.  Missing or
+/// non-numeric parts count as zero.
+pub fn parse_version(s: &str) -> Vec<u32> {
+    s.trim()
+        .split(['.', '-', ' '])
+        .take(3)
+        .map(|p| {
+            p.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+fn cmp_version(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+    for i in 0..3 {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Does a migration rule line apply to a character saved by `pcg_ver`?
+/// The character must be no newer than MAXVER (or than MAXDEVVER
+/// within the same major.minor series) and no older than MINVER.
+pub fn rule_applies(rule: &GmLine, pcg_ver: &[u32]) -> bool {
+    // MAXDEVVER sometimes follows MAXVER after a space, in one token
+    let mut max = None;
+    let mut maxdev = None;
+    let mut min = None;
+    for (t, v) in &rule.tokens {
+        let mut parts = v.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        match t.as_str() {
+            "MAXVER" => max = Some(first.to_string()),
+            "MAXDEVVER" => maxdev = Some(first.to_string()),
+            "MINVER" => min = Some(first.to_string()),
+            _ => {}
+        }
+        for extra in parts {
+            if let Some(d) = extra.strip_prefix("MAXDEVVER:") {
+                maxdev = Some(d.to_string());
+            }
+        }
+    }
+    if let Some(m) = max {
+        if cmp_version(pcg_ver, &parse_version(&m)).is_gt() {
+            let Some(d) = maxdev else {
+                return false;
+            };
+            let dv = parse_version(&d);
+            let same_series = pcg_ver.first() == dv.first() && pcg_ver.get(1) == dv.get(1);
+            if cmp_version(pcg_ver, &dv).is_gt() || !same_series {
+                return false;
+            }
+        }
+    }
+    if let Some(m) = min {
+        if cmp_version(pcg_ver, &parse_version(&m)).is_lt() {
+            return false;
+        }
+    }
+    true
+}
+
+impl GameMode {
+    /// Map an old key to its current key using `migration.lst`.
+    /// `kind` is the rule type (SOURCE, RACE, ABILITY, EQUIPMENT,
+    /// SPELL); ability keys are written `Category|Key`.  Returns None
+    /// if no rule applies.
+    pub fn migrate(&self, kind: &str, key: &str, pcg_version: &str) -> Option<String> {
+        let ver = parse_version(pcg_version);
+        self.lines("migration.lst", kind)
+            .find(|l| l.value.eq_ignore_ascii_case(key) && rule_applies(l, &ver))
+            .and_then(|l| l.get("NEWKEY"))
+            .map(str::to_string)
+    }
+}
+
 /// All game modes of an installation.
 #[derive(Debug, Default)]
 pub struct GameModes {
@@ -297,6 +383,34 @@ impl GameModes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions() {
+        assert_eq!(parse_version("6.07.05"), vec![6, 7, 5]);
+        assert_eq!(parse_version("5.17.9"), vec![5, 17, 9]);
+        assert_eq!(parse_version("6.2"), vec![6, 2]);
+        assert_eq!(parse_version("6.09.00-RC1"), vec![6, 9, 0]);
+        assert!(cmp_version(&[6, 2], &[6, 2, 0]).is_eq());
+        assert!(cmp_version(&[5, 17, 9], &[6, 2, 0]).is_lt());
+    }
+
+    #[test]
+    fn migration_rules() {
+        let r = GmLine::parse(1, "SOURCE:Old\tNEWKEY:New\tMAXVER:6.2.0 MAXDEVVER:6.1.8").unwrap();
+        assert!(rule_applies(&r, &[5, 17, 9]));
+        assert!(rule_applies(&r, &[6, 2, 0]));
+        assert!(!rule_applies(&r, &[6, 3, 0]));
+        // dev series 6.1.x up to 6.1.8 is also covered (already below max)
+        let r = GmLine::parse(1, "SOURCE:Old\tMAXVER:6.0.0\tMAXDEVVER:6.1.8").unwrap();
+        assert!(rule_applies(&r, &[6, 1, 5]));
+        assert!(!rule_applies(&r, &[6, 1, 9]));
+        assert!(!rule_applies(&r, &[6, 2, 0]));
+        let r = GmLine::parse(1, "SOURCE:Old\tMAXVER:7.0.0\tMINVER:6.0.0").unwrap();
+        assert!(!rule_applies(&r, &[5, 0, 0]));
+        assert!(rule_applies(&r, &[6, 5, 0]));
+        let r = GmLine::parse(1, "SOURCE:Old\tNEWKEY:New").unwrap();
+        assert!(rule_applies(&r, &[9, 9, 9]));
+    }
 
     #[test]
     fn line_parse() {

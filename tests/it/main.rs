@@ -9,3 +9,4 @@ mod common;
 mod corpus;
 mod dataset;
 mod gamemode;
+mod pcg;

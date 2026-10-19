@@ -250,3 +250,53 @@ fn lint_reports_unknown_gamemode() {
         stdout(&o)
     );
 }
+
+fn tess() -> String {
+    common::fixture("mini/characters/tess.pcg")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn pcg_show_and_lint() {
+    let o = pcgtools(&["pcg", "show", &tess()]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.starts_with("Tess Tinkerton\n"), "{}", out);
+    assert!(out.contains("classes:    Tinker 2"));
+    assert!(out.contains("stats:      MGT 14, GRC 12"));
+
+    let o = pcgtools(&["--json", "pcg", "show", &tess()]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["levels"][1]["hp"], 4);
+
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let o = pcgtools(&[
+        "--data-dir",
+        &data_dir(),
+        "--system-dir",
+        &sys,
+        "pcg",
+        "lint",
+        &tess(),
+    ]);
+    assert!(o.status.success(), "{}", stdout(&o));
+    let out = stdout(&o);
+    assert!(
+        out.contains("ability 'Vanished Feat' (FEAT) not found"),
+        "{}",
+        out
+    );
+    assert!(!out.contains("Steady Hands"), "{}", out);
+    assert!(!out.contains("Spoon"), "{}", out);
+}
+
+#[test]
+fn parse_pcg_json() {
+    let o = pcgtools(&["parse", &tess()]);
+    assert!(o.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["lines"][0]["elems"][0]["tag"], "PCGVERSION");
+}

@@ -16,12 +16,14 @@
 
 pub mod campaign;
 pub mod catalog;
+pub mod context;
 pub mod dataset;
 pub mod error;
 pub mod gamemode;
 pub mod lint;
 pub mod lst;
 pub mod pcc;
+pub mod pcg;
 pub mod query;
 pub mod text;
 pub mod token;

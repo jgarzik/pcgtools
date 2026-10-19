@@ -92,7 +92,7 @@ fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
         })
         .filter(|(id, _, _, _)| id.starts_with(&prefix))
         .collect();
-    sets.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    sets.sort_by_key(|a| a.0.to_lowercase());
     let names: Vec<(String, String)> = sets
         .iter()
         .map(|(i, n, _, _)| (i.clone(), n.clone()))
@@ -139,9 +139,7 @@ fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
         let lroot = root.to_lowercase();
         let (equipped, carried) = if lroot.starts_with("not carried") {
             (false, 0.0)
-        } else if lroot.starts_with("carried") {
-            (false, *qty)
-        } else if parts.len() > 3 {
+        } else if lroot.starts_with("carried") || parts.len() > 3 {
             (false, *qty)
         } else {
             (true, *qty)
@@ -421,9 +419,8 @@ pub fn equipment(s: &SheetCtx) -> Element {
         .to_string();
     let max = c.max_load();
     let ratio = if max > 0.0 { weight / max } else { 0.0 };
-    let load = if !c.rule("SYS_LDPACSK") && c.rules_known("SYS_LDPACSK") {
-        "Light"
-    } else if ratio <= c.load_fraction("Light").unwrap_or(1.0 / 3.0) {
+    let no_load = !c.rule("SYS_LDPACSK") && c.rules_known("SYS_LDPACSK");
+    let load = if no_load || ratio <= c.load_fraction("Light").unwrap_or(1.0 / 3.0) {
         "Light"
     } else if ratio <= c.load_fraction("Medium").unwrap_or(2.0 / 3.0) {
         "Medium"

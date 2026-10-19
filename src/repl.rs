@@ -50,6 +50,7 @@ Commands (names may be quoted; most accept --force to skip checks):
   info                         summary of the character
   stats [-v]                   derived statistics
   explain CATEGORY.TARGET      where a bonus total comes from (e.g. SKILL.Ride)
+  vars [SCOPE]                 declared variables and their values
   ls KIND [GLOB] [COND...]     search the data (e.g. ls feat \"Power*\" TYPE=Combat)
   show KIND KEY                show a data object
   prereq KIND KEY              check whether the character qualifies
@@ -287,6 +288,30 @@ impl Session {
             "quit" | "exit" => Ok(Outcome::Quit),
             "info" => Ok(Outcome::Text(self.info())),
             "stats" | "sheet" => Ok(Outcome::Text(self.stats(w.get(1) == Some(&"-v")))),
+            "vars" => {
+                let mut calc = self.calc();
+                calc.run();
+                let sys = crate::rules::vars::system::VarSystem::new(&calc);
+                let scope = w.get(1).map(|s| s.to_ascii_uppercase());
+                let mut out = Vec::new();
+                for (inst, vars) in sys.results() {
+                    if scope
+                        .as_deref()
+                        .is_some_and(|s| !inst.to_ascii_uppercase().starts_with(s))
+                    {
+                        continue;
+                    }
+                    out.push(inst);
+                    for (k, v) in vars {
+                        out.push(format!("  {} = {}", k, v));
+                    }
+                }
+                Ok(Outcome::Text(if out.is_empty() {
+                    "no declared variables".into()
+                } else {
+                    out.join("\n")
+                }))
+            }
             "explain" => {
                 let key = arg(1)?;
                 let (cat, tgt) = key.split_once('.').unwrap_or((key, ""));

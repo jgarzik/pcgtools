@@ -450,6 +450,11 @@ impl<'a> Calc<'a> {
             + self.bonus.total("MOVEADD", "ALL")
     }
 
+    /// Equipped items.
+    pub fn items(&self) -> &[Item<'a>] {
+        &self.items
+    }
+
     /// Number of legs or hands, from the race (default `dflt`).
     fn limbs(&self, tag: &str, dflt: f64) -> f64 {
         let mut v = self

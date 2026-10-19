@@ -13,3 +13,4 @@ mod oracle;
 mod pcg;
 mod repl;
 mod rules;
+mod vars;

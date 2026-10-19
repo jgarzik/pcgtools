@@ -190,3 +190,12 @@ fn corpus_new_fighter() {
     assert_eq!(sheet.skills["Climb"], 5);
     assert!(ok(&mut s, "prereq feat \"Great Cleave\"").contains("PRETOTALAB:4"));
 }
+
+#[test]
+fn vars_command() {
+    let mut s = Session::open(&common::fixture("mini/characters/vera.pcg"), dirs()).unwrap();
+    let out = ok(&mut s, "vars PC.MOVEMENT");
+    assert_eq!(out, "PC.MOVEMENT:Walk\n  Speed = 40");
+    let mut t = session();
+    assert_eq!(ok(&mut t, "vars PC.MOVEMENT"), "no declared variables");
+}

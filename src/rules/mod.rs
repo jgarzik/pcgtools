@@ -11,3 +11,4 @@
 pub mod bonus;
 pub mod calc;
 pub mod eval;
+pub mod vars;

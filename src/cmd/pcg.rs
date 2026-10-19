@@ -186,3 +186,40 @@ pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>) -> CmdResult {
     println!("{}/{} values match", d.matched(), d.total);
     Ok(d.mismatches.is_empty())
 }
+
+pub fn vars(o: &GlobalOpts, file: &Path, scope: Option<&str>) -> CmdResult {
+    let c = Character::read(file)?;
+    let ctx = Context::for_character(&c, o.dirs(None));
+    report(&ctx.diags);
+    let mut calc = pcgtools::rules::calc::Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &c);
+    calc.run();
+    let sys = pcgtools::rules::vars::system::VarSystem::new(&calc);
+    let res = sys.results();
+    report(&sys.diags.borrow());
+    let res: std::collections::BTreeMap<_, _> = res
+        .into_iter()
+        .filter(|(k, _)| {
+            scope.is_none_or(|s| {
+                k.split(':')
+                    .next()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(s))
+            })
+        })
+        .collect();
+    if o.json {
+        print_json(&res);
+        return Ok(true);
+    }
+    for (inst, vars) in &res {
+        println!("{}", inst);
+        for (k, v) in vars {
+            println!("  {} = {}", k, v);
+        }
+    }
+    let unk = sys.unknown();
+    if !unk.is_empty() {
+        let u: Vec<String> = unk.keys().cloned().collect();
+        eprintln!("unknown names: {}", u.join(", "));
+    }
+    Ok(true)
+}

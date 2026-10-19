@@ -98,6 +98,16 @@ enum PcgCommand {
         compare: Option<PathBuf>,
     },
 
+    /// Show declared variables and their values
+    Vars {
+        /// PCG file
+        file: PathBuf,
+
+        /// Only this scope (e.g. PC, PC.STAT)
+        #[arg(short, long)]
+        scope: Option<String>,
+    },
+
     /// Compute derived statistics
     Stats {
         /// PCG file
@@ -458,6 +468,7 @@ fn main() -> ExitCode {
         Command::Pcg { cmd } => match cmd {
             PcgCommand::Show { file } => cmd::pcg::show(o, file),
             PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
+            PcgCommand::Vars { file, scope } => cmd::pcg::vars(o, file, scope.as_deref()),
             PcgCommand::Sheet { file, compare } => cmd::pcg::sheet(o, file, compare.as_deref()),
             PcgCommand::Stats {
                 file,

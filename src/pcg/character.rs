@@ -360,10 +360,18 @@ impl Character {
     }
 
     /// Feats stored in the older one-line-per-feat form.
-    pub fn legacy_feats(&self) -> Vec<String> {
+    /// (key, choices) of each.
+    pub fn legacy_feats(&self) -> Vec<(String, Vec<String>)> {
         self.pcg
             .lines_tagged("FEAT")
-            .filter_map(|l| l.head().map(Elem::value_text))
+            .filter_map(|l| {
+                let applied = l
+                    .text("APPLIEDTO")
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.split(',').map(str::to_string).collect())
+                    .unwrap_or_default();
+                Some((l.head()?.value_text(), applied))
+            })
             .collect()
     }
 

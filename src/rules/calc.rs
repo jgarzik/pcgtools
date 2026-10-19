@@ -151,10 +151,28 @@ fn lower(s: &str) -> String {
 
 /// Split "Key (Choice)" into key and choice.
 fn split_choice(s: &str) -> (&str, Option<&str>) {
-    match s.rfind(" (") {
-        Some(i) if s.ends_with(')') => (&s[..i], Some(&s[i + 2..s.len() - 1])),
-        _ => (s, None),
+    if !s.ends_with(')') {
+        return (s, None);
     }
+    // the parenthesis matching the final one, so choices may nest:
+    // `Giving(Feat(Ride))` is Giving with choice `Feat(Ride)`
+    let mut depth = 0;
+    for (i, c) in s.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    if i == 0 {
+                        return (s, None);
+                    }
+                    return (s[..i].trim_end(), Some(&s[i + 1..s.len() - 1]));
+                }
+            }
+            _ => {}
+        }
+    }
+    (s, None)
 }
 
 impl<'a> Calc<'a> {
@@ -294,7 +312,7 @@ impl<'a> Calc<'a> {
     }
 
     /// Map an old key through the game mode's migration rules.
-    fn migrate(&self, kind: &str, key: &str) -> String {
+    pub fn migrate(&self, kind: &str, key: &str) -> String {
         let ver = self.ch.pcg.value("VERSION").unwrap_or_default();
         self.gm
             .and_then(|g| g.migrate(kind, key, &ver))
@@ -1265,6 +1283,37 @@ impl<'a> Calc<'a> {
         t
     }
 
+    /// Does a choice made for an ability match a prerequisite's
+    /// pattern: the same value, a `prefix%`, or `TYPE=x` for a chosen
+    /// object (weapon proficiency, skill, equipment, ...) of that type?
+    pub fn choice_matches(&self, pattern: &str, choice: &str) -> bool {
+        if let Some(p) = pattern.strip_suffix('%') {
+            return lower(choice).starts_with(&lower(p));
+        }
+        if let Some(t) = pattern
+            .strip_prefix("TYPE=")
+            .or_else(|| pattern.strip_prefix("TYPE."))
+        {
+            return [
+                FileKind::WeaponProf,
+                FileKind::Skill,
+                FileKind::Equipment,
+                FileKind::Language,
+                FileKind::Class,
+                FileKind::Domain,
+                FileKind::Deity,
+                FileKind::Template,
+                FileKind::Race,
+                FileKind::Spell,
+                FileKind::Ability,
+            ]
+            .iter()
+            .filter_map(|k| self.ds.get(*k, choice))
+            .any(|o| t.split('.').all(|x| o.is_type(x)));
+        }
+        pattern.eq_ignore_ascii_case(choice)
+    }
+
     /// Stats in display (SORTKEY) order.
     pub fn stats_in_order(&self) -> Vec<&'a Object> {
         let mut v: Vec<&Object> = self.ds.objects(FileKind::Stat).iter().collect();
@@ -1966,7 +2015,7 @@ impl<'a> Calc<'a> {
                                         .is_some_and(|x| x.eq_ignore_ascii_case(c))
                                 })
                                 && choice.is_none_or(|ch| {
-                                    s.choices.iter().any(|x| x.eq_ignore_ascii_case(ch))
+                                    s.choices.iter().any(|x| self.choice_matches(ch, x))
                                         || s.obj.key.eq_ignore_ascii_case(a)
                                 })
                         }))
@@ -2020,6 +2069,15 @@ impl<'a> Calc<'a> {
             }
             "SKILL" => self.count_items(args, |a| {
                 let (s, v) = a.split_once('=').unwrap_or((a, "1"));
+                // TYPE.x: any skill of that type with the ranks
+                if let Some(t) = s.strip_prefix("TYPE.").or_else(|| s.strip_prefix("TYPE=")) {
+                    return self
+                        .ds
+                        .objects(FileKind::Skill)
+                        .iter()
+                        .filter(|o| t.split('.').all(|x| o.is_type(x)))
+                        .any(|o| self.skill_ranks(&o.key) >= num(v));
+                }
                 self.skill_ranks(s) >= num(v)
             }),
             "CSKILL" => self.count_items(args, |a| self.is_class_skill(a)),
@@ -2529,10 +2587,11 @@ impl<'a> Calc<'a> {
                 a.applied_to.clone(),
                 None,
                 nature_of(&a.nature),
+                false,
             ));
         }
-        for f in self.ch.legacy_feats() {
-            pending.push(("FEAT".into(), f, Vec::new(), None, "NORMAL"));
+        for (f, applied) in self.ch.legacy_feats() {
+            pending.push(("FEAT".into(), f, applied, None, "NORMAL", false));
         }
 
         // grants from active objects, repeated to closure
@@ -2563,21 +2622,25 @@ impl<'a> Calc<'a> {
                                 .iter()
                                 .filter(|p| !Prereq::is_pre_tag(p.split(':').next().unwrap_or("")))
                             {
-                                let k = if *k == "%LIST" {
-                                    match s.choices.first() {
-                                        Some(c) => c.as_str(),
-                                        None => continue,
-                                    }
+                                // %LIST grants each choice made for the source
+                                let keys: Vec<String> = if *k == "%LIST" {
+                                    s.choices.clone()
+                                } else if k.contains("%LIST") {
+                                    // `Weapon Focus(%LIST)`: one per choice
+                                    s.choices.iter().map(|c| k.replace("%LIST", c)).collect()
                                 } else {
-                                    k
+                                    vec![k.to_string()]
                                 };
-                                pending.push((
-                                    self.pool_category(parts[0]),
-                                    k.to_string(),
-                                    Vec::new(),
-                                    s.class.clone(),
-                                    nature_of(parts[1]),
-                                ));
+                                for k in keys {
+                                    pending.push((
+                                        self.pool_category(parts[0]),
+                                        k,
+                                        Vec::new(),
+                                        s.class.clone(),
+                                        nature_of(parts[1]),
+                                        true,
+                                    ));
+                                }
                             }
                         }
                         "AUTO" if t.value.starts_with("FEAT|") => {
@@ -2589,6 +2652,7 @@ impl<'a> Calc<'a> {
                                         Vec::new(),
                                         s.class.clone(),
                                         "AUTOMATIC",
+                                        true,
                                     ));
                                 }
                             }
@@ -2607,6 +2671,7 @@ impl<'a> Calc<'a> {
                                         Vec::new(),
                                         s.class.clone(),
                                         nature,
+                                        true,
                                     ));
                                 }
                             }
@@ -2639,7 +2704,7 @@ impl<'a> Calc<'a> {
             }
             // TYPE=x grants every ability of the category with that type
             let mut batch = Vec::new();
-            for (cat, key, choices, class, nature) in std::mem::take(&mut pending) {
+            for (cat, key, choices, class, nature, granted) in std::mem::take(&mut pending) {
                 match key
                     .strip_prefix("TYPE=")
                     .or_else(|| key.strip_prefix("TYPE."))
@@ -2657,14 +2722,15 @@ impl<'a> Calc<'a> {
                                     choices.clone(),
                                     class.clone(),
                                     nature,
+                                    granted,
                                 ));
                             }
                         }
                     }
-                    None => batch.push((cat, key, choices, class, nature)),
+                    None => batch.push((cat, key, choices, class, nature, granted)),
                 }
             }
-            for (cat, key, choices, class, nature) in batch {
+            for (cat, key, choices, class, nature, granted) in batch {
                 let (obj, choices) = match ds.get_in(FileKind::Ability, &cat, &key) {
                     Some(o) => (Some(o), choices),
                     None => {
@@ -2679,15 +2745,29 @@ impl<'a> Calc<'a> {
                 let Some(obj) = obj.or_else(|| ds.get(FileKind::Ability, &key)) else {
                     continue;
                 };
+                // an ability chosen without a value is held once per time
+                // taken, recorded or granted
+                let _ = granted;
+                let choices = if choices.is_empty()
+                    && obj.get("CHOOSE").is_some_and(|c| c.starts_with("NOCHOICE"))
+                {
+                    vec![String::new()]
+                } else {
+                    choices
+                };
                 let id = (lower(&cat), lower(&obj.key), choices.clone(), nature);
-                if !seen.insert(id) {
+                let stacks = obj
+                    .get("STACK")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("YES"));
+                // a stacking ability granted again is held again
+                if !seen.insert(id) && !stacks {
                     continue;
                 }
                 // held a second way (say, chosen and also granted): listed
                 // under both natures, but its effects apply once
                 let again = !applied.insert((lower(&cat), lower(&obj.key), choices.clone()));
                 let mut s = self.src(SrcKind::Ability, obj);
-                if again {
+                if again && !stacks {
                     s.tokens.clear();
                 }
                 s.nature = Some(nature.to_string());
@@ -3115,8 +3195,16 @@ impl<'a> Calc<'a> {
 }
 
 /// An ability grant waiting to be resolved: category, key, choices,
-/// owning class, nature.
-type Grant = (String, String, Vec<String>, Option<String>, &'static str);
+/// owning class, nature, and whether an object granted it (rather than
+/// the character file).
+type Grant = (
+    String,
+    String,
+    Vec<String>,
+    Option<String>,
+    &'static str,
+    bool,
+);
 
 /// Does a CSKILL-style list (`a|TYPE=b|ALL|LIST|%LIST`) include the
 /// skill?
@@ -3289,6 +3377,23 @@ mod tests {
         assert_eq!(a(8, "12"), 12);
         assert_eq!(a(7, "%up1"), 7);
         assert_eq!(a(8, "%bogus"), 8);
+    }
+
+    #[test]
+    fn choices_split_from_names() {
+        assert_eq!(
+            split_choice("Weapon Focus (Longsword)"),
+            ("Weapon Focus", Some("Longsword"))
+        );
+        assert_eq!(split_choice("Feat(Ride)"), ("Feat", Some("Ride")));
+        assert_eq!(
+            split_choice("Giving(Feat(Ride))"),
+            ("Giving", Some("Feat(Ride)"))
+        );
+        assert_eq!(split_choice("Foo (a) (b)"), ("Foo (a)", Some("b")));
+        assert_eq!(split_choice("Plain"), ("Plain", None));
+        assert_eq!(split_choice("(odd)"), ("(odd)", None));
+        assert_eq!(split_choice("Bad)"), ("Bad)", None));
     }
 
     #[test]

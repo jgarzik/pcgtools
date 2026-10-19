@@ -61,6 +61,49 @@ fn parent_category(s: &SheetCtx, cat: &str) -> String {
         .to_string()
 }
 
+/// Is a recorded ability entry (key possibly renamed since) this object?
+fn recorded_as(s: &SheetCtx, a: &crate::pcg::character::AbilityEntry, o: &Object) -> bool {
+    if a.key.eq_ignore_ascii_case(&o.key) {
+        return true;
+    }
+    let m = s
+        .calc
+        .migrate("ABILITY", &format!("{}|{}", a.category, a.key));
+    m.rsplit_once('|')
+        .map(|(_, k)| k)
+        .unwrap_or(&m)
+        .eq_ignore_ascii_case(&o.key)
+}
+
+/// Was the ability recorded in the character file from a pool that
+/// cannot be spent: one with EDITPOOL:NO, or one the loaded data does
+/// not define?
+fn fixed_pool(s: &SheetCtx, src: &Src) -> bool {
+    s.ch.abilities().iter().any(|a| {
+        if !recorded_as(s, a, src.obj) || a.applied_to != src.applied {
+            return false;
+        }
+        pool_editpool(s, &a.pool).is_some_and(|v| v.eq_ignore_ascii_case("NO"))
+    })
+}
+
+/// EDITPOOL of an ability category (dataset or game mode), Some("")
+/// for a category without one, None for an undefined category.
+fn pool_editpool(s: &SheetCtx, pool: &str) -> Option<String> {
+    // the feat category always exists
+    if pool.eq_ignore_ascii_case("FEAT") {
+        return Some(String::new());
+    }
+    if let Some(o) = s.ctx.dataset.get(FileKind::AbilityCategory, pool) {
+        return Some(o.get("EDITPOOL").unwrap_or("").to_string());
+    }
+    s.ctx.gamemode.as_ref().and_then(|g| {
+        g.lines("miscinfo.lst", "ABILITYCATEGORY")
+            .find(|l| l.value.eq_ignore_ascii_case(pool))
+            .map(|l| l.get("EDITPOOL").unwrap_or("").to_string())
+    })
+}
+
 /// Abilities of a category (by parent category), nature and
 /// visibility, in display order.
 fn abilities<'a>(s: &SheetCtx<'a>, cat: &str, nature: &str, hidden: bool) -> Vec<Listed<'a>> {
@@ -78,6 +121,19 @@ fn abilities<'a>(s: &SheetCtx<'a>, cat: &str, nature: &str, hidden: bool) -> Vec
             continue;
         }
         if !shown(visibility(src.obj), hidden) {
+            continue;
+        }
+        // a recorded choice from a pool that cannot be spent, which the
+        // character is also granted outright, is listed only as granted
+        if nature == "NORMAL"
+            && fixed_pool(s, src)
+            && s.calc.sources.iter().any(|x| {
+                x.kind == SrcKind::Ability
+                    && std::ptr::eq(x.obj, src.obj)
+                    && x.nature.as_deref() == Some("AUTOMATIC")
+                    && x.applied == src.applied
+            })
+        {
             continue;
         }
         let e = by_key
@@ -102,9 +158,58 @@ fn abilities<'a>(s: &SheetCtx<'a>, cat: &str, nature: &str, hidden: bool) -> Vec
     v
 }
 
+/// Selections as shown: chosen abilities appear as `Name (choice)`.
+fn display_selections(s: &SheetCtx, l: &Listed) -> Vec<String> {
+    let choose = l.obj.get("CHOOSE").unwrap_or("");
+    let kind = choose.split('|').next().unwrap_or("").to_ascii_uppercase();
+    let abilities = kind == "ABILITYSELECTION" || kind == "FEATSELECTION";
+    l.selections
+        .iter()
+        .map(|x| {
+            // abilities taken without a choice have empty selections
+            if kind == "NOCHOICE" {
+                return String::new();
+            }
+            // weapon proficiencies show their output names, alignments
+            // their names
+            if kind.starts_with("WEAPONPROF") {
+                if let Some(o) = s.ctx.dataset.get(FileKind::WeaponProf, x) {
+                    return output_name(o);
+                }
+            }
+            let named = match kind.as_str() {
+                "ALIGNMENT" => Some(FileKind::Alignment),
+                "SIZE" => Some(FileKind::Size),
+                _ => None,
+            };
+            if let Some(o) = named.and_then(|k| s.ctx.dataset.get(k, x)) {
+                return o.name.clone();
+            }
+            // spell levels: CLASS.Wizard;LEVEL.1 shows as `Wizard 1`
+            if kind == "SPELLLEVEL" {
+                if let Some((c, lv)) = x
+                    .strip_prefix("CLASS.")
+                    .and_then(|r| r.split_once(";LEVEL."))
+                {
+                    return format!("{} {}", c, lv);
+                }
+            }
+            if !abilities {
+                return x.clone();
+            }
+            match x.find('(') {
+                Some(i) if i > 0 && !x[..i].ends_with(' ') && x.ends_with(')') => {
+                    format!("{} {}", &x[..i], &x[i..])
+                }
+                _ => x.clone(),
+            }
+        })
+        .collect()
+}
+
 /// Name with its selections: `Weapon Focus (Longsword, Short Sword)`;
 /// abilities chosen without a value show how many times: `(3x)`.
-fn qualified_name(l: &Listed) -> String {
+fn qualified_name(s: &SheetCtx, l: &Listed) -> String {
     let base = output_name(l.obj);
     let Some(choose) = l.obj.get("CHOOSE") else {
         return base;
@@ -117,7 +222,7 @@ fn qualified_name(l: &Listed) -> String {
             String::new()
         }
     } else {
-        let mut sel = l.selections.clone();
+        let mut sel = display_selections(s, l);
         sel.sort();
         sel.join(", ")
     };
@@ -129,7 +234,12 @@ fn qualified_name(l: &Listed) -> String {
 }
 
 fn ability_fields(s: &SheetCtx, e: &mut Element, l: &Listed) {
-    let mut sel = l.selections.clone();
+    // choices only exist for abilities that ask for them
+    let mut sel = if l.obj.has("CHOOSE") {
+        display_selections(s, l)
+    } else {
+        Vec::new()
+    };
     sel.sort();
     let choices: Vec<String> = l
         .selections
@@ -137,8 +247,11 @@ fn ability_fields(s: &SheetCtx, e: &mut Element, l: &Listed) {
         .filter(|x| !x.is_empty())
         .cloned()
         .collect();
-    e.add("name", qualified_name(l));
-    e.add("description", describe_with(s, l.obj, &choices));
+    e.add("name", qualified_name(s, l));
+    e.push(super::paragraphs(
+        "description",
+        &describe_with(s, l.obj, &choices),
+    ));
     let types: Vec<String> = l.obj.types().iter().map(|t| t.to_uppercase()).collect();
     e.add("type", types.join("."));
     e.add("associated", sel.join(","));

@@ -276,12 +276,19 @@ fn split_top(s: &str, seps: &[char]) -> Vec<(char, String)> {
 
 /// Roll `n` dice of `sides` faces, each rerolling results up to
 /// `reroll`, sorted lowest first.
-fn dice(rng: &mut Rng, n: i64, sides: i64, reroll: i64) -> Vec<i64> {
+/// Most dice and sides a data file may roll: more are not read.
+const MAX_DICE: i64 = 1000;
+const MAX_SIDES: i64 = 1_000_000;
+
+fn dice(rng: &mut Rng, n: i64, sides: i64, reroll: i64) -> Option<Vec<i64>> {
+    if n > MAX_DICE || sides > MAX_SIDES {
+        return None;
+    }
     let mut v: Vec<i64> = (0..n.max(0))
         .map(|_| rng.die(sides - reroll) + reroll)
         .collect();
     v.sort();
-    v
+    Some(v)
 }
 
 /// One term of a dice expression.
@@ -313,7 +320,7 @@ fn term(t: &str, rng: &mut Rng) -> Option<i64> {
                 }
             }
         }
-        let v = dice(rng, n, sides, reroll);
+        let v = dice(rng, n, sides, reroll)?;
         if !picks.is_empty() {
             return Some(picks.iter().filter_map(|p| v.get(p.wrapping_sub(1))).sum());
         }
@@ -327,7 +334,7 @@ fn term(t: &str, rng: &mut Rng) -> Option<i64> {
     } else {
         sides.parse().ok()?
     };
-    Some(dice(rng, n, sides, 0).iter().sum())
+    Some(dice(rng, n, sides, 0)?.iter().sum())
 }
 
 /// Roll a dice expression: `3d6`, `roll(4,6,top(3))`,
@@ -338,10 +345,14 @@ pub fn roll(expr: &str, rng: &mut Rng) -> Option<i64> {
     if s.is_empty() {
         return None;
     }
-    let mut total = 0;
+    let mut total: i64 = 0;
     for (sign, t) in split_top(&s, &['+', '-']) {
         let v = term(&t, rng)?;
-        total += if sign == '-' { -v } else { v };
+        total = if sign == '-' {
+            total.saturating_sub(v)
+        } else {
+            total.saturating_add(v)
+        };
     }
     Some(total)
 }
@@ -369,6 +380,21 @@ pub fn roll_calls(formula: &str, rng: &mut Rng) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_dice_are_refused() {
+        let mut rng = Rng::new(1);
+        // data may ask for any number of dice; absurd counts are not read
+        assert_eq!(roll("100000000000d6", &mut rng), None);
+        assert_eq!(roll("roll(5000000000,6)", &mut rng), None);
+        assert_eq!(roll("3d9999999999", &mut rng), None);
+        assert!(roll("1000d6", &mut rng).is_some());
+        // large constants add up without overflowing
+        assert_eq!(
+            roll("9223372036854775807+9223372036854775807", &mut rng),
+            Some(i64::MAX)
+        );
+    }
 
     #[test]
     fn rolls_inside_formulas() {

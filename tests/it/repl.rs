@@ -804,3 +804,11 @@ fn new_characters_carry_pcgen_defaults() {
     assert_eq!(lines(&s, "ALLOWDEBT"), ["ALLOWDEBT:N"]);
     assert_eq!(lines(&s, "AUTORESIZEGEAR"), ["AUTORESIZEGEAR:Y"]);
 }
+
+#[test]
+fn absurd_kit_quantities_are_refused() {
+    // a data file asking for a vast number of items fails quickly
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    let e = err(&mut s, "kit apply \"Hoard Kit\"");
+    assert!(e.contains("quantity"), "{}", e);
+}

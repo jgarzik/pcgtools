@@ -1837,14 +1837,20 @@ impl Session {
                         Some(f) => self.kit_formula(&f, &mut rng).floor(),
                         None => 1.0,
                     };
+                    if !want.is_finite() || want > MAX_KIT_QTY {
+                        return Err(Error::Other(format!(
+                            "kit {} asks for an unreasonable quantity of {}",
+                            kit.key, val
+                        )));
+                    }
                     let key = self.find(FileKind::Equipment, val)?.key.clone();
                     // as many as the funds pay for (never into debt)
                     let mut qty = want;
                     if rate != 0.0 {
                         let price = self.price_of(&key) * rate / 100.0;
                         let gold = self.ch.gold();
-                        while qty > 0.0 && price * qty > gold {
-                            qty -= 1.0;
+                        if price > 0.0 && price * qty > gold {
+                            qty = want.min((gold / price).floor()).max(0.0);
                         }
                         if qty < want {
                             short.push(format!(
@@ -2132,6 +2138,9 @@ fn raise_stats(ch: &mut Character, keys: &[String]) {
         ch.set_stat(k, v + 1);
     }
 }
+
+/// Most of one item a kit may hand out.
+const MAX_KIT_QTY: f64 = 10_000.0;
 
 /// Default equipment-set location for an item, by its type: weapons
 /// in the primary hand, other items (shields too, though they are also

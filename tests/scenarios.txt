@@ -17,7 +17,7 @@ set align LN
 class add Fighter
 class add Fighter
 feat add "Power Attack"
-feat add Cleave
+ability add "Fighter Feat|Cleave"
 skill Climb 4
 equip add "Chainmail"
 equip wear "Chainmail"
@@ -50,12 +50,12 @@ set stat STR 14
 set stat DEX 16
 set stat WIS 12
 race Human
-set align N
+set align TN
 class add Rogue
 class add Rogue
 class add Ranger
-skill Hide 5
-skill "Move Silently" 5
+skill Hide 5 Rogue
+skill "Move Silently" 5 Rogue
 equip add "Leather"
 equip wear "Leather"
 equip add "Shortbow"
@@ -70,8 +70,8 @@ set stat CON 14
 race "None Selected"
 class add Cleric
 class add Cleric
-equip add "Mace, Heavy"
-equip wear "Mace, Heavy"
+equip add "Mace (Heavy)"
+equip wear "Mace (Heavy)"
 
 == fighter_pf
 gamemode Pathfinder
@@ -119,8 +119,8 @@ campaign MSRD - Basics
 set stat STR 14
 set stat DEX 14
 race Human
-class add "Strong Hero"
-class add "Strong Hero"
+class add Strong
+class add Strong
 
 == fighter_5e
 gamemode 5e

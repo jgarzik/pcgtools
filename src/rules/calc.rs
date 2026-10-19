@@ -1955,6 +1955,9 @@ impl<'a> Calc<'a> {
             .unwrap_or(0.0);
         let mut sp = class_sp + self.bonus.total("SKILLPOINTS", "NUMBER");
         let race_sp = sp - class_sp;
+        if self.is_monster_class(cls) {
+            sp = self.monster_skill_points(cls, char_level, sp);
+        }
         let skill_min = if sp > 0.0 { 1.0 } else { 0.0 };
         let mod_to_skills = !cls
             .get("MODTOSKILLS")
@@ -1971,6 +1974,13 @@ impl<'a> Calc<'a> {
             }
         }
         sp = sp.max(skill_min);
+        sp += self
+            .sources
+            .iter()
+            .filter(|s| s.kind == SrcKind::Template)
+            .filter_map(|s| s.obj.get("BONUSSKILLPOINTS"))
+            .filter_map(|v| v.trim().parse::<i64>().ok())
+            .sum::<i64>() as f64;
         let min = self.bonus.total("MINCLASSSKILLPOINTS", "NUMBER");
         let other = sp - class_sp - race_sp;
         if min > 0.0 && class_sp + other < min {
@@ -1992,6 +2002,67 @@ impl<'a> Calc<'a> {
             mults.get(char_level as usize - 1).copied().unwrap_or(1.0)
         };
         sp * mult
+    }
+
+    /// A monster class's points for a level, before the stat's and the
+    /// race's: a locked number (MONSKILLPTS|LOCKNUMBER) for every level;
+    /// else on the first character level MONSKILLPTS|NUMBER, which the
+    /// class's MONSKILL adds to while the character has at most one
+    /// level; and none for the levels after the first up to
+    /// MONNONSKILLHD.
+    fn monster_skill_points(&self, cls: &'a Object, char_level: u32, sp: f64) -> f64 {
+        // a class token that stands for a bonus with the given head
+        let class_bonus = |o: &'a Object, tag: &str, head: &str| -> f64 {
+            let src = self.sources.iter().find(|x| std::ptr::eq(x.obj, o));
+            let env = Ctx { calc: self, src };
+            o.values(tag)
+                .filter_map(|v| Bonus::parse(&format!("{}|{}", head, v)).ok())
+                .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
+                .filter_map(|b| b.expr().ok().map(|e| eval(&e, &env)))
+                .sum()
+        };
+        let lock = self.bonus.total("MONSKILLPTS", "LOCKNUMBER").trunc();
+        if lock > 0.0 {
+            return self.monster_non_skill(cls, char_level, lock, &class_bonus);
+        }
+        let mut sp = sp;
+        if char_level == 1 {
+            // MONSKILL holds only while the character has one level
+            let mut n = self.bonus.total("MONSKILLPTS", "NUMBER");
+            if self.total_level().max(char_level) <= 1 {
+                n += class_bonus(cls, "MONSKILL", "MONSKILLPTS|NUMBER");
+            }
+            if n.trunc() != 0.0 {
+                sp = n.trunc();
+            }
+        }
+        self.monster_non_skill(cls, char_level, sp, &class_bonus)
+    }
+
+    /// No points for a level after the first that is within the
+    /// non-skill hit dice: MONNONSKILLHD bonuses plus the tokens of the
+    /// classes held and the one leveled.
+    fn monster_non_skill(
+        &self,
+        cls: &'a Object,
+        char_level: u32,
+        sp: f64,
+        class_bonus: &dyn Fn(&'a Object, &str, &str) -> f64,
+    ) -> f64 {
+        if char_level == 1 {
+            return sp;
+        }
+        let mut hd = self.bonus.total("MONNONSKILLHD", "NUMBER");
+        let held = self.classes.iter().map(|(o, _)| *o);
+        let others = held.filter(|o| !std::ptr::eq(*o, cls));
+        for o in std::iter::once(cls).chain(others) {
+            hd += class_bonus(o, "MONNONSKILLHD", "MONNONSKILLHD|NUMBER");
+        }
+        if char_level as f64 <= hd.trunc() {
+            0.0
+        } else {
+            sp
+        }
     }
 
     /// Bonus skill points (SKILLPOOL) a level of a class adds on top of

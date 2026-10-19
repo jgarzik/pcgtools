@@ -426,6 +426,43 @@ fn bonus_skill_points_for_class_and_character_levels() {
 }
 
 #[test]
+fn monster_skill_points() {
+    // skill points gained by each level of a class, after some commands
+    let gains = |class: &str, setup: &[&str], n: usize| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        for c in setup {
+            ok(&mut s, c);
+        }
+        let mut gains = Vec::new();
+        for _ in 0..n {
+            let before = s.ch.skill_points_left(class);
+            ok(&mut s, &format!("class add {} --force", class));
+            gains.push(s.ch.skill_points_left(class) - before);
+        }
+        gains
+    };
+    // the first level is worth MONSKILL instead of the class's points;
+    // levels up to MONNONSKILLHD (for a medium creature) are worth none
+    assert_eq!(gains("Brute", &[], 3), vec![8.0, 0.0, 2.0]);
+    // a locked number replaces the points of every level
+    assert_eq!(
+        gains("Brute", &["template add Dragonblood"], 3),
+        vec![6.0, 0.0, 6.0]
+    );
+    // a template's bonus points come on top, even of a level worth none
+    assert_eq!(
+        gains("Brute", &["template add Learned"], 3),
+        vec![9.0, 1.0, 3.0]
+    );
+    // classes that are not monsters keep their points, plus the
+    // template's
+    let tinker = gains("Tinker", &[], 2);
+    assert_eq!(gains("Tinker", &["template add Dragonblood"], 2), tinker);
+    let learned: Vec<f64> = tinker.iter().map(|g| g + 1.0).collect();
+    assert_eq!(gains("Tinker", &["template add Learned"], 2), learned);
+}
+
+#[test]
 fn new_characters_record_an_age() {
     // without one PCGen rolls an age each time it loads the file
     let s = Session::create("Testmode", &["TB".into()], "Nova", dirs());

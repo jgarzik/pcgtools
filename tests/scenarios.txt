@@ -837,3 +837,18 @@ class add Rogue
 class add Rogue
 class add Rogue
 class add Cleric --stat DEX
+
+== half_dragon_gnoll_pf
+gamemode Pathfinder
+campaign Core Rulebook
+campaign Bestiary
+set stat STR 15
+set stat INT 12
+race Gnoll
+set align CE
+class add Humanoid --force
+class add Humanoid --force
+class add Fighter
+template add Half-Dragon
+skill Survival 3 Humanoid
+skill Climb 1 Fighter

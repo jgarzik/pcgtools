@@ -141,7 +141,7 @@ pub fn build(s: &SheetCtx) -> Element {
         char_level += 1;
         // where changes to skill points apply retroactively, a level
         // worth more (or less) now than when taken adjusts what is left
-        if retro && !c.classes().iter().any(|(o, _)| o.is_type("Monster")) {
+        if retro {
             let gained: Option<f64> = l.text("SKILLSGAINED").and_then(|v| v.trim().parse().ok());
             let cls = c
                 .classes()

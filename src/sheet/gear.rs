@@ -13,6 +13,7 @@ use super::units::{float_text, pattern, trim_zeros, Units};
 use super::{Element, SheetCtx};
 use crate::lst::kind::FileKind;
 use crate::rules::equip::{natural_weapons, EqItem};
+use crate::token::pre::Prereq;
 
 /// Weight limits per load category, whole pounds.
 pub fn weight_allowance(s: &SheetCtx) -> Element {
@@ -417,7 +418,13 @@ pub fn equipment(s: &SheetCtx) -> Element {
             weight += w * p.carried;
         }
     }
-    let value: f64 = master.iter().map(|m| m.cost(c) * m.qty).sum();
+    // equipment granted outright is not listed or carried, but its
+    // value counts twice (once granted, once as owned)
+    let value: f64 = master.iter().map(|m| m.cost(c) * m.qty).sum::<f64>()
+        + auto_equipment(s)
+            .iter()
+            .map(|m| 2.0 * m.cost(c) * m.qty)
+            .sum::<f64>();
     let currency = s
         .ctx
         .gamemode
@@ -550,6 +557,36 @@ pub fn protection(s: &SheetCtx) -> Element {
             e.add("type", kind);
             e.add("wt", trim_zeros(it.weight(c) as f32 as f64));
             out.push(e);
+        }
+    }
+    out
+}
+
+/// Equipment granted by AUTO:EQUIP whose prerequisites pass.
+fn auto_equipment<'a>(s: &SheetCtx<'a>) -> Vec<EqItem<'a>> {
+    let c = &s.calc;
+    let is_pre =
+        |i: &str| Prereq::is_pre_tag(i.split(':').next().unwrap_or("")) || i.starts_with("!PRE");
+    let mut out = Vec::new();
+    for src in &c.sources {
+        for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
+            let Some(rest) = t.value.strip_prefix("EQUIP|") else {
+                continue;
+            };
+            let parts: Vec<&str> = rest.split('|').collect();
+            let ok = parts
+                .iter()
+                .filter(|i| is_pre(i))
+                .filter_map(|i| Prereq::parse(i).ok())
+                .all(|p| c.passes(&p, Some(src)));
+            if !ok {
+                continue;
+            }
+            for name in parts.iter().filter(|i| !is_pre(i)) {
+                if let Some(o) = c.ds.get(FileKind::Equipment, name) {
+                    out.push(EqItem::from_data(c, o));
+                }
+            }
         }
     }
     out

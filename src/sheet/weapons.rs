@@ -92,6 +92,8 @@ struct Weapon<'a> {
     range: f64,
     /// a thrown copy's name
     name: String,
+    /// how the character wields it (Light, OneHanded, TwoHanded, ...)
+    wield: String,
 }
 
 impl Weapon<'_> {
@@ -209,6 +211,7 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 index: 0,
                 types: melee,
                 range: 0.0,
+                wield: String::new(),
             });
             out.push(Weapon {
                 name: tname,
@@ -218,6 +221,7 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 index: 0,
                 types: thrown,
                 range,
+                wield: String::new(),
             });
         } else {
             let ranged = has("RANGED");
@@ -229,11 +233,13 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 index: 0,
                 types,
                 range: if ranged { range } else { 0.0 },
+                wield: String::new(),
             });
         }
     }
     for (i, w) in out.iter_mut().enumerate() {
         w.index = i;
+        w.wield = w.item.wield_category(c);
     }
     out
 }
@@ -273,18 +279,11 @@ fn all(_: &Source) -> bool {
 }
 
 fn light(w: &Weapon) -> bool {
-    w.item
-        .data
-        .get("WIELD")
-        .is_some_and(|v| v.eq_ignore_ascii_case("Light"))
-        || w.is("Light")
+    w.wield.eq_ignore_ascii_case("Light") || w.is("Light")
 }
 
 fn two_handed(w: &Weapon) -> bool {
-    w.item
-        .data
-        .get("WIELD")
-        .is_some_and(|v| v.eq_ignore_ascii_case("TwoHanded"))
+    w.wield.eq_ignore_ascii_case("TwoHanded")
 }
 
 fn finessable(w: &Weapon) -> bool {
@@ -1097,6 +1096,7 @@ fn unarmed(s: &SheetCtx) -> Element {
         .map(|x| x.to_string())
         .collect(),
         range: 0.0,
+        wield: "Light".into(),
     };
     let all_w = std::slice::from_ref(&w);
     Element::new("unarmed")

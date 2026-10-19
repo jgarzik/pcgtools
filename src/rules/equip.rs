@@ -803,6 +803,68 @@ impl<'a> EqItem<'a> {
         t
     }
 
+    /// How the item is wielded by the character, given the sizes of
+    /// both: the game mode's WIELDCATEGORY lines either name a size
+    /// difference for each category (SIZEDIFF) or switch categories
+    /// under conditions (SWITCH).
+    pub fn wield_category(&self, calc: &Calc<'a>) -> String {
+        let base = self.data.get("WIELD").unwrap_or("").to_string();
+        let Some(gm) = calc.gm else { return base };
+        let lines: Vec<&crate::gamemode::GmLine> =
+            gm.lines("miscinfo.lst", "WIELDCATEGORY").collect();
+        let sizes: Vec<String> = calc
+            .ds
+            .objects(FileKind::Size)
+            .iter()
+            .map(|o| o.key.clone())
+            .collect();
+        let pos = |k: &str| {
+            sizes
+                .iter()
+                .position(|x| x.eq_ignore_ascii_case(k))
+                .map(|i| i as i64)
+        };
+        let by_diff: Vec<(i64, &str)> = lines
+            .iter()
+            .filter_map(|l| Some((l.get("SIZEDIFF")?.trim().parse().ok()?, l.value.as_str())))
+            .collect();
+        // conditional switches take precedence over size differences
+        let switches = lines.iter().any(|l| l.get("SWITCH").is_some());
+        if !by_diff.is_empty() && !switches {
+            let (Some(item), Some(pc)) = (pos(&self.size), pos(&calc.size_key())) else {
+                return base;
+            };
+            let diff = item - pc;
+            let lo = by_diff.iter().map(|(d, _)| *d).min().unwrap_or(0);
+            let hi = by_diff.iter().map(|(d, _)| *d).max().unwrap_or(0);
+            if diff > hi {
+                return "TooLarge".into();
+            }
+            let d = diff.max(lo);
+            return by_diff
+                .iter()
+                .find(|(x, _)| *x == d)
+                .map(|(_, n)| n.to_string())
+                .unwrap_or(base);
+        }
+        for l in &lines {
+            if !l.value.eq_ignore_ascii_case(&base) {
+                continue;
+            }
+            let Some(to) = l.get("SWITCH") else { continue };
+            let ok = l
+                .tokens
+                .iter()
+                .filter(|(t, _)| Prereq::is_pre_tag(t))
+                .filter_map(|(t, v)| Prereq::from_token(t, v).ok())
+                .all(|p| self.passes(calc, &p, None));
+            if ok {
+                return to.to_string();
+            }
+        }
+        base
+    }
+
     /// Name with the modified part: `Claw (Natural/Primary)`.
     pub fn long_name(&self) -> String {
         match &self.modified {

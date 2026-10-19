@@ -142,7 +142,16 @@ fn abilities<'a>(s: &SheetCtx<'a>, cat: &str, nature: &str, hidden: bool) -> Vec
                 obj: src.obj,
                 selections: Vec::new(),
             });
-        e.selections.extend(src.applied.iter().cloned());
+        // an ability that does not stack holds each choice once
+        let stacks = src
+            .obj
+            .get("STACK")
+            .is_some_and(|v| v.eq_ignore_ascii_case("YES"));
+        for a in &src.applied {
+            if stacks || a.is_empty() || !e.selections.contains(a) {
+                e.selections.push(a.clone());
+            }
+        }
     }
     let mut v: Vec<Listed> = by_key.into_values().collect();
     v.sort_by(|a, b| {

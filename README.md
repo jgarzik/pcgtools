@@ -155,6 +155,8 @@ Commands (`help` in the editor lists them):
     spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]
     spell scribe CLASS SPELL BOOK [--level N] | spell unscribe CLASS SPELL BOOK
     spellbook add NAME | spellbook rm NAME | spellbook ls
+    temp ls [GLOB] | temp add [KIND=]SOURCE [pc|ITEM] [--value N]
+    temp rm SOURCE [pc|ITEM] | temp on|off SOURCE [pc|ITEM] | temp mods on|off
     follower add NAME TYPE RACE [FILE] | follower rm NAME | follower ls
     undo | save [PATH] | quit
 
@@ -185,6 +187,13 @@ rates. `equip add` and `equip rm` cost and refund nothing. A kit adds
 its funds and pays for its gear as PCGen does: at its `EQUIPBUY`
 rate, as much as the funds allow, or once at its `TOTALCOST`; lines
 whose prerequisites fail are skipped.
+Temporary bonuses (`TEMPBONUS` on abilities, spells, templates, skills
+and worn items) apply to the character or to an item in the equipment
+set used that has the types they ask for; one asking for a number
+(`TEMPVALUE`) takes it from `--value`, within its range. They are
+recorded as PCGen records them, switched off ones included, and
+`temp mods` turns all of them on or off for the character and its
+equipment set.
 `--force` overrides the checks. After
 each change the editor shows the updated level, attack bonus, hit
 points, armor class and saves.

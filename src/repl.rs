@@ -118,6 +118,14 @@ Commands (names may be quoted; most accept --force to skip checks):
                                remove a copy
   spellbook add NAME | spellbook rm NAME | spellbook ls
                                spell lists and books
+  temp ls [GLOB]               temporary bonuses offered, and those applied
+  temp add [KIND=]SOURCE [pc|ITEM] [--value N]
+                               apply one to the character or to an item
+                               in the equipment set used (KIND: feat,
+                               spell, template, skill or equip)
+  temp rm SOURCE [pc|ITEM] | temp on|off SOURCE [pc|ITEM]
+                               remove one, or switch it on or off
+  temp mods on|off             use temporary modifiers, or not
   follower add NAME TYPE RACE [FILE]     add a follower or companion
   follower rm NAME | follower ls
   undo                         undo the last change
@@ -900,6 +908,7 @@ impl Session {
                 other => Err(Error::Other(format!("unknown spell command '{}'", other))),
             },
             "spellbook" => self.cmd_spellbook(&w, changed),
+            "temp" => self.cmd_temp(&w, force, changed),
             "follower" => match arg(1)? {
                 "add" => {
                     let (name, kind) = (arg(2)?.to_string(), arg(3)?.to_string());
@@ -2392,6 +2401,365 @@ impl Session {
             )));
         }
         Ok(())
+    }
+
+    /// Names of the items placed in the equipment set used, in set
+    /// order, each once.
+    fn set_items(&self) -> Vec<String> {
+        let calc = self
+            .ch
+            .pcg
+            .value("CALCEQUIPSET")
+            .unwrap_or_else(|| "0.1".into());
+        let inside = format!("{}.", calc);
+        let mut out: Vec<String> = Vec::new();
+        for e in self.ch.equipsets() {
+            if let Some(it) = e.item.filter(|_| e.id.starts_with(&inside)) {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(&it)) {
+                    out.push(it);
+                }
+            }
+        }
+        out
+    }
+
+    fn cmd_temp(
+        &mut self,
+        w: &[&str],
+        force: bool,
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let sub = w.get(1).copied().unwrap_or("");
+        if sub == "mods" {
+            let on = match w.get(2).map(|v| v.to_ascii_lowercase()).as_deref() {
+                Some("on" | "y" | "yes") => true,
+                Some("off" | "n" | "no") => false,
+                _ => return Err(Error::Other("use 'temp mods on' or 'temp mods off'".into())),
+            };
+            self.checkpoint();
+            self.ch.set_temp_mods(on);
+            return changed(
+                self,
+                format!(
+                    "temporary modifiers {}",
+                    if on { "used" } else { "not used" }
+                ),
+            );
+        }
+        // --value N, then the source and the target
+        let mut value: Option<i64> = None;
+        let mut args: Vec<&str> = Vec::new();
+        let mut i = 2;
+        while i < w.len() {
+            if w[i] == "--value" {
+                let v = w
+                    .get(i + 1)
+                    .ok_or_else(|| Error::Other("--value needs a number".into()))?;
+                value = Some(
+                    v.parse()
+                        .map_err(|_| Error::Other(format!("bad value '{}'", v)))?,
+                );
+                i += 2;
+            } else {
+                args.push(w[i]);
+                i += 1;
+            }
+        }
+        // a source, as [KIND=]KEY
+        let source = |s: &str| -> (Option<&'static str>, String) {
+            if let Some((k, key)) = s.split_once('=') {
+                let kind = match k.to_ascii_lowercase().as_str() {
+                    "feat" | "ability" => Some("FEAT"),
+                    "spell" => Some("SPELL"),
+                    "template" => Some("TEMPLATE"),
+                    "skill" => Some("SKILL"),
+                    "equip" | "equipment" => Some("EQUIPMENT"),
+                    _ => None,
+                };
+                if kind.is_some() {
+                    return (kind, key.to_string());
+                }
+            }
+            (None, s.to_string())
+        };
+        let on_pc = |t: &str| t.eq_ignore_ascii_case("pc");
+        match sub {
+            "ls" => {
+                let mut c = self.calc();
+                c.run();
+                let q = match args.first() {
+                    Some(g) => Some(Query::new(Some(g), &[]).map_err(Error::Other)?),
+                    None => None,
+                };
+                let items: Vec<(String, Option<EqItem>)> = self
+                    .set_items()
+                    .into_iter()
+                    .map(|n| {
+                        let line = self
+                            .ch
+                            .pcg
+                            .lines_tagged("EQUIPNAME")
+                            .find(|l| l.head().is_some_and(|h| h.value_text() == n));
+                        let it = line.and_then(|l| EqItem::from_pcg(&c, l));
+                        (n, it)
+                    })
+                    .collect();
+                let mut out = Vec::new();
+                for o in crate::rules::temp::offers(&c) {
+                    if q.as_ref().is_some_and(|q| !q.matches(o.obj)) {
+                        continue;
+                    }
+                    let mut to: Vec<String> = Vec::new();
+                    if !o.pc.is_empty() {
+                        to.push("PC".into());
+                    }
+                    for (n, it) in &items {
+                        if it
+                            .as_ref()
+                            .is_some_and(|it| o.suits(&|t| it.is_type(&c, t)))
+                        {
+                            to.push(n.clone());
+                        }
+                    }
+                    let range = match o.value_range(&c) {
+                        Some(Ok((a, b))) => format!("  value {}-{}", a, b),
+                        Some(Err(e)) => format!("  ({})", e),
+                        None => String::new(),
+                    };
+                    let to = if to.is_empty() {
+                        "no target here".to_string()
+                    } else {
+                        to.join(", ")
+                    };
+                    out.push(format!("{} ({}): {}{}", o.key(), o.kind, to, range));
+                }
+                let applied: Vec<String> = self
+                    .ch
+                    .temp_bonuses()
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} ({}) on {}{}",
+                            t.key,
+                            t.kind,
+                            t.target,
+                            if t.active { "" } else { " (off)" }
+                        )
+                    })
+                    .collect();
+                if out.is_empty() {
+                    out.push("no temporary bonuses offered".into());
+                }
+                if !applied.is_empty() {
+                    out.push("applied:".into());
+                    out.extend(applied.into_iter().map(|a| format!("  {}", a)));
+                }
+                if !self.ch.use_temp_mods() {
+                    out.push("temporary modifiers are off".into());
+                }
+                Ok(Outcome::Text(out.join("\n")))
+            }
+            "add" => {
+                let (kind, key) = source(
+                    args.first()
+                        .ok_or_else(|| Error::Other("missing source".into()))?,
+                );
+                let mut c = self.calc();
+                c.run();
+                let offers = crate::rules::temp::offers(&c);
+                let found: Vec<_> = offers
+                    .iter()
+                    .filter(|o| kind.is_none_or(|k| k == o.kind))
+                    .filter(|o| {
+                        o.obj.key.eq_ignore_ascii_case(&key)
+                            || o.obj.name.eq_ignore_ascii_case(&key)
+                    })
+                    .collect();
+                let o = match found.as_slice() {
+                    [o] => *o,
+                    [] => {
+                        return Err(Error::Other(format!(
+                        "nothing named '{}' offers the character a temporary bonus (see 'temp ls')",
+                        key
+                    )))
+                    }
+                    _ => {
+                        return Err(Error::Other(format!(
+                            "'{}' is ambiguous; name its kind (e.g. spell={})",
+                            key, key
+                        )))
+                    }
+                };
+                // the target: the character, or an item in the set used
+                let target = match args.get(1) {
+                    None if !o.pc.is_empty() => "PC".to_string(),
+                    None => {
+                        return Err(Error::Other(format!(
+                            "{} applies only to items; name one",
+                            o.key()
+                        )))
+                    }
+                    Some(t) if on_pc(t) => {
+                        if o.pc.is_empty() {
+                            return Err(Error::Other(format!("{} applies only to items", o.key())));
+                        }
+                        "PC".to_string()
+                    }
+                    Some(t) => {
+                        if o.eq.is_empty() {
+                            return Err(Error::Other(format!(
+                                "{} applies only to the character",
+                                o.key()
+                            )));
+                        }
+                        let name = self.owned_item(t);
+                        let Some(name) = self
+                            .set_items()
+                            .into_iter()
+                            .find(|n| n.eq_ignore_ascii_case(&name))
+                        else {
+                            return Err(Error::Other(format!(
+                                "'{}' is not in the equipment set used",
+                                t
+                            )));
+                        };
+                        let line = self
+                            .ch
+                            .pcg
+                            .lines_tagged("EQUIPNAME")
+                            .find(|l| l.head().is_some_and(|h| h.value_text() == name));
+                        let suits = line
+                            .and_then(|l| EqItem::from_pcg(&c, l))
+                            .is_some_and(|it| o.suits(&|t| it.is_type(&c, t)));
+                        if !suits && !force {
+                            let conds: Vec<&str> = o.eq.iter().map(|(c, _)| c.as_str()).collect();
+                            return Err(Error::Other(format!(
+                                "{} does not suit {} (it needs {}; use --force)",
+                                o.key(),
+                                name,
+                                conds.join(" or ")
+                            )));
+                        }
+                        name
+                    }
+                };
+                let choice = match o.value_range(&c) {
+                    None if value.is_some() => {
+                        return Err(Error::Other(format!("{} takes no value", o.key())))
+                    }
+                    None => None,
+                    Some(range) => {
+                        let v = value.ok_or_else(|| {
+                            Error::Other(match &range {
+                                Ok((a, b)) => {
+                                    format!("{} needs --value, from {} to {}", o.key(), a, b)
+                                }
+                                Err(e) => format!("{} needs --value ({})", o.key(), e),
+                            })
+                        })?;
+                        match range {
+                            Ok((a, b)) if v < a || v > b => {
+                                if !force {
+                                    return Err(Error::Other(format!(
+                                        "{} must be from {} to {} (use --force)",
+                                        v, a, b
+                                    )));
+                                }
+                            }
+                            Err(e) if !force => {
+                                return Err(Error::Other(format!("{} (use --force)", e)))
+                            }
+                            _ => {}
+                        }
+                        Some(v)
+                    }
+                };
+                let tb = crate::pcg::character::TempBonus {
+                    kind: o.kind.to_string(),
+                    key: o.obj.key.clone(),
+                    target: target.clone(),
+                    active: true,
+                    bonuses: o.applied(target != "PC", choice),
+                };
+                drop(c);
+                let mut all = self.ch.temp_bonuses();
+                if all.iter().any(|t| {
+                    t.kind == tb.kind
+                        && t.key.eq_ignore_ascii_case(&tb.key)
+                        && t.target.eq_ignore_ascii_case(&tb.target)
+                }) {
+                    return Err(Error::Other(format!(
+                        "{} is already applied to {}",
+                        tb.key, tb.target
+                    )));
+                }
+                if tb.bonuses.is_empty() {
+                    return Err(Error::Other(format!(
+                        "{} has no bonus PCGen would keep",
+                        tb.key
+                    )));
+                }
+                let msg = format!("applied {} to {}", tb.key, tb.target);
+                all.push(tb);
+                self.checkpoint();
+                self.ch.set_temp_bonuses(&all);
+                changed(self, msg)
+            }
+            "rm" | "remove" | "on" | "off" => {
+                let (kind, key) = source(
+                    args.first()
+                        .ok_or_else(|| Error::Other("missing source".into()))?,
+                );
+                let target = args.get(1).map(|t| {
+                    if on_pc(t) {
+                        "PC".to_string()
+                    } else {
+                        self.owned_item(t)
+                    }
+                });
+                let mut all = self.ch.temp_bonuses();
+                let hits: Vec<usize> = (0..all.len())
+                    .filter(|&i| {
+                        let t = &all[i];
+                        kind.is_none_or(|k| k == t.kind)
+                            && t.key.eq_ignore_ascii_case(&key)
+                            && target
+                                .as_ref()
+                                .is_none_or(|x| t.target.eq_ignore_ascii_case(x))
+                    })
+                    .collect();
+                let i = match hits.as_slice() {
+                    [i] => *i,
+                    [] => {
+                        return Err(Error::Other(format!(
+                            "no temporary bonus from '{}'{} is applied",
+                            key,
+                            target.map(|t| format!(" to {}", t)).unwrap_or_default()
+                        )))
+                    }
+                    _ => {
+                        return Err(Error::Other(format!(
+                            "'{}' is applied to more than one target; name it",
+                            key
+                        )))
+                    }
+                };
+                let msg = match sub {
+                    "on" | "off" => {
+                        all[i].active = sub == "on";
+                        format!("{} on {} switched {}", all[i].key, all[i].target, sub)
+                    }
+                    _ => {
+                        let t = all.remove(i);
+                        format!("removed {} from {}", t.key, t.target)
+                    }
+                };
+                self.checkpoint();
+                self.ch.set_temp_bonuses(&all);
+                changed(self, msg)
+            }
+            other => Err(Error::Other(format!("unknown temp command '{}'", other))),
+        }
     }
 
     fn cmd_spellbook(

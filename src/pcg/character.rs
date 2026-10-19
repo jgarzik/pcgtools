@@ -83,6 +83,8 @@ const ORDER: &[&str] = &[
     "EQUIPNAME",
     "EQUIPSET",
     "CALCEQUIPSET",
+    "TEMPBONUS",
+    "EQSETBONUS",
     "DEITY",
     "DOMAIN",
     "SPELLBOOK",
@@ -584,6 +586,85 @@ impl Character {
                 })
             })
             .collect()
+    }
+
+    /// Replace the temporary bonuses, written as PCGen writes them:
+    /// every bonus sorted by category, targets and text (a bonus whose
+    /// text another already has is dropped), and one line per source
+    /// and target, written where its first bonus comes, holding all of
+    /// its bonuses.
+    pub fn set_temp_bonuses(&mut self, list: &[TempBonus]) {
+        let mut all: Vec<(String, String, &str, usize)> = Vec::new();
+        for (i, tb) in list.iter().enumerate() {
+            for b in &tb.bonuses {
+                let mut parts = b.split('|');
+                let name = parts.next().unwrap_or("").to_string();
+                let info = parts.next().unwrap_or("").to_uppercase();
+                if !all
+                    .iter()
+                    .any(|(n, f, t, _)| *n == name && *f == info && t == b)
+                {
+                    all.push((name, info, b.as_str(), i));
+                }
+            }
+        }
+        all.sort_by(|a, b| (&a.0, &a.1, a.2).cmp(&(&b.0, &b.1, b.2)));
+        let same = |a: &TempBonus, b: &TempBonus| {
+            a.kind == b.kind && a.key == b.key && a.target == b.target
+        };
+        let mut lines: Vec<PcgLine> = Vec::new();
+        let mut done: Vec<usize> = Vec::new();
+        for (_, _, _, i) in &all {
+            let tb = &list[*i];
+            if done.iter().any(|d| same(&list[*d], tb)) {
+                continue;
+            }
+            done.push(*i);
+            let mut elems = vec![
+                Elem::raw(
+                    "TEMPBONUS",
+                    &format!("{}={}", tb.kind, super::encode(&tb.key, false)),
+                ),
+                Elem::text("TBTARGET", &tb.target),
+            ];
+            if !tb.active {
+                elems.push(Elem::raw("TBACTIVE", "N"));
+            }
+            for (_, _, b, j) in &all {
+                if same(&list[*j], tb) {
+                    elems.push(Elem::text("TBBONUS", b));
+                }
+            }
+            lines.push(PcgLine::new(elems));
+        }
+        self.pcg.remove_all("TEMPBONUS");
+        for l in lines {
+            self.insert_ordered("TEMPBONUS", l);
+        }
+    }
+
+    /// Turn temporary modifiers on or off: for the character, and for
+    /// the equipment set used and what is placed in it.
+    pub fn set_temp_mods(&mut self, on: bool) {
+        self.set_flag("USETEMPMODS", on);
+        let calc = self
+            .pcg
+            .value("CALCEQUIPSET")
+            .unwrap_or_else(|| "0.1".into());
+        let inside = format!("{}.", calc);
+        for i in self.pcg.indices("EQUIPSET") {
+            let l = &self.pcg.lines[i];
+            let Some(id) = l.text("ID") else { continue };
+            if id != calc && !id.starts_with(&inside) {
+                continue;
+            }
+            let mut elems = l.elems.clone().unwrap_or_default();
+            elems.retain(|e| e.tag != "USETEMPMODS");
+            if on {
+                elems.push(Elem::raw("USETEMPMODS", "Y"));
+            }
+            self.pcg.lines[i].set_elems(elems);
+        }
     }
 
     pub fn equipsets(&self) -> Vec<EquipSetEntry> {

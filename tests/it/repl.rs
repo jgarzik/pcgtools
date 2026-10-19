@@ -1169,3 +1169,109 @@ fn calculation_set_falls_back_to_the_first_set() {
     let ch = Character::from_pcg(PcgFile::parse(&text));
     assert_eq!(ch.calc_equip_set(), "0.9");
 }
+
+fn temp_lines(s: &Session) -> Vec<String> {
+    s.ch.pcg
+        .lines_tagged("TEMPBONUS")
+        .map(|l| l.raw.clone())
+        .collect()
+}
+
+fn ac(s: &Session) -> i64 {
+    s.sheet().ac["Total"]
+}
+
+#[test]
+fn temporary_bonuses_offered() {
+    let mut s = session();
+    let ls = ok(&mut s, "temp ls");
+    // a spell any character may use, on itself or on a shield; a
+    // spell for weapons that asks for a number; a feat the character
+    // has, for itself only
+    assert!(ls.contains("Ember (SPELL): PC, Tin Shield\n"), "{}", ls);
+    assert!(
+        ls.contains("Mend (SPELL): Tin Shield  value 1-3\n"),
+        "{}",
+        ls
+    );
+    assert!(ls.contains("Steady Hands (FEAT): PC"), "{}", ls);
+    assert!(!ls.contains("applied"), "{}", ls);
+    assert_eq!(
+        ok(&mut s, "temp ls mend"),
+        "Mend (SPELL): Tin Shield  value 1-3"
+    );
+}
+
+#[test]
+fn temporary_bonuses_applied() {
+    let mut s = session();
+    let base = ac(&s);
+    ok(&mut s, "temp add Ember");
+    assert_eq!(ac(&s), base + 2);
+    ok(&mut s, "temp add spell=ember \"Tin Shield\"");
+    assert_eq!(ac(&s), base + 3);
+    assert!(err(&mut s, "temp add Mend \"Tin Shield\"").contains("from 1 to 3"));
+    assert!(err(&mut s, "temp add Mend \"Tin Shield\" --value 4").contains("from 1 to 3"));
+    assert!(err(&mut s, "temp add Mend").contains("only to items"));
+    assert!(err(&mut s, "temp add Mend \"Silver Spoon\" --value 2").contains("does not suit"));
+    assert!(
+        err(&mut s, "temp add \"Steady Hands\" \"Tin Shield\"").contains("only to the character")
+    );
+    assert!(err(&mut s, "temp add Ember pc").contains("already applied"));
+    assert!(err(&mut s, "temp add Glow").contains("offers"));
+    ok(&mut s, "temp add Mend \"Tin Shield\" --value 2");
+    // one line per source and target, in the order of their bonuses
+    assert_eq!(
+        temp_lines(&s),
+        [
+            "TEMPBONUS:SPELL=Ember|TBTARGET:Tin Shield|TBBONUS:COMBAT&pipe;AC&pipe;1&pipe;TYPE=ENHANCEMENT",
+            "TEMPBONUS:SPELL=Ember|TBTARGET:PC|TBBONUS:COMBAT&pipe;AC&pipe;2&pipe;TYPE=DEFLECTION",
+            "TEMPBONUS:SPELL=Mend|TBTARGET:Tin Shield|TBBONUS:WEAPON&pipe;TOHIT,DAMAGE&pipe;2&pipe;TYPE=ENHANCEMENT",
+        ]
+    );
+    // after the equipment set used
+    let i = s.ch.pcg.indices("TEMPBONUS")[0];
+    assert_eq!(s.ch.pcg.lines[i - 1].tag(), Some("CALCEQUIPSET"));
+    let ls = ok(&mut s, "temp ls");
+    assert!(
+        ls.contains("applied:\n  Ember (SPELL) on Tin Shield\n"),
+        "{}",
+        ls
+    );
+}
+
+#[test]
+fn temporary_bonuses_switched_and_removed() {
+    let mut s = session();
+    let base = ac(&s);
+    ok(&mut s, "temp add Ember");
+    ok(&mut s, "temp add Ember \"Tin Shield\"");
+    assert!(err(&mut s, "temp off Ember").contains("more than one"));
+    ok(&mut s, "temp off Ember pc");
+    assert_eq!(ac(&s), base + 1);
+    assert_eq!(
+        temp_lines(&s)[1],
+        "TEMPBONUS:SPELL=Ember|TBTARGET:PC|TBACTIVE:N|TBBONUS:COMBAT&pipe;AC&pipe;2&pipe;TYPE=DEFLECTION"
+    );
+    assert!(ok(&mut s, "temp ls").contains("Ember (SPELL) on PC (off)"));
+    ok(&mut s, "temp on Ember pc");
+    assert_eq!(ac(&s), base + 3);
+    ok(&mut s, "temp rm Ember \"Tin Shield\"");
+    assert_eq!(ac(&s), base + 2);
+    assert_eq!(temp_lines(&s).len(), 1);
+    assert!(err(&mut s, "temp rm Ember \"Tin Shield\"").contains("no temporary bonus"));
+    ok(&mut s, "undo");
+    assert_eq!(temp_lines(&s).len(), 2);
+    // with temporary modifiers off, none counts
+    ok(&mut s, "temp mods off");
+    assert_eq!(ac(&s), base);
+    assert_eq!(s.ch.pcg.value("USETEMPMODS").as_deref(), Some("N"));
+    ok(&mut s, "temp mods on");
+    assert_eq!(ac(&s), base + 3);
+    // the set used, and all placed in it, are marked to use them
+    assert!(s
+        .ch
+        .pcg
+        .lines_tagged("EQUIPSET")
+        .all(|l| l.raw.ends_with("|USETEMPMODS:Y")));
+}

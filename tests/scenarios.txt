@@ -698,3 +698,81 @@ spell scribe Wizard Light "Blessed Book"
 spell prep Wizard Sleep
 equip sell "Spellbook (Wizard's/Blank)" 1
 equip rm "Blessed Book"
+
+== temp_self_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 12
+set stat CON 14
+race Human
+set align LG
+class add Fighter
+equip add Chainmail
+equip wear Chainmail
+equip add Longsword
+equip wear Longsword
+temp add "Bull's Strength"
+temp add Bless
+temp add Barkskin --value 6
+temp add "Magic Vestment (Armor)" Chainmail --value 8
+
+== temp_weapon_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 15
+set stat DEX 13
+race Dwarf
+set align LN
+class add Fighter
+equip add Longsword
+equip wear Longsword
+equip add Dagger
+equip wear Dagger Carried
+temp add "Magic Weapon" Longsword
+temp add "Magic Weapon (Greater)" Dagger --value 8
+temp mods on
+
+== temp_off_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 14
+race Elf
+set align CG
+class add Rogue
+equip add Rapier
+equip wear Rapier
+temp add "Cat's Grace"
+temp add "Bull's Strength"
+temp off "Cat's Grace"
+temp add "Magic Weapon" Rapier
+temp off "Magic Weapon"
+
+== temp_feat_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 16
+set stat CON 12
+race Human
+set align TN
+class add Fighter
+feat add "Power Attack"
+equip add Greatsword
+equip wear Greatsword
+temp add "Power Attack (Two-Handed)" Greatsword
+
+== temp_mods_off_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 15
+set stat INT 12
+race Halfling
+set align CN
+class add Rogue
+skill "Disable Device" 4
+equip add "Studded Leather"
+equip wear "Studded Leather"
+temp add "Disable Device"
+temp add "Magic Vestment (Armor)" "Studded Leather" --value 8
+temp add "Cloak of Chaos"
+temp mods off

@@ -1,6 +1,7 @@
 # synthetic game mode
 ALLOWEDMODES:Testmode|TM
 GAMEMODEKEY:Testmode
+CHARACTERTYPE:Hero|Villain
 BONUSSTACKS:Dodge.Circumstance
 BONUSSTACKS:Untyped
 TAB:SUMMARY		NAME:in_summary	VISIBLE:YES

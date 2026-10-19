@@ -2129,14 +2129,17 @@ impl<'a> Calc<'a> {
                 })
             }
             "CLASS" => self.count_items(args, |a| {
-                let (c, lv) = a.split_once('=').unwrap_or((a, "1"));
-                let need = num(lv);
-                if let Some(t) = c.strip_prefix("TYPE.").or_else(|| c.strip_prefix("TYPE=")) {
+                // TYPE=t or TYPE.t, optionally with =level
+                if let Some(rest) = a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE=")) {
+                    let (t, lv) = rest.split_once('=').unwrap_or((rest, "1"));
+                    let need = num(lv);
                     return self
                         .classes
                         .iter()
                         .any(|(o, l)| o.is_type(t) && *l as f64 >= need);
                 }
+                let (c, lv) = a.split_once('=').unwrap_or((a, "1"));
+                let need = num(lv);
                 if c.eq_ignore_ascii_case("ANY") {
                     return self.classes.iter().any(|(_, l)| *l as f64 >= need);
                 }
@@ -2156,9 +2159,9 @@ impl<'a> Calc<'a> {
                 })
             }
             "SKILL" => self.count_items(args, |a| {
-                let (s, v) = a.split_once('=').unwrap_or((a, "1"));
-                // TYPE.x: any skill of that type with the ranks
-                if let Some(t) = s.strip_prefix("TYPE.").or_else(|| s.strip_prefix("TYPE=")) {
+                // TYPE.x or TYPE=x: any skill of that type with the ranks
+                if let Some(rest) = a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE=")) {
+                    let (t, v) = rest.split_once('=').unwrap_or((rest, "1"));
                     return self
                         .ds
                         .objects(FileKind::Skill)
@@ -2166,6 +2169,7 @@ impl<'a> Calc<'a> {
                         .filter(|o| t.split('.').all(|x| o.is_type(x)))
                         .any(|o| self.skill_ranks(&o.key) >= num(v));
                 }
+                let (s, v) = a.split_once('=').unwrap_or((a, "1"));
                 self.skill_ranks(s) >= num(v)
             }),
             "CSKILL" => self.count_items(args, |a| self.is_class_skill(a)),
@@ -2453,14 +2457,10 @@ impl<'a> Calc<'a> {
                     .and_then(|d| d.get("ALIGN").map(str::to_string));
                 al.is_some_and(|a| args.iter().any(|x| x.trim().eq_ignore_ascii_case(&a)))
             }
-            "CHARACTERTYPE" => self.count_items(args, |a| {
-                let t = self
-                    .ch
-                    .pcg
-                    .value("CHARACTERTYPE")
-                    .unwrap_or_else(|| "PC".into());
-                a.eq_ignore_ascii_case(&t)
-            }),
+            "CHARACTERTYPE" => {
+                let t = self.character_type();
+                self.count_items(args, |a| a.eq_ignore_ascii_case(&t))
+            }
             "WEAPONPROF" | "PROFWITHARMOR" | "PROFWITHSHIELD" => {
                 if self.in_profs.get() {
                     return true;
@@ -2642,6 +2642,26 @@ impl<'a> Calc<'a> {
             }
         }
         out
+    }
+
+    /// The character's type: the saved one if the game mode lists it,
+    /// else the first type the game mode lists ("Default" if none).
+    pub fn character_type(&self) -> String {
+        let listed: Vec<String> = self
+            .gm
+            .and_then(|g| g.misc("CHARACTERTYPE"))
+            .map(|v| {
+                v.split('|')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let default = listed.first().cloned().unwrap_or_else(|| "Default".into());
+        match self.ch.pcg.value("CHARACTERTYPE") {
+            Some(t) if listed.iter().any(|x| x.eq_ignore_ascii_case(&t)) => t,
+            _ => default,
+        }
     }
 
     /// The subclass chosen for a class, if any.

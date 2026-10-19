@@ -60,3 +60,54 @@ fn edits_change_the_sheet() {
     assert_eq!(s.ac["Total"], 13);
     assert_eq!(s.skills["Climbing"], 2);
 }
+
+#[test]
+fn character_type_defaults_to_game_modes_first() {
+    use pcgtools::token::pre::Prereq;
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // no CHARACTERTYPE line: the first type the game mode lists
+    let mut ch = Character::read(&common::fixture("mini/characters/vera.pcg")).unwrap();
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Hero"));
+    assert!(!check(&ch, "PRECHARACTERTYPE:1,PC"));
+    ch.set_field("CHARACTERTYPE", "Villain");
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Villain"));
+    // a type the game mode does not list falls back to the default
+    ch.set_field("CHARACTERTYPE", "Bystander");
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Hero"));
+}
+
+#[test]
+fn class_and_skill_type_prerequisites() {
+    use pcgtools::token::pre::Prereq;
+    let dirs = dirs();
+    let s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs.clone());
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs.clone());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // no classes at all: none of any type
+    assert!(!check(&s.ch, "PRECLASS:1,TYPE=Base"));
+    assert!(check(&s.ch, "!PRECLASS:1,TYPE=Base"));
+    assert!(check(
+        &s.ch,
+        "PREMULT:1,[PRECLASS:1,Tinker=1],[!PRECLASS:1,TYPE=Base]"
+    ));
+    // a Tinker has a class of its type
+    let tess = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
+    assert!(check(&tess, "PRECLASS:1,TYPE=Base"));
+    assert!(!check(&tess, "!PRECLASS:1,TYPE=Base"));
+    assert!(check(&tess, "PRECLASS:1,TYPE=Base=2"));
+    assert!(!check(&tess, "PRECLASS:1,TYPE=Base=3"));
+    // skills by type, with and without ranks (Tess has 2 in Tinkering)
+    assert!(check(&tess, "PRESKILL:1,TYPE=Craft=2"));
+    assert!(check(&tess, "PRESKILL:1,TYPE.Craft=2"));
+    assert!(!check(&tess, "PRESKILL:1,TYPE=Craft=3"));
+    assert!(!check(&s.ch, "PRESKILL:1,TYPE=Craft"));
+}

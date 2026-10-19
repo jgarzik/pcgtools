@@ -419,3 +419,67 @@ class add Monk
 class add Monk
 class add Monk
 class add Monk
+
+== gunslinger_deadlands_gear
+gamemode Deadlands
+campaign PE - Deadlands Core Rulebook - Deadlands D20
+set stat DEX 16
+set stat CON 14
+race Human
+class add Gunslinger
+class add Gunslinger
+class add Gunslinger
+equip add "Colt Peacemaker (Pistol/SA)"
+equip wear "Colt Peacemaker (Pistol/SA)"
+equip add Duster
+equip wear Duster
+
+== soldier_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+set stat STR 16
+set stat CON 14
+race Human
+class add Soldier
+class add Soldier
+class add Soldier
+equip add "Long Sword"
+equip wear "Long Sword"
+equip add "Moderate Leather Armor"
+equip wear "Moderate Leather Armor"
+
+== soldier_spycraft_gear
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+set stat STR 14
+set stat DEX 14
+class add Soldier
+class add Soldier
+class add Soldier
+equip add "Kevlar vest"
+equip wear "Kevlar vest"
+
+== arcane_gaslight
+gamemode Gaslight
+campaign BPI ~ Gaslight
+differs character/skills[0]/max_class_skill_level[0] -- PCGen evaluates the bare variable named by CSKILLMAX before its stat bonus applies (16 with it, as MaxRank+0 also gives)
+set stat INT 16
+race Human
+class add Apprentice
+class add Apprentice
+class add Apprentice
+equip add "Adams 1854 Revolver"
+equip wear "Adams 1854 Revolver"
+
+== fighter_sagaborn_gear
+gamemode Sagaborn
+campaign Sagaborn - Sagaborn Roleplaying System
+set stat STR 16
+race Human
+class add Fighter
+class add Fighter
+class add Fighter
+equip add Longsword
+equip wear Longsword
+equip add "Armor ~ Leather"
+equip wear "Armor ~ Leather"

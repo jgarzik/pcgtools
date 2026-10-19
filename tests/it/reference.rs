@@ -129,6 +129,8 @@ fn pcgen_sheet(
                 " LoggingProviderImpl:",
                 " GameMode:",
                 " PrerequisiteUtilities:",
+                // the sheet template's own errors
+                " ExportHandler:",
             ]
             .iter()
             .all(|c| !l.contains(c))

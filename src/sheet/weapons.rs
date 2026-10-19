@@ -442,8 +442,11 @@ fn two_handed(w: &Weapon) -> bool {
 
 /// Whether PCGen fails to find how the weapon is wielded: with no
 /// `Light` or `OneHanded` wield category in the game mode, a weapon
-/// with a proficiency (the unarmed strike always has one) has none,
-/// and its attacks and damage come out empty.
+/// with a proficiency (the unarmed strike always has one) has none.
+/// Asking how it is wielded then fails, which empties the attacks of
+/// melee weapons (checked for two-handed use) and the damage of every
+/// weapon not finesseable by type (checked for finesse), but leaves
+/// the attacks of purely ranged weapons.
 fn wield_unknown(s: &SheetCtx, w: &Weapon) -> bool {
     let defined = s.ctx.gamemode.as_ref().is_some_and(|g| {
         g.lines("miscinfo.lst", "WIELDCATEGORY").any(|l| {
@@ -600,7 +603,7 @@ fn mode_bonus(s: &SheetCtx, w: &Weapon, mode: Mode, ranged: bool) -> i64 {
 /// Attack sequence for a weapon in a mode, at a distance (ranged).
 fn to_hit(s: &SheetCtx, w: &Weapon, all_w: &[Weapon], mode: Mode, distance: Option<f64>) -> String {
     let b = &s.calc.bonus;
-    if wield_unknown(s, w) {
+    if w.melee() && wield_unknown(s, w) {
         return String::new();
     }
     let two = two_handed(w);
@@ -779,7 +782,7 @@ fn damage(
 ) -> String {
     let c = &s.calc;
     let b = &c.bonus;
-    if wield_unknown(s, w) {
+    if (w.melee() || !w.is("Finesseable")) && wield_unknown(s, w) {
         return String::new();
     }
     let two = two_handed(w);

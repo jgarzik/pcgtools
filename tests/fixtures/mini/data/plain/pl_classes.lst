@@ -1,1 +1,2 @@
 CLASS:Drifter	HD:6
+CLASS:Wanderer	HD:8	TYPE:Base.PC	FACT:ClassType|Warrior

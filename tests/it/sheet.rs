@@ -311,6 +311,22 @@ fn sparse_game_mode_basics() {
     assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/source[0]"), "");
 }
 
+#[test]
+fn class_type_fact_without_a_row_falls_back_to_types() {
+    // the class's ClassType fact names no CLASSTYPE row, so its types
+    // pick the row: PC, whose CR is the level less one
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Plainmode", &["PL".into()], "Pat", dirs);
+    for _ in 0..3 {
+        s.exec("class add Wanderer").unwrap();
+    }
+    assert_eq!(at(&sheet_of(&s), "basics[Pat]/cr[0]"), "2");
+}
+
 /// A copy of the mini fixture with lines of the game mode's
 /// miscinfo.lst for which `drop` is true removed.
 fn fixture_copy(name: &str, drop: &dyn Fn(&str) -> bool) -> std::path::PathBuf {
@@ -347,6 +363,73 @@ fn unarmed_strike_without_wield_categories() {
     assert_eq!(at(&m, "weapons[0]/unarmed[0]/total[0]"), "");
     assert_eq!(at(&m, "weapons[0]/unarmed[0]/damage[0]"), "");
     assert_eq!(at(&m, "weapons[0]/unarmed[0]/critical[0]"), "20/x2");
+}
+
+#[test]
+fn first_clothing_worn_weighs_nothing_for_skills() {
+    // the weight penalty counts what is carried, but not the first
+    // clothing worn
+    let mut s = nova();
+    let misc = |s: &pcgtools::repl::Session| {
+        at(&sheet_of(s), "skills[0]/skill[Swimming]/misc_mod[0]").to_string()
+    };
+    s.exec("class add Tinker").unwrap();
+    s.exec("skill Swimming 1 --force").unwrap();
+    s.exec("equip add \"Wool Cloak\"").unwrap();
+    s.exec("equip wear \"Wool Cloak\"").unwrap();
+    assert_eq!(misc(&s), "0");
+    s.exec("equip add \"Linen Shirt\"").unwrap();
+    s.exec("equip wear \"Linen Shirt\"").unwrap();
+    assert_eq!(misc(&s), "-1");
+}
+
+#[test]
+fn built_in_modifier_choice_sets_its_variable() {
+    // an item's own modifier, chosen in its data (EQMOD:KEY|choice),
+    // sets the variable its bonuses read
+    let mut s = nova();
+    let total = |s: &pcgtools::repl::Session| {
+        at(&sheet_of(s), "armor_class[0]/total[0]")
+            .parse::<i64>()
+            .unwrap()
+    };
+    let before = total(&s);
+    s.exec("equip add \"Dented Vest\"").unwrap();
+    s.exec("equip wear \"Dented Vest\"").unwrap();
+    let m = sheet_of(&s);
+    assert_eq!(total(&s), before - 1);
+    assert_eq!(at(&m, "protection[0]/armor[*Dented Vest]/acbonus[0]"), "-1");
+    assert_eq!(at(&m, "protection[0]/armor[*Dented Vest]/totalac[0]"), "-1");
+}
+
+#[test]
+fn ranged_weapon_without_wield_categories() {
+    // a purely ranged weapon never needs to be sized up for its
+    // attacks, so they are computed; its damage still is not
+    let root = fixture_copy("nowield-ranged", &|l| l.starts_with("WIELDCATEGORY"));
+    let dirs = DataDirs {
+        data: Some(root.join("data")),
+        system: Some(root.join("system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    s.exec("equip add \"Tin Pistol\"").unwrap();
+    s.exec("equip wear \"Tin Pistol\"").unwrap();
+    let m = sheet_of(&s);
+    let _ = std::fs::remove_dir_all(&root);
+    let w = "weapons[0]/weapon[0]";
+    let hit = at(
+        &m,
+        &format!("{}/common[*Tin Pistol]/to_hit[0]/total_hit[0]", w),
+    )
+    .to_string();
+    assert!(hit.starts_with(['+', '-']), "to-hit {:?}", hit);
+    assert_eq!(
+        at(&m, &format!("{}/ranges[0]/range[0]/to_hit[0]", w)),
+        hit.as_str()
+    );
+    assert_ne!(at(&m, &format!("{}/ranges[0]/range[1]/to_hit[0]", w)), "");
+    assert_eq!(at(&m, &format!("{}/ranges[0]/range[0]/damage[0]", w)), "");
 }
 
 /// A new character in the fixture game mode.

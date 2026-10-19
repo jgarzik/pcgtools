@@ -1,3 +1,6 @@
 # synthetic game mode without most code controls
 ALLOWEDMODES:Plainmode
 GAMEMODEKEY:Plainmode
+# challenge rating by class type
+CLASSTYPE:PC	CRFORMULA:CL	ISMONSTER:NO	CRMOD:-1	CRMODPRIORITY:1
+CRSTEPS:1/2|1/3

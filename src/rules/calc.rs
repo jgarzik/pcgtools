@@ -320,13 +320,20 @@ impl<'a> Calc<'a> {
                     }
                 }
             }
-            // eqmods built into the item
+            // eqmods built into the item, with the choices the data
+            // makes for them (KEY|choice|choice...)
             for v in obj.values("EQMOD") {
                 for k in v.split('.') {
-                    if let Some(m) = self.find_eqmod(k.split('|').next().unwrap_or(k)) {
+                    let mut parts = k.split('|');
+                    let key = parts.next().unwrap_or(k);
+                    if let Some(m) = self.find_eqmod(key) {
                         if !eqmods.iter().any(|x| std::ptr::eq(*x, m)) {
                             eqmods.push(m);
-                            eqmod_choices.push(Vec::new());
+                            eqmod_choices.push(if m.has("CHOOSE") {
+                                parts.map(str::to_string).collect()
+                            } else {
+                                Vec::new()
+                            });
                         }
                     }
                 }
@@ -362,7 +369,9 @@ impl<'a> Calc<'a> {
     }
 
     /// Weight carried: items placed in the calculation equipment set,
-    /// except those under "Not Carried".
+    /// except those under "Not Carried".  Unless the game mode's
+    /// clothing encumbrance rule is on, one of the first clothing worn
+    /// (equipped, holding nothing) weighs nothing.
     pub fn carried_weight(&self) -> f64 {
         let sets = self.ch.equipped();
         let not_carried: Vec<String> = sets
@@ -370,6 +379,7 @@ impl<'a> Calc<'a> {
             .filter(|e| e.location.eq_ignore_ascii_case("Not Carried"))
             .map(|e| format!("{}.", e.id))
             .collect();
+        let mut free_clothing = !self.rule("CLOTHINGENCUMBRANCE");
         let mut total = 0.0;
         for e in &sets {
             if e.location.eq_ignore_ascii_case("Not Carried")
@@ -383,17 +393,28 @@ impl<'a> Calc<'a> {
                 .pcg
                 .lines_tagged("EQUIPNAME")
                 .find(|l| l.head().is_some_and(|h| h.value_text() == *item));
+            let data = line.and_then(|l| super::equip::EqItem::from_pcg(self, l));
             // the saved weight, else the item's own (files written by
             // other tools may leave WT out)
             let wt: f64 = line
                 .and_then(|l| l.text("WT"))
                 .and_then(|w| w.parse().ok())
-                .or_else(|| {
-                    line.and_then(|l| super::equip::EqItem::from_pcg(self, l))
-                        .map(|it| it.weight(self))
-                })
+                .or_else(|| data.as_ref().map(|it| it.weight(self)))
                 .unwrap_or(0.0);
-            total += wt * e.quantity.unwrap_or(1.0);
+            let mut qty = e.quantity.unwrap_or(1.0);
+            // worn: at the top of the set, not in a container
+            let worn = e.id.split('.').count() == 3
+                && !e.location.to_ascii_lowercase().starts_with("carried");
+            let holds = sets.iter().any(|x| x.id.starts_with(&format!("{}.", e.id)));
+            if free_clothing
+                && worn
+                && !holds
+                && data.as_ref().is_some_and(|it| it.is_type(self, "CLOTHING"))
+            {
+                free_clothing = false;
+                qty = (qty - 1.0).max(0.0);
+            }
+            total += wt * qty;
         }
         total
     }
@@ -878,11 +899,17 @@ impl<'a> Calc<'a> {
     fn class_type(&self, cls: &Object) -> Option<&'a crate::gamemode::GmLine> {
         let g = self.gm?;
         let rows = || g.lines("miscinfo.lst", "CLASSTYPE");
-        if let Some(t) = cls.values("FACT").find_map(|v| {
-            let (k, val) = v.split_once('|')?;
-            k.eq_ignore_ascii_case("ClassType").then_some(val)
-        }) {
-            return rows().find(|l| l.value.eq_ignore_ascii_case(t));
+        // the ClassType fact, when it names a row; else the types
+        if let Some(row) = cls
+            .values("FACT")
+            .filter_map(|v| {
+                let (k, val) = v.split_once('|')?;
+                k.eq_ignore_ascii_case("ClassType").then_some(val)
+            })
+            .last()
+            .and_then(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
+        {
+            return Some(row);
         }
         cls.types()
             .iter()

@@ -1,6 +1,8 @@
 name: Rust
 
-on: [push]
+on:
+  push:
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,6 +22,41 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Docs
+      run: cargo doc --no-deps
+      env:
+        RUSTDOCFLAGS: -D warnings
+    - name: Package
+      run: cargo package --locked
+
+  # Build and test on the other desktop platforms.
+  platforms:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose --locked
+    - name: Run tests
+      run: cargo test --verbose --locked
+
+  # The oldest Rust release supported (rust-version in Cargo.toml).
+  msrv:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.95
+      run: rustup toolchain install 1.95 --profile minimal
+    - name: Build and test
+      run: cargo +1.95 test --locked
 
   # The same tests against real PCGen data: every campaign loads, data
   # files round-trip, and character sheets match the expected sheets.

@@ -1,24 +1,51 @@
 # pcgtools
 
 A Rust library and command line tool for the data files of the
-[PCGen](http://pcgen.org) character generator:
+[PCGen](https://pcgen.org) character generator:
 
 * **PCC** campaign files and **LST** data files — parse, resolve,
   load into a merged dataset, query, lint, edit and reformat;
 * **game mode** system files;
-* **PCG** character files — read, write, compute derived statistics,
-  and edit through an interactive or scripted character editor.
+* **PCG** character files — read, write, compute derived statistics
+  and full character sheets, and edit through an interactive or
+  scripted character editor.
 
 Files are read and written losslessly: unmodified bytes (alignment
 TABs, comments, line endings, odd encodings) survive a round trip.
 
-[docs/FORMAT.md](docs/FORMAT.md) describes all of these formats.
+[FORMAT.md](FORMAT.md) describes all of these formats.
+[CHANGELOG.md](CHANGELOG.md) lists what each release brings.
 
-## Building
+pcgtools is an independent project, not affiliated with or endorsed
+by the PCGen project. It ships no game data.
 
-    cargo build --release
+## Installing
 
-The binary is `target/release/pcgtools`.
+With a Rust toolchain (1.95 or newer):
+
+    cargo install pcgtools
+
+or from a checkout:
+
+    cargo build --release      # binary: target/release/pcgtools
+
+The library is the `pcgtools` crate; its API documentation is on
+[docs.rs](https://docs.rs/pcgtools).
+
+## Getting data
+
+pcgtools works on PCGen data you already have: a PCGen installation
+(its `data/`, `system/`, `vendordata/` and `homebrewdata/`
+directories), a checkout of PCGen's source repository, or your own
+homebrew files. Characters need the game mode and campaigns they were
+made with. Game data is subject to the licenses of its publishers;
+pcgtools does not include or redistribute any.
+
+A first look:
+
+    pcgtools --pcgen-root ~/pcgen campaigns ~/pcgen/data -g 35e
+    pcgtools --pcgen-root ~/pcgen pcg stats HERO.pcg
+    pcgtools --pcgen-root ~/pcgen pcg sheet HERO.pcg > hero.xml
 
 ## Data locations
 
@@ -185,7 +212,7 @@ and print the differences.
 Continuous integration runs both: the plain test suite, and the corpus
 tests against PCGen data checked out at a pinned revision.
 
-`tools/gen_catalog.py PCGEN_ROOT > src/catalog/tags.tsv` regenerates
+`python3 gen_catalog.py PCGEN_ROOT > src/catalog/tags.tsv` regenerates
 the tag catalog. It records facts only: tag names, where they are
 valid, and whether they are deprecated.
 
@@ -193,3 +220,17 @@ valid, and whether they are deprecated.
 
 * Version 1 character files (from very old releases) are not read.
 * Network (`http:`) file references are not fetched.
+
+## Contributing
+
+Bug reports and pull requests are welcome at
+<https://github.com/jgarzik/pcgtools>. For a wrong statistic or sheet
+value, please include the character file and the campaigns it uses.
+Before submitting a change, run `cargo fmt`, `cargo clippy
+--all-targets -- -D warnings` and `cargo test` (with `PCGEN_ROOT` set,
+if you can). Contributions must be your own work: do not copy code
+or documentation from other projects.
+
+## License
+
+MIT; see [LICENSE](LICENSE).

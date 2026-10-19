@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2024 Jeff Garzik
 //
-// This file is part of the pcgtoolssoftware project covered under
+// This file is part of the pcgtools software project covered under
 // the MIT License.  For the full license text, please see the LICENSE
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
@@ -12,6 +12,7 @@
 //! reading, writing, and comparison by flattened paths.
 
 use crate::error::{Error, Result};
+use quick_xml::escape::{resolve_predefined_entity, unescape};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::Serialize;
@@ -78,13 +79,13 @@ impl Element {
         loop {
             match reader.read_event() {
                 Ok(Event::Start(e)) => {
-                    let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                    let tag = e.name().as_ref().to_string();
                     let mut el = Element::new(&tag);
                     el.attrs = attributes(&e)?;
                     stack.push(el);
                 }
                 Ok(Event::Empty(e)) => {
-                    let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                    let tag = e.name().as_ref().to_string();
                     let mut el = Element::new(&tag);
                     el.attrs = attributes(&e)?;
                     stack.last_mut().unwrap().children.push(el);
@@ -97,14 +98,23 @@ impl Element {
                     }
                 }
                 Ok(Event::Text(t)) => {
-                    let s = t
-                        .unescape()
-                        .map_err(|e| Error::Other(format!("XML text: {}", e)))?;
-                    stack.last_mut().unwrap().text.push_str(&s);
+                    stack.last_mut().unwrap().text.push_str(&t.xml10_content());
+                }
+                // character and entity references come between text runs
+                Ok(Event::GeneralRef(r)) => {
+                    let text = match r.resolve_char_ref() {
+                        Ok(Some(c)) => c.to_string(),
+                        Ok(None) => resolve_predefined_entity(&r)
+                            .ok_or_else(|| {
+                                Error::Other(format!("XML text: unknown entity &{};", &*r))
+                            })?
+                            .to_string(),
+                        Err(e) => return Err(Error::Other(format!("XML text: {}", e))),
+                    };
+                    stack.last_mut().unwrap().text.push_str(&text);
                 }
                 Ok(Event::CData(t)) => {
-                    let s = String::from_utf8_lossy(&t).into_owned();
-                    stack.last_mut().unwrap().text.push_str(&s);
+                    stack.last_mut().unwrap().text.push_str(&t.xml10_content());
                 }
                 Ok(Event::Eof) => break,
                 Ok(_) => {}
@@ -217,9 +227,8 @@ fn attributes(e: &quick_xml::events::BytesStart) -> Result<Vec<(String, String)>
     let mut out = Vec::new();
     for a in e.attributes() {
         let a = a.map_err(|x| Error::Other(format!("XML attribute: {}", x)))?;
-        let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
-        let v = a
-            .unescape_value()
+        let k = a.key.as_ref().to_string();
+        let v = unescape(&a.value)
             .map_err(|x| Error::Other(format!("XML attribute: {}", x)))?
             .into_owned();
         out.push((k, v));
@@ -291,6 +300,23 @@ mod tests {
         assert_eq!(get("character/basics[Tess]/face[0]/face[0]"), Some("5 ft."));
         assert_eq!(get("character/skills[0]/skill[Swim]/ranks[0]"), Some("0.0"));
         assert_eq!(get("character/empty[0]"), Some(""));
+    }
+
+    #[test]
+    fn entities_and_cdata() {
+        let e = Element::parse_xml(
+            "<r a=\"x &amp; &#x41;\"><t>Tom &amp; Jerry &lt;3 &#65;&#x42; &quot;q&quot;</t><c><![CDATA[a & <b>]]></c></r>",
+        )
+        .unwrap();
+        assert_eq!(e.attrs, vec![("a".to_string(), "x & A".to_string())]);
+        assert_eq!(e.child("t").unwrap().text, "Tom & Jerry <3 AB \"q\"");
+        assert_eq!(e.child("c").unwrap().text, "a & <b>");
+        assert!(Element::parse_xml("<r>&bogus;</r>").is_err());
+        // escaped text survives writing and reading back
+        assert_eq!(
+            Element::parse_xml(&e.to_xml()).unwrap().children,
+            e.children
+        );
     }
 
     #[test]

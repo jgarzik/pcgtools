@@ -1,21 +1,34 @@
 [package]
 name = "pcgtools"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Jeff Garzik"]
-description = "Read, query, edit and write PCGen data and character files"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Read, query, lint, edit and write PCGen data and character files; compute character sheets"
+repository = "https://github.com/jgarzik/pcgtools"
+homepage = "https://github.com/jgarzik/pcgtools"
+readme = "README.md"
+keywords = ["pcgen", "rpg", "ttrpg", "character-sheet", "tabletop"]
+categories = ["command-line-utilities", "parser-implementations", "games"]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/FORMAT.md",
+    "/gen_catalog.py",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11"
 globset = "0.4.20"
 log = "0.4"
-quick-xml = "0.37"
+quick-xml = "0.42"
 regex = "1.13.1"
-rustyline = "15"
+rustyline = "19"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0.21"

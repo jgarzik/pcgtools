@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2024 Jeff Garzik
 //
-// This file is part of the pcgtoolssoftware project covered under
+// This file is part of the pcgtools software project covered under
 // the MIT License.  For the full license text, please see the LICENSE
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
@@ -114,7 +114,7 @@ pub struct Sheet {
     pub skills: BTreeMap<String, i64>,
     pub armor_check: i64,
     pub abilities: Vec<String>,
-    /// equipped items: "location: item [eqmods]"
+    /// equipped items: `location: item [eqmods]`
     pub equipped: Vec<String>,
     pub passes: usize,
     /// names evaluated as zero because nothing defines them

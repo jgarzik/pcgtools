@@ -14,6 +14,7 @@ use std::fmt;
 /// The kind of an LST data file, named by the PCC tag that loads it.
 /// Variants are declared in load order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum FileKind {
     DataControl,
     DataTable,
@@ -183,5 +184,12 @@ mod tests {
         assert_eq!(FileKind::from_name("eqmod"), Some(FileKind::EquipMod));
         assert_eq!(FileKind::from_name("spell"), Some(FileKind::Spell));
         assert_eq!(FileKind::from_tag("PCC"), None);
+        // serialized names are the PCC tags
+        for k in FileKind::ALL {
+            assert_eq!(
+                serde_json::to_string(&k).unwrap(),
+                format!("\"{}\"", k.tag())
+            );
+        }
     }
 }

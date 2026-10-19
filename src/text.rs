@@ -197,4 +197,33 @@ mod tests {
         assert_eq!(TextFile::decode(b"a\r\nb\r\nc\n").dominant_eol(), Eol::CrLf);
         assert_eq!(TextFile::decode(b"a\nb").dominant_eol(), Eol::Lf);
     }
+
+    #[test]
+    fn eol_table() {
+        let cases: &[(&[u8], &[Eol])] = &[
+            (b"a", &[Eol::None]),
+            (b"a\n", &[Eol::Lf]),
+            (b"a\r\n", &[Eol::CrLf]),
+            (b"a\r", &[Eol::Cr]),
+            (b"\r\n\r\n", &[Eol::CrLf, Eol::CrLf]),
+            (b"\r\r\n", &[Eol::Cr, Eol::CrLf]),
+            (b"\n\r", &[Eol::Lf, Eol::Cr]),
+        ];
+        for (bytes, eols) in cases {
+            let tf = TextFile::decode(bytes);
+            let got: Vec<Eol> = tf.lines.iter().map(|l| l.eol).collect();
+            assert_eq!(&got, eols, "{:?}", bytes);
+        }
+    }
+
+    #[test]
+    fn latin1_edit_reencodes() {
+        let mut tf = TextFile::decode(b"caf\xe9\n");
+        assert!(tf.has_latin1());
+        tf.lines[0].text.push('!');
+        assert_eq!(tf.encode(), b"caf\xe9!\n");
+        // a char outside Latin-1 forces UTF-8 for that line
+        tf.lines[0].text.push('\u{2014}');
+        assert_eq!(tf.encode(), "café!\u{2014}\n".as_bytes());
+    }
 }

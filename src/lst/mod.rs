@@ -8,6 +8,7 @@
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
 
+pub mod edit;
 pub mod grammar;
 pub mod kind;
 pub mod line;

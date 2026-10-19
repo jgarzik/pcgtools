@@ -193,7 +193,8 @@ fn lex(s: &str) -> Result<Vec<(usize, Tok)>, FormulaError> {
             out.push((pos, Tok::Str(v)));
             continue;
         }
-        if c.is_alphanumeric() || c == '_' || c == '%' {
+        let pct_name = c == '%' && b.get(i + 1).is_some_and(|x| x.1.is_alphabetic());
+        if c.is_alphanumeric() || c == '_' || pct_name {
             let start = i;
             while i < b.len() && is_name_char(b[i].1) {
                 i += 1;
@@ -654,5 +655,152 @@ mod tests {
             assert_eq!(canon(&once), once, "{}", s);
             assert_eq!(Expr::parse(&once).unwrap(), Expr::parse(s).unwrap());
         }
+    }
+
+    /// (input, canonical output) pairs
+    const CANON: &[(&str, &str)] = &[
+        ("0", "0"),
+        ("42", "42"),
+        ("1.5", "1.5"),
+        (".5", "0.5"),
+        ("007", "7"),
+        ("  3  ", "3"),
+        ("STR", "STR"),
+        ("Var_Name2", "Var_Name2"),
+        ("a+b", "a+b"),
+        ("a - b", "a-b"),
+        ("a*b/c", "a*b/c"),
+        ("a/(b*c)", "a/(b*c)"),
+        ("a-(b+c)", "a-(b+c)"),
+        ("(a-b)+c", "a-b+c"),
+        ("a%3", "a%3"),
+        ("(a+b)%3", "(a+b)%3"),
+        ("-a", "-a"),
+        ("--a", "-(-a)"),
+        ("+a", "+a"),
+        ("!a", "!a"),
+        ("!(a&&b)", "!(a&&b)"),
+        ("-(a+b)", "-(a+b)"),
+        ("a*-b", "a*-b"),
+        ("a<b", "a<b"),
+        ("a<=b", "a<=b"),
+        ("a>b", "a>b"),
+        ("a>=b", "a>=b"),
+        ("a==b", "a==b"),
+        ("a!=b", "a!=b"),
+        ("a=b", "a=b"),
+        ("a&&b||c", "a&&b||c"),
+        ("a&&(b||c)", "a&&(b||c)"),
+        ("a||b&&c", "a||b&&c"),
+        ("(a||b)&&c", "(a||b)&&c"),
+        ("a<b==c<d", "a<b==c<d"),
+        ("(a==b)<c", "(a==b)<c"),
+        ("a+b<c*d", "a+b<c*d"),
+        ("2^10", "2^10"),
+        ("a*b^2", "a*b^2"),
+        ("(a*b)^2", "(a*b)^2"),
+        ("f()", "f()"),
+        ("f(1)", "f(1)"),
+        ("f(1, 2 ,3)", "f(1,2,3)"),
+        ("f(g(h(x)))", "f(g(h(x)))"),
+        ("max(0,min(4,x))", "max(0,min(4,x))"),
+        ("if(a>1,b,c)+1", "if(a>1,b,c)+1"),
+        ("floor(x/2)*2", "floor(x/2)*2"),
+        ("\"str\"", "\"str\""),
+        ("var(\"CL=Mage\")", "var(\"CL=Mage\")"),
+        ("f(\"a,b\",\"(c)\")", "f(\"a,b\",\"(c)\")"),
+        ("CL=Mage", "CL=Mage"),
+        ("CL=Mage+1", "CL=Mage+1"),
+        ("CL=Mage*2", "CL=Mage*2"),
+        ("CL=Old Mage-1", "CL=Old Mage-1"),
+        ("COUNT[FEATS.ALL]", "COUNT[FEATS.ALL]"),
+        ("COUNT[FEATTYPE=A]/2", "COUNT[FEATTYPE=A]/2"),
+        ("COUNT[X[Y]]", "COUNT[X[Y]]"),
+        ("SKILL.Ride.RANK", "SKILL.Ride.RANK"),
+        ("Var~1", "Var~1"),
+        ("%LIST", "%LIST"),
+        ("%CHOICE+1", "%CHOICE+1"),
+        ("1stLevel", "1stLevel"),
+        ("x.TRUNC", "x.TRUNC"),
+        ("(x).TRUNC", "TRUNC(x)"),
+        ("(x).INTVAL+1", "INTVAL(x)+1"),
+        ("(a)MAX1", "max(a,1)"),
+        ("(a)MIN(b)", "min(a,b)"),
+        ("(a)max0+1", "max(a,0)+1"),
+        ("((a,b,c))", "(a,b,c)"),
+    ];
+
+    #[test]
+    fn canonical_table() {
+        for (input, want) in CANON {
+            let got = Expr::parse(input)
+                .unwrap_or_else(|e| panic!("{:?}: {}", input, e))
+                .to_string();
+            assert_eq!(&got, want, "input {:?}", input);
+            // canonical output re-parses to the same tree
+            assert_eq!(
+                Expr::parse(&got).unwrap(),
+                Expr::parse(input).unwrap(),
+                "reparse {:?}",
+                input
+            );
+        }
+    }
+
+    const BAD: &[&str] = &[
+        "", " ", "+", "a+", "*a", "a**b", "(", ")", "()", "(a", "a)", "f(", "f(a", "f(a,", "f(,a)",
+        "a b", "1 2", "\"x", "COUNT[x", "a $ b", "a ; b", "a,b",
+    ];
+
+    #[test]
+    fn rejects_table() {
+        for input in BAD {
+            assert!(Expr::parse(input).is_err(), "accepted {:?}", input);
+        }
+    }
+
+    #[test]
+    fn tree_shapes() {
+        use BinOp::*;
+        let v = |s: &str| Box::new(Expr::Var(s.into()));
+        let n = |x: f64| Box::new(Expr::Num(x));
+        assert_eq!(
+            Expr::parse("a+b*c").unwrap(),
+            Expr::Binary(Add, v("a"), Box::new(Expr::Binary(Mul, v("b"), v("c"))))
+        );
+        assert_eq!(
+            Expr::parse("a-b-c").unwrap(),
+            Expr::Binary(Sub, Box::new(Expr::Binary(Sub, v("a"), v("b"))), v("c"))
+        );
+        assert_eq!(
+            Expr::parse("2^3^2").unwrap(),
+            Expr::Binary(Pow, n(2.0), Box::new(Expr::Binary(Pow, n(3.0), n(2.0))))
+        );
+        assert_eq!(
+            Expr::parse("-a^2").unwrap(),
+            Expr::Unary(UnOp::Neg, Box::new(Expr::Binary(Pow, v("a"), n(2.0))))
+        );
+        assert_eq!(
+            Expr::parse("a&b").unwrap(),
+            Expr::Binary(And, v("a"), v("b"))
+        );
+        assert_eq!(
+            Expr::parse("f(a)").unwrap(),
+            Expr::Call("f".into(), vec![Expr::Var("a".into())])
+        );
+        assert_eq!(Expr::parse("\"q\\\"x\"").unwrap(), Expr::Str("q\"x".into()));
+    }
+
+    #[test]
+    fn vars_listed() {
+        let e = Expr::parse("max(STR,DEX)+CL=Mage*COUNT[X]-f(\"s\",HD)").unwrap();
+        assert_eq!(e.vars(), vec!["STR", "DEX", "CL=Mage", "COUNT[X]", "HD"]);
+    }
+
+    #[test]
+    fn error_positions() {
+        assert_eq!(Expr::parse("a+").unwrap_err().pos, 2);
+        assert_eq!(Expr::parse("a $").unwrap_err().pos, 2);
+        assert_eq!(Expr::parse("(a").unwrap_err().pos, 2);
     }
 }

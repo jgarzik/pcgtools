@@ -4,8 +4,6 @@
 // run only when PCGEN_ROOT is set (e.g. PCGEN_ROOT=~/tmp/repo/pcg) and
 // silently pass otherwise.
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 

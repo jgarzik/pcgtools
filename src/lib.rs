@@ -15,10 +15,13 @@
 //! See `docs/FORMAT.md` for a description of the file formats.
 
 pub mod campaign;
+pub mod catalog;
 pub mod dataset;
 pub mod error;
+pub mod lint;
 pub mod lst;
 pub mod pcc;
+pub mod query;
 pub mod text;
 pub mod token;
 

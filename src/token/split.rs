@@ -111,4 +111,51 @@ mod tests {
         assert_eq!(unwrap_group("(a(b)c)", '(', ')'), Some("a(b)c"));
         assert_eq!(unwrap_group("(a)(b)", '(', ')'), None);
     }
+
+    #[test]
+    fn split_table() {
+        let cases: &[(&str, char, &[&str])] = &[
+            ("a", '|', &["a"]),
+            ("a|", '|', &["a", ""]),
+            ("|a", '|', &["", "a"]),
+            ("a||b", '|', &["a", "", "b"]),
+            ("a(b|c)d|e", '|', &["a(b|c)d", "e"]),
+            ("[a,b],c", ',', &["[a,b]", "c"]),
+            ("((a,b)),c", ',', &["((a,b))", "c"]),
+            ("a[b(c,d)e]f,g", ',', &["a[b(c,d)e]f", "g"]),
+            ("a(b,c", ',', &["a(b,c"]),
+            ("é|ü", '|', &["é", "ü"]),
+        ];
+        for (s, sep, want) in cases {
+            assert_eq!(&split_top(s, *sep), want, "{:?}", s);
+        }
+    }
+
+    #[test]
+    fn split_once_table() {
+        assert_eq!(split_once_top("a|b", '|'), Some(("a", "b")));
+        assert_eq!(split_once_top("(a|b)", '|'), None);
+        assert_eq!(split_once_top("|", '|'), Some(("", "")));
+        assert_eq!(split_once_top("", '|'), None);
+    }
+
+    #[test]
+    fn balance_table() {
+        for s in ["", "()", "[]", "([])", "a(b)c[d]", "[(x)(y)]"] {
+            assert!(is_balanced(s), "{}", s);
+        }
+        for s in ["(", ")", "[", "]", "(]", "[)", "([)]", "())"] {
+            assert!(!is_balanced(s), "{}", s);
+        }
+    }
+
+    #[test]
+    fn unwrap_table() {
+        assert_eq!(unwrap_group("[x]", '[', ']'), Some("x"));
+        assert_eq!(unwrap_group("[]", '[', ']'), Some(""));
+        assert_eq!(unwrap_group("[[x]]", '[', ']'), Some("[x]"));
+        assert_eq!(unwrap_group("[x][y]", '[', ']'), None);
+        assert_eq!(unwrap_group("x", '[', ']'), None);
+        assert_eq!(unwrap_group("[x", '[', ']'), None);
+    }
 }

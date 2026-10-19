@@ -134,4 +134,62 @@ mod tests {
         let b = Bonus::parse("SKILL|Climb,Swim|DEX-STR").unwrap();
         assert_eq!(b.bonus_type(), None);
     }
+
+    const ROUNDTRIP: &[&str] = &[
+        "COMBAT|AC|2|TYPE=Armor",
+        "COMBAT|TOHIT|1",
+        "COMBAT|TOHIT,DAMAGE|1|TYPE=Morale",
+        "COMBAT|BASEAB|CL*3/4|TYPE=Base.REPLACE",
+        "SAVE|Fortitude,Reflex,Will|1|TYPE=Resistance",
+        "SAVE|BASE.Fortitude|CL/2+2",
+        "SKILL|Climb,Swim|DEX-STR",
+        "SKILL|TYPE=Craft|2|TYPE=Competence",
+        "SKILL|%LIST|2",
+        "STAT|STR,CON|2|TYPE=Enhancement",
+        "VAR|SneakAttack|(CL+1)/2",
+        "VAR|A,B,C|1|PRECLASS:1,Rogue=3",
+        "HP|CURRENTMAX|8*CL",
+        "MOVEADD|TYPE.Walk|10|PREVARLT:Encumbrance,1",
+        "WEAPONPROF=Club|TOHIT|1",
+        "ABILITYPOOL|Feat|1",
+        "CASTERLEVEL|Mage|1",
+        "SPELLCAST|CLASS=Mage;LEVEL=1|1",
+        "SIZEMOD|NUMBER|1",
+        "DC|ALLSPELLS|1|TYPE=Insight",
+        "COMBAT|AC|1|TYPE=Dodge.STACK|!PREABILITY:1,CATEGORY=FEAT,Dodge",
+        "COMBAT|AC|1|PREMULT:1,[PRERACE:1,Elf],[PRERACE:1,Gnome]|TYPE=Racial",
+        "VAR|X|if(Y>=5,2,1)",
+        "VAR|X|max(0,min(4,Y))",
+        "SKILL|Knowledge (Arcana),Knowledge (Planes)|2",
+        "VAR|Y|1|SOMETHINGELSE",
+    ];
+
+    #[test]
+    fn roundtrip_table() {
+        for s in ROUNDTRIP {
+            let b = Bonus::parse(s).unwrap_or_else(|e| panic!("{}: {}", s, e));
+            assert_eq!(&b.to_string(), s);
+        }
+    }
+
+    #[test]
+    fn fields() {
+        let b = Bonus::parse("SKILL|Knowledge (Arcana),Knowledge (Planes)|2").unwrap();
+        assert_eq!(b.targets, vec!["Knowledge (Arcana)", "Knowledge (Planes)"]);
+        let b = Bonus::parse("COMBAT|BASEAB|CL|TYPE=Base.REPLACE").unwrap();
+        assert_eq!(b.bonus_type(), Some(("Base", Some("REPLACE"))));
+        let b = Bonus::parse("COMBAT|AC|1|TYPE=Natural.Armor").unwrap();
+        assert_eq!(b.bonus_type(), Some(("Natural.Armor", None)));
+        let b = Bonus::parse("VAR|Y|1|SOMETHINGELSE").unwrap();
+        assert_eq!(b.opts, vec![BonusOpt::Other("SOMETHINGELSE".into())]);
+        let b = Bonus::parse("VAR|Y|1|PREBAD").unwrap();
+        assert_eq!(b.opts, vec![BonusOpt::Other("PREBAD".into())]);
+    }
+
+    #[test]
+    fn rejects() {
+        for s in ["", "VAR", "VAR|X", "|X"] {
+            assert!(Bonus::parse(s).is_err(), "accepted {:?}", s);
+        }
+    }
 }

@@ -222,4 +222,103 @@ mod tests {
         let r = classify(FileKind::Ability, "CATEGORY=FEAT|Dodge.MOD");
         assert_eq!(obj(&r).1.category.as_deref(), Some("FEAT"));
     }
+
+    #[test]
+    fn role_table() {
+        let sub = |t: &str, v: &str| Role::Sub {
+            tag: t.into(),
+            value: v.into(),
+        };
+        let cases: &[(FileKind, &str, Role)] = &[
+            (FileKind::Class, "10", sub("LEVEL", "10")),
+            (
+                FileKind::Class,
+                "2:REPEATLEVEL:4|SKIP=1|MAX=20",
+                sub("LEVEL", "2:REPEATLEVEL:4|SKIP=1|MAX=20"),
+            ),
+            (
+                FileKind::Class,
+                "SUBSTITUTIONLEVEL:3",
+                Role::ChildSub {
+                    tag: "SUBSTITUTIONLEVEL".into(),
+                    value: "3".into(),
+                },
+            ),
+            (
+                FileKind::Class,
+                "SUBSTITUTIONCLASS:Alt",
+                Role::Child {
+                    head_tag: "SUBSTITUTIONCLASS".into(),
+                    name: "Alt".into(),
+                },
+            ),
+            (FileKind::Kit, "REGION:None", sub("REGION", "None")),
+            (FileKind::Kit, "NAME:Bob", sub("NAME", "Bob")),
+            (FileKind::BioSet, "RACENAME:Elf%", sub("RACENAME", "Elf%")),
+        ];
+        for (k, head, want) in cases {
+            assert_eq!(&classify(*k, head), want, "{} {:?}", k, head);
+        }
+    }
+
+    #[test]
+    fn object_heads() {
+        let cases: &[(FileKind, &str, Option<&str>, &str)] = &[
+            (
+                FileKind::BioSet,
+                "AGESET:0|Young",
+                Some("AGESET"),
+                "0|Young",
+            ),
+            (
+                FileKind::CompanionMod,
+                "FOLLOWER:Pet=1",
+                Some("FOLLOWER"),
+                "Pet=1",
+            ),
+            (
+                FileKind::CompanionMod,
+                "MASTERBONUSRACE:Imp",
+                Some("MASTERBONUSRACE"),
+                "Imp",
+            ),
+            (
+                FileKind::AbilityCategory,
+                "ABILITYCATEGORY:Feat",
+                Some("ABILITYCATEGORY"),
+                "Feat",
+            ),
+            (
+                FileKind::GlobalModifier,
+                "MODIFY:X|ADD|1",
+                Some("MODIFY"),
+                "X|ADD|1",
+            ),
+            (FileKind::Dynamic, "MOVEMENT:Walk", Some("MOVEMENT"), "Walk"),
+            (
+                FileKind::Variable,
+                "GLOBAL:NUMBER=X",
+                Some("GLOBAL"),
+                "NUMBER=X",
+            ),
+            (
+                FileKind::DataControl,
+                "FUNCTION:d20Mod",
+                Some("FUNCTION"),
+                "d20Mod",
+            ),
+            (FileKind::Deity, "DEITY:Sun God", Some("DEITY"), "Sun God"),
+            (FileKind::Race, "Elf", None, "Elf"),
+            (FileKind::Race, "Elf (Wood)", None, "Elf (Wood)"),
+        ];
+        for (k, head, tag, name) in cases {
+            match classify(*k, head) {
+                Role::Object { head_tag, head: h } => {
+                    assert_eq!(head_tag.as_deref(), *tag, "{:?}", head);
+                    assert_eq!(h.name, *name, "{:?}", head);
+                }
+                other => panic!("{:?}: {:?}", head, other),
+            }
+        }
+    }
 }

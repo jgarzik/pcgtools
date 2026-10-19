@@ -1,6 +1,6 @@
 // Corpus tests: run against real PCGen data when PCGEN_ROOT is set.
 
-mod common;
+use crate::common;
 
 use pcgtools::text::TextFile;
 
@@ -207,5 +207,45 @@ fn corpus_token_syntax() {
     assert!(
         bonus.1 * 1000 >= bonus.0 * 999,
         "BONUS round-trip below 99.9%"
+    );
+}
+
+#[test]
+fn corpus_lint_unknown_tags() {
+    use pcgtools::campaign::{LoadPlan, Registry};
+    use pcgtools::lint::{lint_lst, LintOptions};
+    use pcgtools::lst::LstFile;
+    use pcgtools::pcc::resolve::DataDirs;
+
+    let Some(root) = common::corpus_path("pcgen") else {
+        return;
+    };
+    let mut reg = Registry::new(DataDirs::from_install(&root));
+    let plan = LoadPlan::build(
+        &mut reg,
+        &[root.join("data/pathfinder/paizo/pathfinder_rpg_core.pcc")],
+    );
+    let opts = LintOptions {
+        unknown_tags: true,
+        deprecated: false,
+        formulas: false,
+    };
+    let (mut tokens, mut unknown) = (0usize, 0usize);
+    for pf in plan.ordered() {
+        let lf = LstFile::read(&pf.path).unwrap();
+        tokens += lf.lines.iter().map(|l| l.tokens().len()).sum::<usize>();
+        unknown += lint_lst(&pf.path, pf.kind, &lf, &opts)
+            .items
+            .iter()
+            .filter(|d| d.message.starts_with("unknown tag"))
+            .count();
+    }
+    eprintln!("lint: {} unknown tags in {} tokens", unknown, tokens);
+    // the catalog should recognize essentially every tag in shipped data
+    assert!(
+        unknown * 10000 < tokens,
+        "{} unknown of {}",
+        unknown,
+        tokens
     );
 }

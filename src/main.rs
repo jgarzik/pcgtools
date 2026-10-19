@@ -118,6 +118,120 @@ enum Command {
         key: String,
     },
 
+    /// Find objects matching conditions
+    Query {
+        /// Selected PCC files
+        #[arg(short, long = "pcc", required = true)]
+        pcc: Vec<PathBuf>,
+
+        /// Object kind (SPELL, CLASS, ABILITY, ...)
+        kind: String,
+
+        /// Conditions: TAG, !TAG, TAG=value, TAG~regex, TYPE=type
+        conds: Vec<String>,
+
+        /// Glob on object key or name (case-insensitive)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Comma-separated tags to print for each match
+        #[arg(short, long)]
+        fields: Option<String>,
+
+        /// Print only the number of matches
+        #[arg(short, long)]
+        count: bool,
+    },
+
+    /// Edit one object in an LST file, preserving all other bytes
+    Edit {
+        /// LST file
+        file: PathBuf,
+
+        /// Object name (record head)
+        object: String,
+
+        /// Replace all TAG tokens with TAG:value
+        #[arg(long, value_name = "TAG:VALUE")]
+        set: Vec<String>,
+
+        /// Append TAG:value
+        #[arg(long, value_name = "TAG:VALUE")]
+        add: Vec<String>,
+
+        /// Remove all tokens with this tag
+        #[arg(long, value_name = "TAG")]
+        remove: Vec<String>,
+
+        /// Rename the object (keeps .MOD/.COPY suffixes)
+        #[arg(long)]
+        rename: Option<String>,
+
+        /// Delete the record
+        #[arg(long)]
+        delete: bool,
+
+        /// Also match .MOD/.COPY/.FORGET records
+        #[arg(long)]
+        any_op: bool,
+
+        /// Write the result here instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Modify the file in place
+        #[arg(short, long)]
+        in_place: bool,
+    },
+
+    /// Rewrite files in canonical layout
+    Fmt {
+        /// LST or PCC files
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Report files that are not canonical; exit 1 if any
+        #[arg(long)]
+        check: bool,
+
+        /// Rewrite files in place
+        #[arg(short, long)]
+        write: bool,
+    },
+
+    /// Check data files for problems
+    Lint {
+        /// PCC files (or LST files with --kind)
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Treat the arguments as LST files of this kind
+        #[arg(short, long)]
+        kind: Option<String>,
+
+        /// Print counts per problem type instead of each problem
+        #[arg(short, long)]
+        summary: bool,
+
+        /// Do not report unknown tags
+        #[arg(long)]
+        no_unknown: bool,
+
+        /// Do not check formulas
+        #[arg(long)]
+        no_formulas: bool,
+
+        /// Minimum severity to report: info, warning, error
+        #[arg(long, default_value = "info")]
+        min: String,
+    },
+
+    /// List known tags from the built-in catalog
+    Tags {
+        /// Only this scope (a file kind, GLOBAL, PRE, BONUS, CLASSLEVEL, ...)
+        scope: Option<String>,
+    },
+
     /// Parse a data file and print its syntax tree as JSON
     Parse {
         /// File to parse
@@ -145,6 +259,81 @@ fn main() -> ExitCode {
         Command::Load { pcc, quiet } => cmd::data::load(o, pcc, *quiet),
         Command::Dump { pcc } => cmd::data::dump(o, pcc),
         Command::Show { pcc, kind, key } => cmd::data::show(o, pcc, kind, key),
+        Command::Lint {
+            files,
+            kind,
+            summary,
+            no_unknown,
+            no_formulas,
+            min,
+        } => {
+            let min = match min.as_str() {
+                "error" => pcgtools::Severity::Error,
+                "warning" => pcgtools::Severity::Warning,
+                _ => pcgtools::Severity::Info,
+            };
+            cmd::check::lint(
+                o,
+                cmd::check::LintArgs {
+                    files,
+                    kind: kind.as_deref(),
+                    summary: *summary,
+                    opts: pcgtools::lint::LintOptions {
+                        unknown_tags: !no_unknown,
+                        deprecated: true,
+                        formulas: !no_formulas,
+                    },
+                    min,
+                },
+            )
+        }
+        Command::Query {
+            pcc,
+            kind,
+            conds,
+            name,
+            fields,
+            count,
+        } => cmd::data::query(
+            o,
+            cmd::data::QueryArgs {
+                pcc,
+                kind,
+                name: name.as_deref(),
+                conds,
+                fields: fields.as_deref(),
+                count: *count,
+            },
+        ),
+        Command::Edit {
+            file,
+            object,
+            set,
+            add,
+            remove,
+            rename,
+            delete,
+            any_op,
+            output,
+            in_place,
+        } => cmd::edit::edit(cmd::edit::EditArgs {
+            file,
+            object,
+            set,
+            add,
+            remove,
+            rename: rename.as_deref(),
+            delete: *delete,
+            any_op: *any_op,
+            output: output.as_deref(),
+            in_place: *in_place,
+        }),
+        Command::Fmt {
+            files,
+            check,
+            write,
+        } => cmd::edit::fmt(files, *check, *write),
+        Command::Tags { scope } => cmd::check::tags(o, scope.as_deref()),
         Command::Parse { file } => cmd::misc::parse(file),
         Command::Roundtrip { paths } => cmd::misc::roundtrip(paths),
     };

@@ -482,4 +482,148 @@ Gizmo.FORGET\n";
         f.push_line(LstLine::record(vec!["E".into(), "F:3".into()]));
         assert_eq!(f.encode(), b"A\tB:1\r\nC\tD:2\r\nE\tF:3\r\n");
     }
+
+    #[test]
+    fn classify_table() {
+        use LineKind::*;
+        let cases: &[(&str, LineKind)] = &[
+            ("", Blank),
+            ("   ", Blank),
+            ("\t\t", Blank),
+            ("#", Comment),
+            ("# x\ty", Comment),
+            (" # indented", Continuation),
+            ("\tTAG:x", Continuation),
+            ("SOURCELONG:x", Source),
+            ("SOURCEPAGE:p.1", Source),
+            ("Name", Record),
+            ("Name\tTAG:x", Record),
+            ("CLASS:Mage", Record),
+            ("1\tTAG:x", Record),
+        ];
+        for (s, k) in cases {
+            assert_eq!(LstLine::classify(s), *k, "{:?}", s);
+        }
+    }
+
+    /// (cell, prefix, category, name, op)
+    type HeadCase<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str, HeadOp);
+
+    #[test]
+    fn head_table() {
+        let cases: &[HeadCase] = &[
+            ("Name", None, None, "Name", HeadOp::Define),
+            (" Name ", None, None, "Name", HeadOp::Define),
+            ("Name (Long)", None, None, "Name (Long)", HeadOp::Define),
+            ("Name.MOD", None, None, "Name", HeadOp::Mod),
+            ("Name.FORGET", None, None, "Name", HeadOp::Forget),
+            (
+                "Name.COPY=Other",
+                None,
+                None,
+                "Name",
+                HeadOp::Copy("Other".into()),
+            ),
+            (
+                "Name.COPY=Other (Two)",
+                None,
+                None,
+                "Name",
+                HeadOp::Copy("Other (Two)".into()),
+            ),
+            ("CLASS:Mage", Some("CLASS"), None, "Mage", HeadOp::Define),
+            ("CLASS:Mage.MOD", Some("CLASS"), None, "Mage", HeadOp::Mod),
+            (
+                "CATEGORY=FEAT|Dodge",
+                None,
+                Some("FEAT"),
+                "Dodge",
+                HeadOp::Define,
+            ),
+            (
+                "CATEGORY=Special Ability|Evasion.FORGET",
+                None,
+                Some("Special Ability"),
+                "Evasion",
+                HeadOp::Forget,
+            ),
+            (
+                "CATEGORY=FEAT|A.COPY=B",
+                None,
+                Some("FEAT"),
+                "A",
+                HeadOp::Copy("B".into()),
+            ),
+            ("Ratio 2:1", None, None, "Ratio 2:1", HeadOp::Define),
+            ("lower:case", None, None, "lower:case", HeadOp::Define),
+            (".MOD", None, None, ".MOD", HeadOp::Define),
+            ("CATEGORY=FEAT", None, None, "CATEGORY=FEAT", HeadOp::Define),
+        ];
+        for (cell, prefix, cat, name, op) in cases {
+            let h = Head::parse(cell);
+            assert_eq!(h.prefix.as_deref(), *prefix, "{:?}", cell);
+            assert_eq!(h.category.as_deref(), *cat, "{:?}", cell);
+            assert_eq!(h.name, *name, "{:?}", cell);
+            assert_eq!(&h.op, op, "{:?}", cell);
+        }
+    }
+
+    #[test]
+    fn split_token_table() {
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            ("TAG:v", "TAG", Some("v")),
+            (" TAG:v ", "TAG", Some("v")),
+            ("TAG:", "TAG", Some("")),
+            ("TAG:a:b", "TAG", Some("a:b")),
+            ("TAG", "TAG", None),
+            (":v", "", Some("v")),
+            ("!PREX:1", "!PREX", Some("1")),
+        ];
+        for (cell, tag, val) in cases {
+            assert_eq!(split_token(cell), (*tag, *val), "{:?}", cell);
+        }
+    }
+
+    #[test]
+    fn tag_names() {
+        for t in ["A", "TAG", "PRE_X", "A1"] {
+            assert!(is_tag_name(t), "{}", t);
+        }
+        for t in ["", "a", "Tag", "1A", "_A", "A-B", "A B"] {
+            assert!(!is_tag_name(t), "{}", t);
+        }
+    }
+
+    #[test]
+    fn records_and_orphans() {
+        let f = LstFile::parse("\tORPHAN:1\nA\tX:1\n\tY:2\n# c\n\tZ:3\nSOURCELONG:S\n\tW:4\n");
+        let recs = f.records();
+        assert_eq!(recs.len(), 4);
+        assert_eq!(recs[0].kind(), LineKind::Continuation);
+        assert_eq!(recs[1].lines, vec![1, 2, 4]);
+        assert_eq!(recs[2].kind(), LineKind::Source);
+        // a continuation after a source line is an orphan
+        assert_eq!(recs[3].kind(), LineKind::Continuation);
+        assert_eq!(recs[1].line_no(), 2);
+        let tags: Vec<&str> = recs[1].tokens().iter().map(|t| t.tag).collect();
+        assert_eq!(tags, vec!["X", "Y", "Z"]);
+    }
+
+    #[test]
+    fn roundtrip_odd_inputs() {
+        for s in [
+            "",
+            "\n",
+            "A",
+            "A\t",
+            "\tA",
+            "A\t\t\t",
+            "A\r\nB\rC\nD",
+            "A\tB:1\t \tC:2 \n",
+            "\u{feff}A\n",
+        ] {
+            let f = LstFile::parse(s);
+            assert_eq!(f.encode(), s.as_bytes(), "{:?}", s);
+        }
+    }
 }

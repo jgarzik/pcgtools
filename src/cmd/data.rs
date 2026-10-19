@@ -133,3 +133,59 @@ pub fn show(o: &GlobalOpts, pcc: &[PathBuf], kind: &str, key: &str) -> CmdResult
     }
     Ok(true)
 }
+
+pub struct QueryArgs<'a> {
+    pub pcc: &'a [PathBuf],
+    pub kind: &'a str,
+    pub name: Option<&'a str>,
+    pub conds: &'a [String],
+    pub fields: Option<&'a str>,
+    pub count: bool,
+}
+
+pub fn query(o: &GlobalOpts, a: QueryArgs<'_>) -> CmdResult {
+    let kind = parse_kind(a.kind)?;
+    let q = pcgtools::query::Query::new(a.name, a.conds).map_err(Error::Other)?;
+    let (_, _, ds) = load_dataset(o, a.pcc);
+    let hits: Vec<&Object> = ds.objects(kind).iter().filter(|x| q.matches(x)).collect();
+    let fields: Vec<&str> = a
+        .fields
+        .map(|f| {
+            f.split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if a.count {
+        println!("{}", hits.len());
+    } else if o.json {
+        if fields.is_empty() {
+            print_json(&hits);
+        } else {
+            let rows: Vec<serde_json::Value> = hits
+                .iter()
+                .map(|x| {
+                    let mut m = serde_json::Map::new();
+                    m.insert("key".into(), x.key.clone().into());
+                    for f in &fields {
+                        let v: Vec<&str> = x.values(f).collect();
+                        m.insert(f.to_string(), v.into());
+                    }
+                    serde_json::Value::Object(m)
+                })
+                .collect();
+            print_json(&rows);
+        }
+    } else {
+        for x in &hits {
+            let mut row = vec![x.key.clone()];
+            for f in &fields {
+                row.push(x.values(f).collect::<Vec<_>>().join(" | "));
+            }
+            println!("{}", row.join("\t"));
+        }
+    }
+    Ok(!hits.is_empty())
+}

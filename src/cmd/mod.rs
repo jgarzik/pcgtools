@@ -9,7 +9,9 @@
 // SPDX-License-Identifier: MIT
 
 pub mod campaign;
+pub mod check;
 pub mod data;
+pub mod edit;
 pub mod misc;
 
 use pcgtools::Diagnostics;

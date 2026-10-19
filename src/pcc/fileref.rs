@@ -237,4 +237,97 @@ mod tests {
         let (_, e) = FileRef::parse("sp.lst|junk");
         assert_eq!(e.len(), 1);
     }
+
+    #[test]
+    fn path_table() {
+        let cases: &[(&str, PathBase, &str)] = &[
+            ("@/a/b.lst", PathBase::Data, "a/b.lst"),
+            ("@a/b.lst", PathBase::Data, "a/b.lst"),
+            ("@\\a\\b.lst", PathBase::Data, "a/b.lst"),
+            ("&/v.lst", PathBase::Vendor, "v.lst"),
+            ("$/h.lst", PathBase::Homebrew, "h.lst"),
+            ("*/x/y.lst", PathBase::Any, "x/y.lst"),
+            ("file:/abs/x.lst", PathBase::Uri, "file:/abs/x.lst"),
+            (
+                "https://example.com/x.lst",
+                PathBase::Uri,
+                "https://example.com/x.lst",
+            ),
+            ("data/x.lst", PathBase::LegacyData, "x.lst"),
+            ("/data/x.lst", PathBase::LegacyData, "x.lst"),
+            ("x.lst", PathBase::Local, "x.lst"),
+            ("sub/x.lst", PathBase::Local, "sub/x.lst"),
+            ("../x.lst", PathBase::Local, "../x.lst"),
+            ("  x.lst  ", PathBase::Local, "x.lst"),
+            (
+                "Player's Guide/x.lst",
+                PathBase::Local,
+                "Player's Guide/x.lst",
+            ),
+        ];
+        for (raw, base, rel) in cases {
+            let p = PathSpec::parse(raw);
+            assert_eq!(&p.base, base, "{}", raw);
+            assert_eq!(p.rel, *rel, "{}", raw);
+        }
+    }
+
+    #[test]
+    fn suffix_table() {
+        // (value, filter item count, include?, prereq count, error count)
+        let cases: &[(&str, usize, bool, usize, usize)] = &[
+            ("a.lst", 0, false, 0, 0),
+            ("a.lst|(INCLUDE:X)", 1, true, 0, 0),
+            ("a.lst|(INCLUDE:X|Y|Z)", 3, true, 0, 0),
+            ("a.lst|(EXCLUDE:X|Y)", 2, false, 0, 0),
+            (
+                "a.lst|(INCLUDE:CATEGORY=FEAT,A,B|CATEGORY=Special,C)",
+                3,
+                true,
+                0,
+                0,
+            ),
+            (
+                "a.lst|(INCLUDE:Pick (Heavy)|Sword (Long, Bastard))",
+                2,
+                true,
+                0,
+                0,
+            ),
+            ("a.lst|PRECAMPAIGN:1,X", 0, false, 1, 0),
+            ("a.lst|!PRECAMPAIGN:1,X|PRECAMPAIGN:1,Y", 0, false, 2, 0),
+            ("a.lst|(INCLUDE:X)|PRECAMPAIGN:1,Y", 1, true, 1, 0),
+            ("a.lst|(INCLUDE:X)|(EXCLUDE:Y)", 1, false, 0, 1),
+            ("a.lst|(OTHER:X)", 0, false, 0, 1),
+            ("a.lst|junk", 0, false, 0, 1),
+            ("", 0, false, 0, 1),
+        ];
+        for (v, items, include, pres, errs) in cases {
+            let (r, e) = FileRef::parse(v);
+            assert_eq!(e.len(), *errs, "{} {:?}", v, e);
+            assert_eq!(r.prereqs.len(), *pres, "{}", v);
+            let n = r.filter.as_ref().map(|f| f.items().len()).unwrap_or(0);
+            assert_eq!(n, *items, "{}", v);
+            if *items > 0 {
+                assert_eq!(
+                    matches!(r.filter, Some(Filter::Include(_))),
+                    *include,
+                    "{}",
+                    v
+                );
+            }
+            assert_eq!(r.raw, *v);
+        }
+    }
+
+    #[test]
+    fn admits_categories() {
+        let (r, _) = FileRef::parse("a.lst|(INCLUDE:CATEGORY=FEAT,Dodge|Plain)");
+        let f = r.filter.unwrap();
+        assert!(f.admits(Some("feat"), "Dodge"));
+        assert!(!f.admits(None, "Dodge"));
+        assert!(f.admits(None, "Plain"));
+        assert!(f.admits(Some("Anything"), "Plain"));
+        assert!(!f.admits(Some("FEAT"), "dodge"));
+    }
 }

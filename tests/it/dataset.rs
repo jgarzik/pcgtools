@@ -1,6 +1,6 @@
 // Dataset loading against the synthetic fixture under tests/fixtures/mini.
 
-mod common;
+use crate::common;
 
 use pcgtools::campaign::{LoadPlan, Registry};
 use pcgtools::dataset::Dataset;

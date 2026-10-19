@@ -3565,23 +3565,25 @@ impl<'a> Calc<'a> {
 
     /// Languages granted by AUTO:LANG on active objects whose trailing
     /// prerequisites pass: names, TYPE=t (every language of the type)
-    /// and %LIST (the object's choices).
+    /// and %LIST (the object's choices).  A token starting with .CLEAR
+    /// drops what the object's earlier tokens (as from a .MOD) gave.
     pub fn auto_languages(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        let mut add = |k: &str| {
-            if !k.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(k)) {
-                out.push(k.to_string());
-            }
-        };
         let is_pre = |i: &str| {
             Prereq::is_pre_tag(i.split(':').next().unwrap_or("")) || i.starts_with("!PRE")
         };
         for src in &self.sources {
+            // what this object grants, in order
+            let mut own: Vec<String> = Vec::new();
             for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
                 let Some(rest) = t.value.strip_prefix("LANG|") else {
                     continue;
                 };
-                let items: Vec<&str> = rest.split('|').collect();
+                let mut items: Vec<&str> = rest.split('|').collect();
+                if items.first() == Some(&".CLEAR") {
+                    own.clear();
+                    items.remove(0);
+                }
                 let ok = items
                     .iter()
                     .filter(|i| is_pre(i))
@@ -3597,16 +3599,19 @@ impl<'a> Calc<'a> {
                     {
                         for o in self.ds.objects(FileKind::Language) {
                             if ty.split('.').all(|x| o.is_type(x)) {
-                                add(&o.key);
+                                own.push(o.key.clone());
                             }
                         }
                     } else if *item == "%LIST" {
-                        for c in &src.choices {
-                            add(c);
-                        }
+                        own.extend(src.choices.iter().cloned());
                     } else {
-                        add(item);
+                        own.push(item.to_string());
                     }
+                }
+            }
+            for k in own {
+                if !k.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
+                    out.push(k);
                 }
             }
         }

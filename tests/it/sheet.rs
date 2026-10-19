@@ -207,6 +207,11 @@ fn automatic_languages() {
     // a language also chosen is listed once
     s.exec("lang add \"Trade Tongue\"").unwrap();
     assert_eq!(langs(&s), (both.clone(), both));
+    // .CLEAR drops what the race's earlier tokens granted
+    s.exec("undo").unwrap();
+    s.exec("race Driftborn").unwrap();
+    let tt = "Trade Tongue".to_string();
+    assert_eq!(langs(&s), (tt.clone(), tt));
 }
 
 #[test]

@@ -124,15 +124,7 @@ pub fn build(s: &SheetCtx) -> Element {
     b.add("phobias", pcg("PHOBIAS"));
     b.add("race", race_name(s));
     b.push(reach(s, &units));
-    let region = pcg("REGION");
-    b.add(
-        "region",
-        if region.is_empty() {
-            "None".into()
-        } else {
-            region
-        },
-    );
+    b.add("region", c.region().unwrap_or_else(|| "None".into()));
     b.add("reputation", var("REPUTATION"));
     b.add("residence", pcg("RESIDENCE"));
     let size = c.size_key();

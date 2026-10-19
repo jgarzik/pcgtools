@@ -24,5 +24,6 @@ EQUIPMENT:tb_equip.lst|(EXCLUDE:Cursed Spoon)
 EQUIPMOD:tb_eqmods.lst
 DOMAIN:tb_domains.lst
 KIT:tb_kits.lst
+TEMPLATE:tb_templates.lst
 DATATABLE:tb_tables.lst
 PCC:@/common/common.pcc

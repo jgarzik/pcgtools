@@ -916,6 +916,20 @@ impl<'a> Calc<'a> {
             .find_map(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
     }
 
+    /// The character's region: as chosen, else from the last of its
+    /// templates that names one.
+    pub fn region(&self) -> Option<String> {
+        if let Some(r) = self.ch.pcg.value("REGION").filter(|r| !r.is_empty()) {
+            return Some(r);
+        }
+        self.sources
+            .iter()
+            .filter(|s| s.kind == SrcKind::Template)
+            .filter_map(|s| s.obj.get("REGION"))
+            .next_back()
+            .map(str::to_string)
+    }
+
     /// Is the class a monster (racial hit dice) class?
     pub fn is_monster_class(&self, cls: &Object) -> bool {
         cls.get("ISMONSTER")
@@ -2786,7 +2800,7 @@ impl<'a> Calc<'a> {
                     >= num(v)
             }),
             "REGION" => {
-                let r = self.ch.pcg.value("REGION").unwrap_or_default();
+                let r = self.region().unwrap_or_default();
                 args.iter().any(|a| a.trim().eq_ignore_ascii_case(&r))
             }
             "RACETYPE" => {

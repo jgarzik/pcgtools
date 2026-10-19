@@ -583,3 +583,12 @@ fn natural_attacks_outside_the_equipment_set_give_no_proficiency() {
     let m = new_sheet(&["race Cogbeast"]);
     assert_eq!(at(&m, "weapon_proficiencies[0]"), "");
 }
+
+#[test]
+fn region_from_templates() {
+    let m = new_sheet(&[]);
+    assert_eq!(at(&m, "basics[Nova]/region[0]"), "None");
+    // the last template naming a region gives it
+    let m = new_sheet(&["template add \"Hill Born\"", "template add Roamer"]);
+    assert_eq!(at(&m, "basics[Nova]/region[0]"), "Far Hills");
+}

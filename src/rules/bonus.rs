@@ -304,15 +304,39 @@ impl BonusTable {
             category.to_ascii_uppercase(),
             target.to_ascii_uppercase()
         );
-        let types: Vec<String> = self
-            .entries
-            .keys()
-            .filter(|(k, _, _)| *k == key)
-            .map(|(_, t, _)| t.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        types.iter().map(|t| self.type_total(&key, t)).sum()
+        // the entries of a key are adjacent, ordered by type then mode
+        let start = (key, String::new(), Mode::Plain);
+        let mut sum = 0.0;
+        // (type, plain, replace, stack) of the type being summed
+        let mut cur: Option<(&str, Option<f64>, Option<f64>, f64)> = None;
+        let combine = |(_, plain, replace, stack): (&str, Option<f64>, Option<f64>, f64)| {
+            let base = match (plain, replace) {
+                (None, None) => 0.0,
+                (Some(p), None) => p,
+                (None, Some(r)) => r,
+                (Some(p), Some(r)) => p.max(r),
+            };
+            base + stack
+        };
+        for ((k, t, mode), acc) in self.entries.range(&start..) {
+            if *k != start.0 {
+                break;
+            }
+            if cur.is_some_and(|c| c.0 != t.as_str()) {
+                sum += combine(cur.take().unwrap());
+            }
+            let c = cur.get_or_insert((t.as_str(), None, None, 0.0));
+            let v = acc.value();
+            match mode {
+                Mode::Plain => c.1 = v,
+                Mode::Replace => c.2 = v,
+                Mode::Stack => c.3 = v.unwrap_or(0.0),
+            }
+        }
+        if let Some(c) = cur {
+            sum += combine(c);
+        }
+        sum
     }
 
     /// Bonuses of one type to `category.target` (`TYPE` matched

@@ -1759,7 +1759,17 @@ impl<'a> Calc<'a> {
             return Some(v);
         }
         match u.as_str() {
-            "TL" | "HD" => return Some(self.total_level() as f64),
+            "TL" => return Some(self.total_level() as f64),
+            // hit dice from monster (racial) classes
+            "HD" => {
+                return Some(
+                    self.classes
+                        .iter()
+                        .filter(|(c, _)| self.is_monster_class(c))
+                        .map(|(_, l)| *l as f64)
+                        .sum(),
+                )
+            }
             "ECL" => return Some(self.ecl() as f64),
             // the race's walking speed before any bonus
             "MOVEBASE" => {

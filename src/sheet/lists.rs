@@ -136,18 +136,42 @@ fn abilities<'a>(s: &SheetCtx<'a>, cat: &str, nature: &str, hidden: bool) -> Vec
         {
             continue;
         }
+        // an ability that does not stack holds each choice once
+        let stacks = src
+            .obj
+            .get("STACK")
+            .is_some_and(|v| v.eq_ignore_ascii_case("YES"));
+        // granted choices come first, so a recorded choice of one that
+        // does not stack is the granted one
+        let granted: Vec<&String> = if nature == "NORMAL" && !stacks && src.obj.has("CHOOSE") {
+            s.calc
+                .sources
+                .iter()
+                .filter(|x| {
+                    x.kind == SrcKind::Ability
+                        && std::ptr::eq(x.obj, src.obj)
+                        && x.nature.as_deref() == Some("AUTOMATIC")
+                })
+                .flat_map(|x| x.applied.iter())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let applied: Vec<&String> = src
+            .applied
+            .iter()
+            .filter(|a| a.is_empty() || !granted.contains(a))
+            .collect();
+        if applied.is_empty() && !src.applied.is_empty() {
+            continue;
+        }
         let e = by_key
             .entry(src.obj.key.to_lowercase())
             .or_insert_with(|| Listed {
                 obj: src.obj,
                 selections: Vec::new(),
             });
-        // an ability that does not stack holds each choice once
-        let stacks = src
-            .obj
-            .get("STACK")
-            .is_some_and(|v| v.eq_ignore_ascii_case("YES"));
-        for a in &src.applied {
+        for a in applied {
             if stacks || a.is_empty() || !e.selections.contains(a) {
                 e.selections.push(a.clone());
             }

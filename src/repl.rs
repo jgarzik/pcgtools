@@ -1572,8 +1572,12 @@ impl Session {
                 };
                 let (price, cash) = self.owned_price(name);
                 let rate = if cash { CASH_SELL_RATE } else { SELL_RATE };
+                let spellbook = self.item_book(name).is_some();
                 self.checkpoint();
                 let sold = self.ch.reduce_equipment(name, qty);
+                if spellbook {
+                    self.drop_item_books(name, have - sold);
+                }
                 let refund = sold * price * rate / 100.0;
                 let gold = self.ch.gold() + refund;
                 self.ch.set_gold(gold);
@@ -1583,10 +1587,14 @@ impl Session {
                 )
             }
             "rm" | "remove" => {
+                let spellbook = self.item_book(name).is_some();
                 self.checkpoint();
                 if !self.ch.remove_equipment(name) {
                     self.undo.pop();
                     return Err(Error::Other(format!("the character has no '{}'", name)));
+                }
+                if spellbook {
+                    self.drop_item_books(name, 0.0);
                 }
                 changed(self, format!("discarded {}", name))
             }
@@ -2716,6 +2724,36 @@ impl Session {
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, o)| *o)
+    }
+
+    /// Remove the books of a spellbook item (`Name`, `Name #2`, ...)
+    /// past the `left` copies still had, and the spells written in
+    /// them, as PCGen does when copies are given up.
+    fn drop_item_books(&mut self, item: &str, left: f64) {
+        let left = left.trunc().max(0.0);
+        let copy = |book: &str| -> Option<f64> {
+            if book == item {
+                return Some(1.0);
+            }
+            book.strip_prefix(item)?
+                .strip_prefix(" #")?
+                .parse::<u32>()
+                .ok()
+                .map(f64::from)
+        };
+        let mut books: Vec<String> = self
+            .ch
+            .spell_books()
+            .into_iter()
+            .map(|(b, _)| b)
+            .chain(self.ch.spells().into_iter().map(|s| s.2))
+            .filter(|b| copy(b).is_some_and(|k| k > left))
+            .collect();
+        books.sort();
+        books.dedup();
+        for b in books {
+            self.ch.remove_spell_book(&b);
+        }
     }
 
     /// `spell scribe` and `spell unscribe`.

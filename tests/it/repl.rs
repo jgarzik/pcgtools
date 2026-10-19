@@ -1026,6 +1026,47 @@ fn a_known_spell_is_not_learned_twice() {
     assert_eq!(known, 1);
 }
 
+fn discarding_a_spellbook_loses_its_spells() {
+    let mut s = sage();
+    ok(&mut s, "equip add Notebook 2");
+    ok(&mut s, "spell scribe Sage Ember Notebook");
+    ok(&mut s, "spell scribe Sage Ember \"Notebook #2\"");
+    ok(&mut s, "spell prep Sage Ember");
+    let books = |s: &Session| {
+        lines(s, "SPELLBOOK:")
+            .into_iter()
+            .filter(|l| l.ends_with("|TYPE:3"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(books(&s).len(), 2);
+    // as in PCGen, giving up a copy loses the last book
+    ok(&mut s, "equip sell Notebook 1");
+    assert_eq!(books(&s), ["SPELLBOOK:Notebook|TYPE:3"]);
+    assert!(lines(&s, "SPELLNAME:")
+        .iter()
+        .all(|l| !l.contains("BOOK:Notebook #2|")));
+    ok(&mut s, "equip rm Notebook");
+    assert!(books(&s).is_empty());
+    let left = lines(&s, "SPELLNAME:");
+    assert!(
+        left.iter().all(|l| !l.contains("BOOK:Notebook")),
+        "{:?}",
+        left
+    );
+    // spells known and prepared stay
+    assert!(
+        left.iter().any(|l| l.contains("BOOK:Prepared Spells|")),
+        "{:?}",
+        left
+    );
+    assert!(
+        left.iter().any(|l| l.contains("BOOK:Known Spells|")),
+        "{:?}",
+        left
+    );
+}
+
+#[test]
 fn equipment_sets() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     ok(&mut s, "equip add \"Tin Shield\"");

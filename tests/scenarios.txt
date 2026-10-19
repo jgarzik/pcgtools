@@ -678,3 +678,23 @@ equip unwear "Chainmail" --set Camp
 eqset rm Junk
 eqset add Empty
 eqset use Travel
+
+== wizard_lost_spellbook_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+race Human
+set align TN
+class add Wizard
+class add Wizard
+spell add Wizard Sleep
+spell add Wizard Light
+equip add "Spellbook (Wizard's/Blank)" 2
+equip add "Blessed Book"
+spell scribe Wizard Sleep "Spellbook (Wizard's/Blank)"
+spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
+spell scribe Wizard Sleep "Blessed Book"
+spell scribe Wizard Light "Blessed Book"
+spell prep Wizard Sleep
+equip sell "Spellbook (Wizard's/Blank)" 1
+equip rm "Blessed Book"

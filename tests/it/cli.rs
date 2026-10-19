@@ -431,3 +431,39 @@ fn char_one_shot_writes_output() {
     ]);
     assert_eq!(stdout(&o).trim(), "qualifies for QuickStep");
 }
+
+#[test]
+fn stats_warn_when_values_do_not_settle() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let out = scratch("flicker.pcg");
+    let script = format!("feat add Flicker --force\nsave \"{}\"\n", out.display());
+    let o = pcgtools_stdin(
+        &[
+            "--data-dir",
+            &data_dir(),
+            "--system-dir",
+            &sys,
+            "repl",
+            "--new",
+            "--gamemode",
+            "Testmode",
+            "--campaign",
+            "TB",
+        ],
+        &script,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let path = out.to_string_lossy().into_owned();
+    let o = pcgtools(&[
+        "--data-dir",
+        &data_dir(),
+        "--system-dir",
+        &sys,
+        "pcg",
+        "stats",
+        &path,
+    ]);
+    assert!(stderr(&o).contains("did not settle"), "{}", stderr(&o));
+}

@@ -421,3 +421,17 @@ fn last_matching_wield_switch_wins() {
     let item = pcgtools::rules::equip::EqItem::from_data(&calc, cog);
     assert_eq!(item.wield_category(&calc), "OneHanded");
 }
+
+#[test]
+fn calculation_reports_whether_it_settled() {
+    let tess = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
+    let ctx = Context::for_character(&tess, dirs());
+    let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &tess);
+    assert!(calc.run().converged);
+    // a bonus that switches itself off and on never settles
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("feat add Flicker --force").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    let sheet = calc.run();
+    assert!(!sheet.converged, "settled after {} passes", sheet.passes);
+}

@@ -34,7 +34,7 @@ const MAX_PASSES: usize = 40;
 
 /// Bonus values and variable values after a pass, for detecting
 /// convergence.
-type Snapshot = (Vec<f64>, Vec<(String, f64)>);
+type Snapshot = (Vec<(String, f64)>, Vec<(String, f64)>, Vec<String>);
 
 /// What kind of thing an active source is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -117,6 +117,9 @@ pub struct Sheet {
     /// equipped items: `location: item [eqmods]`
     pub equipped: Vec<String>,
     pub passes: usize,
+    /// whether the passes settled; when false the values are those of
+    /// the last pass allowed, which may still have changed
+    pub converged: bool,
     /// names evaluated as zero because nothing defines them
     pub unknown: BTreeMap<String, usize>,
 }
@@ -4198,6 +4201,7 @@ impl<'a> Calc<'a> {
     /// Run the calculation.
     pub fn run(&mut self) -> Sheet {
         let mut passes = 0;
+        let mut converged = false;
         let mut last: Option<Snapshot> = None;
         while passes < MAX_PASSES {
             passes += 1;
@@ -4213,8 +4217,15 @@ impl<'a> Calc<'a> {
             );
             vs.push(("spell extras".into(), self.spell_extras.len() as f64));
             vs.sort_by(|a, b| a.0.cmp(&b.0));
-            let snap = (self.bonus.snapshot(), vs);
+            // which objects are active, as well as what they add up to
+            let active: Vec<String> = self
+                .sources
+                .iter()
+                .map(|s| format!("{:?} {} {:?} {}", s.kind, s.obj.key, s.choices, s.times))
+                .collect();
+            let snap = (self.bonus.snapshot(), vs, active);
             if last.as_ref() == Some(&snap) {
+                converged = true;
                 break;
             }
             last = Some(snap);
@@ -4223,6 +4234,7 @@ impl<'a> Calc<'a> {
         let mut sheet = Sheet {
             level: self.total_level(),
             passes,
+            converged,
             ..Default::default()
         };
         for abb in self.stat_base.keys() {

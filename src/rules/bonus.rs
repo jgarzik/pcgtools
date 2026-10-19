@@ -338,9 +338,15 @@ impl BonusTable {
         v
     }
 
-    /// Number of filed entries (for change detection).
-    pub fn snapshot(&self) -> Vec<f64> {
-        self.entries.values().filter_map(Acc::value).collect()
+    /// Every total with the name it is filed under (for change
+    /// detection between passes).
+    pub fn snapshot(&self) -> Vec<(String, f64)> {
+        self.entries
+            .iter()
+            .filter_map(|((key, btype, mode), a)| {
+                Some((format!("{} {} {:?}", key, btype, mode), a.value()?))
+            })
+            .collect()
     }
 }
 

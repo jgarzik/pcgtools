@@ -1341,6 +1341,39 @@ fn temporary_bonuses_switched_and_removed() {
 }
 
 #[test]
+fn followers_limited_per_companion_list() {
+    let mut s = session();
+    let max = |s: &Session, list: &str| {
+        let mut c = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        c.run();
+        c.max_followers(list)
+    };
+    // FOLLOWERS on the class allows one familiar
+    assert_eq!(max(&s, "Familiar"), Some(1));
+    ok(&mut s, "follower add Whiskers Familiar Gearling");
+    let e = err(&mut s, "follower add Tibbles Familiar Gearling");
+    assert!(e.contains("1 Familiar"), "{}", e);
+    // and BONUS:FOLLOWERS one more
+    ok(&mut s, "template add Beastfriend");
+    assert_eq!(max(&s, "familiar"), Some(2));
+    ok(&mut s, "follower add Tibbles Familiar Gearling");
+    assert!(err(&mut s, "follower add Mittens Familiar Gearling").contains("2 Familiar"));
+    ok(&mut s, "follower add Mittens Familiar Gearling --force");
+    // without FOLLOWERS, the companion modifiers of the list decide:
+    // a variable they name above zero allows any number, a class they
+    // name the character has its count, and otherwise none
+    assert_eq!(max(&s, "Gadget"), None);
+    ok(&mut s, "follower add Cog Gadget Gearling");
+    ok(&mut s, "follower add Sprocket Gadget Gearling");
+    assert_eq!(max(&s, "Chorus"), Some(0));
+    assert!(err(&mut s, "follower add Echo Chorus Gearling").contains("0 Chorus"));
+    ok(&mut s, "class add Chanter");
+    assert_eq!(max(&s, "Chorus"), Some(1));
+    ok(&mut s, "follower add Echo Chorus Gearling");
+    assert_eq!(max(&s, "Nothing"), Some(0));
+}
+
+#[test]
 fn hit_points_rolled_within_bonus_bounds() {
     let mut s = Session::create("Testmode", &["TB".into()], "Hale", dirs());
     let hp = |s: &Session, cls: &str, n: u32| {

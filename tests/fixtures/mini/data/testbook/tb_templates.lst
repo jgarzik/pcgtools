@@ -6,3 +6,4 @@ Fist Wraps	BONUS:UDAM|CLASS.Brawler|2
 Soft Fists	BONUS:UDAM|CLASS=Brawler|-1
 Dragonblood	BONUS:MONSKILLPTS|LOCKNUMBER|6
 Learned	BONUSSKILLPOINTS:1
+Beastfriend	BONUS:FOLLOWERS|Familiar|1

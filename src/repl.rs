@@ -126,7 +126,8 @@ Commands (names may be quoted; most accept --force to skip checks):
   temp rm SOURCE [pc|ITEM] | temp on|off SOURCE [pc|ITEM]
                                remove one, or switch it on or off
   temp mods on|off             use temporary modifiers, or not
-  follower add NAME TYPE RACE [FILE]     add a follower or companion
+  follower add NAME TYPE RACE [FILE]     add a follower or companion (as
+                               many of a TYPE as the rules allow)
   follower rm NAME | follower ls
   undo                         undo the last change
   save [PATH]                  write the character
@@ -975,6 +976,26 @@ impl Session {
                         .get(5)
                         .map(|f| f.to_string())
                         .unwrap_or_else(|| format!("{}.pcg", name));
+                    // as many of a companion list as the rules allow
+                    let max = {
+                        let mut c = self.calc();
+                        c.run();
+                        c.max_followers(&kind)
+                    };
+                    let have = self
+                        .ch
+                        .followers()
+                        .iter()
+                        .filter(|f| f.1.eq_ignore_ascii_case(&kind))
+                        .count() as i64;
+                    if let Some(m) = max.filter(|m| have >= *m && !force) {
+                        return Err(Error::Other(format!(
+                            "the character may have {} {} follower{} (use --force)",
+                            m,
+                            kind,
+                            if m == 1 { "" } else { "s" }
+                        )));
+                    }
                     self.checkpoint();
                     self.ch.add_follower(&name, &kind, &race, &file);
                     changed(self, format!("added {} {} ({})", kind, name, race))

@@ -3563,6 +3563,53 @@ impl<'a> Calc<'a> {
         out
     }
 
+    /// How many followers of a companion list (TYPE=list) the character
+    /// may have; None for any number.  The highest FOLLOWERS:list|n of
+    /// the active objects plus BONUS:FOLLOWERS|list; without FOLLOWERS,
+    /// the list's companion modifiers decide: one naming a variable
+    /// above zero allows any number, one naming a class the character
+    /// has allows its count, and otherwise none are allowed.
+    pub fn max_followers(&self, list: &str) -> Option<i64> {
+        let mut best: Option<i64> = None;
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "FOLLOWERS") {
+                let Some((l, f)) = t.value.split_once('|') else {
+                    continue;
+                };
+                if l.trim().eq_ignore_ascii_case(list) {
+                    let env = Ctx {
+                        calc: self,
+                        src: Some(s),
+                    };
+                    let v = eval_str(f, &env) as i64;
+                    best = Some(best.map_or(v, |b| b.max(v)));
+                }
+            }
+        }
+        if let Some(b) = best {
+            return Some(b + self.bonus.total("FOLLOWERS", list) as i64);
+        }
+        for m in self.ds.objects(FileKind::CompanionMod) {
+            if m.head_tag.as_deref() != Some("FOLLOWER") || !m.is_type(list) {
+                continue;
+            }
+            let Some((names, n)) = m.name.split_once('=') else {
+                continue;
+            };
+            let (classes, vars): (Vec<&str>, Vec<&str>) = names
+                .split(',')
+                .map(str::trim)
+                .partition(|x| self.ds.get(FileKind::Class, x).is_some());
+            if vars.iter().any(|v| self.var(v).unwrap_or(0.0) > 0.0) {
+                return None;
+            }
+            if classes.iter().any(|c| self.class_level(c) > 0) {
+                return Some(n.trim().parse().unwrap_or(0));
+            }
+        }
+        Some(0)
+    }
+
     /// Languages granted by AUTO:LANG on active objects whose trailing
     /// prerequisites pass: names, TYPE=t (every language of the type)
     /// and %LIST (the object's choices).  A token starting with .CLEAR

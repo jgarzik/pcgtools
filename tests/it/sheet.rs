@@ -216,3 +216,49 @@ fn domain_spell_levels_need_a_granting_class() {
     s.exec("domain add Cogs").unwrap();
     assert_eq!(spark(&s), "Cogs1, Tnk0");
 }
+
+fn new_sheet(cmds: &[&str]) -> HashMap<String, String> {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    for c in cmds {
+        s.exec(c).unwrap();
+    }
+    sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect()
+}
+
+#[test]
+fn locked_stats_ignore_saved_scores() {
+    let m = new_sheet(&["set stat MGT 16", "race Stonekin"]);
+    // the race locks Might at 12; the saved score and STAT bonuses
+    // no longer count
+    let a = "abilities[0]/ability[Might]";
+    for (k, v) in [
+        ("score", "12"),
+        ("modifier", "+1"),
+        ("base", "12"),
+        ("basemod", "+1"),
+        ("noequip", "12"),
+        ("no_temp_score", "12"),
+    ] {
+        assert_eq!(at(&m, &format!("{}/{}[0]", a, k)), v, "{}", k);
+    }
+    assert_eq!(at(&m, "abilities[0]/ability[Grace]/score[0]"), "10");
+}
+
+#[test]
+fn level_adjustment_counts_as_experience() {
+    let m = new_sheet(&["race Stonekin"]);
+    // one level of adjustment is worth the experience of level 2
+    assert_eq!(at(&m, "basics[Nova]/experience[0]/current[0]"), "3000");
+}
+
+#[test]
+fn class_without_hit_die_rolls_nothing() {
+    let m = new_sheet(&["class add Drifter"]);
+    assert_eq!(at(&m, "hit_points[0]/history[0]/roll[0]/roll[0]"), "0");
+    assert_eq!(at(&m, "hit_points[0]/points[0]"), "5");
+}

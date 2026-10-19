@@ -489,20 +489,23 @@ impl Session {
                 "add" => {
                     let o = self.find(FileKind::Class, arg(2)?)?;
                     let key = o.key.clone();
-                    let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(8);
+                    // the hit die as the rules adjust it (a class without
+                    // one gains no rolled hit points) and the skill points
+                    // this level is worth, as the rules count them now
+                    let (hd, skills) = {
+                        let mut c = self.calc();
+                        c.run();
+                        let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
+                        (
+                            c.hit_die(o),
+                            c.skill_points_for_level(o, self.ch.total_level() + 1),
+                        )
+                    };
                     let hp: i64 = match w.get(3).filter(|v| !v.starts_with("--")) {
                         Some(v) => v
                             .parse()
                             .map_err(|_| Error::Other(format!("bad hit points '{}'", v)))?,
                         None => hd,
-                    };
-                    // skill points this level is worth, as the rules count
-                    // them now
-                    let skills: f64 = {
-                        let mut c = self.calc();
-                        c.run();
-                        let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
-                        c.skill_points_for_level(o, self.ch.total_level() + 1)
                     };
                     let subclass = w
                         .iter()
@@ -1060,7 +1063,7 @@ impl Session {
                 "CLASS" => {
                     let o = self.find(FileKind::Class, val)?;
                     let key = o.key.clone();
-                    let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(8);
+                    let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(0);
                     let levels: u32 = tok("LEVEL").and_then(|v| v.parse().ok()).unwrap_or(1);
                     for _ in 0..levels {
                         self.ch.add_level(&key, hd, 0.0);

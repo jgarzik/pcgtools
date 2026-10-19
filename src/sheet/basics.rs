@@ -42,7 +42,7 @@ pub fn build(s: &SheetCtx) -> Element {
     b.push(paragraphs("description", &pcg("CHARACTERDESC")));
 
     let mut xp = Element::new("experience");
-    xp.add("current", ch.experience());
+    xp.add("current", c.experience());
     xp.add(
         "next_level",
         c.min_xp(c.ecl() + 1).map(|v| v as i64).unwrap_or(0),

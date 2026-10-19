@@ -121,6 +121,19 @@ pub struct Sheet {
     pub unknown: BTreeMap<String, usize>,
 }
 
+/// What DEFINESTAT on active objects does to one stat.
+#[derive(Debug, Default, Clone, Copy)]
+struct StatLimit {
+    /// LOCK: the score is this value (the highest of several locks)
+    lock: Option<f64>,
+    /// UNLOCK: locks are ignored
+    unlocked: bool,
+    /// MINVALUE: the highest of the minimums
+    min: Option<f64>,
+    /// MAXVALUE: the lowest of the maximums
+    max: Option<f64>,
+}
+
 pub struct Calc<'a> {
     pub ds: &'a Dataset,
     pub gm: Option<&'a GameMode>,
@@ -128,6 +141,8 @@ pub struct Calc<'a> {
     /// (class object, level)
     classes: Vec<(&'a Object, u32)>,
     stat_base: HashMap<String, f64>,
+    /// DEFINESTAT locks and limits, by stat (as of the last pass)
+    stat_limits: HashMap<String, StatLimit>,
     ranks: HashMap<String, f64>,
     pcg_class_skills: HashSet<String>,
     items: Vec<Item<'a>>,
@@ -187,6 +202,7 @@ impl<'a> Calc<'a> {
             ch,
             classes: Vec::new(),
             stat_base: HashMap::new(),
+            stat_limits: HashMap::new(),
             ranks: HashMap::new(),
             pcg_class_skills: HashSet::new(),
             items: Vec::new(),
@@ -1105,6 +1121,11 @@ impl<'a> Calc<'a> {
 
     /// Effective character level: levels plus level adjustments.
     pub fn ecl(&self) -> u32 {
+        (self.total_level() as f64 + self.level_adjustment()).max(0.0) as u32
+    }
+
+    /// Level adjustment from the race and templates.
+    pub fn level_adjustment(&self) -> f64 {
         let mut la = 0.0;
         for s in self
             .sources
@@ -1119,7 +1140,16 @@ impl<'a> Calc<'a> {
                 la += eval_str(&t.value, &env);
             }
         }
-        (self.total_level() as f64 + la).max(0.0) as u32
+        la
+    }
+
+    /// Experience shown for the character: what it has earned, but at
+    /// least what its level adjustment is worth (the experience needed
+    /// for one level more than the adjustment).
+    pub fn experience(&self) -> i64 {
+        let la = self.level_adjustment().max(0.0) as u32;
+        let worth = self.min_xp(la + 1).unwrap_or(0.0) as i64;
+        self.ch.experience().max(worth)
     }
 
     /// Is the stat a non-ability for this character (DEFINESTAT:NONSTAT
@@ -1147,9 +1177,63 @@ impl<'a> Calc<'a> {
         non
     }
 
-    /// The stat's score before any bonuses.
+    /// The stat's score before any bonuses: a locked stat's lock,
+    /// else the score saved with the character, within any limits.
     pub fn stat_base(&self, abb: &str) -> f64 {
-        self.stat_base.get(&upper(abb)).copied().unwrap_or(0.0)
+        let k = upper(abb);
+        match self.stat_lock(&k) {
+            Some(v) => self.stat_clamp(&k, v),
+            None => self.stat_clamp(&k, self.stat_base.get(&k).copied().unwrap_or(0.0)),
+        }
+    }
+
+    /// The value a stat is locked at, unless it has been unlocked.
+    fn stat_lock(&self, k: &str) -> Option<f64> {
+        self.stat_limits
+            .get(k)
+            .filter(|l| !l.unlocked)
+            .and_then(|l| l.lock)
+    }
+
+    /// Keep a stat score within its DEFINESTAT minimum and maximum.
+    fn stat_clamp(&self, k: &str, v: f64) -> f64 {
+        let Some(l) = self.stat_limits.get(k) else {
+            return v;
+        };
+        let v = l.max.map_or(v, |m| v.min(m));
+        l.min.map_or(v, |m| v.max(m))
+    }
+
+    /// DEFINESTAT locks and limits from every active object.
+    fn find_stat_limits(&self) -> HashMap<String, StatLimit> {
+        let mut out: HashMap<String, StatLimit> = HashMap::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "DEFINESTAT") {
+                let mut parts = t.value.splitn(3, '|');
+                let (Some(kind), Some(stat)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
+                let kind = upper(kind);
+                let l = out.entry(upper(stat)).or_default();
+                if kind == "UNLOCK" {
+                    l.unlocked = true;
+                    continue;
+                }
+                let Some(f) = parts.next() else { continue };
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                let v = eval_str(f, &env);
+                match kind.as_str() {
+                    "LOCK" => l.lock = Some(l.lock.map_or(v, |x| x.max(v))),
+                    "MINVALUE" => l.min = Some(l.min.map_or(v, |x| x.max(v))),
+                    "MAXVALUE" => l.max = Some(l.max.map_or(v, |x| x.min(v))),
+                    _ => {}
+                }
+            }
+        }
+        out
     }
 
     /// The stat's modifier for a given score.
@@ -1246,7 +1330,12 @@ impl<'a> Calc<'a> {
 
     pub fn stat_score(&self, abb: &str) -> f64 {
         let a = upper(abb);
-        self.stat_base.get(&a).copied().unwrap_or(0.0) + self.bonus.total("STAT", &a)
+        // a locked stat takes only LOCKEDSTAT bonuses
+        let v = match self.stat_lock(&a) {
+            Some(v) => v + self.bonus.total("LOCKEDSTAT", &a),
+            None => self.stat_base(&a) + self.bonus.total("STAT", &a),
+        };
+        self.stat_clamp(&a, v)
     }
 
     pub fn stat_mod(&self, abb: &str) -> f64 {
@@ -1398,6 +1487,9 @@ impl<'a> Calc<'a> {
     /// equipment, and/or without temporary ones.
     pub fn stat_score_without(&self, abb: &str, equipment: bool, temporary: bool) -> f64 {
         let k = upper(abb);
+        if let Some(v) = self.stat_lock(&k) {
+            return v;
+        }
         self.stat_base(&k)
             + self.bonus.total_where("STAT", &k, |src| {
                 let eq = matches!(src.kind.as_str(), "Equipment" | "EquipMod")
@@ -3096,6 +3188,7 @@ impl<'a> Calc<'a> {
     fn pass(&mut self) {
         self.unknown.borrow_mut().clear();
         self.gather();
+        self.stat_limits = self.find_stat_limits();
         let mut table = BonusTable::new(
             &self
                 .gm

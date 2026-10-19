@@ -43,10 +43,9 @@ pub fn spell_text(text: &str, eval: &dyn Fn(&str) -> Option<f64>) -> String {
         let Some(end) = end else { break };
         let inner = &s[start + 1..end];
         let v = eval(inner);
-        let forced = inner.contains("MIN")
-            || inner.contains("MAX")
-            || inner.to_uppercase().contains("MIN(")
-            || inner.to_uppercase().contains("MAX(");
+        // arithmetic, or a minimum or maximum, always becomes a number
+        let up = inner.to_uppercase();
+        let forced = up.contains("MIN") || up.contains("MAX") || inner.contains(['/', '*', '+']);
         let rep = match v {
             Some(x) if x != 0.0 || forced => (x.trunc() as i64).to_string(),
             None if forced => "0".to_string(),
@@ -98,9 +97,21 @@ impl Ctx<'_, '_> {
         let c = self.calc();
         let mut out: Vec<String> = Vec::new();
         for (cls, _) in c.classes() {
-            for list in self.sp.class_lists(c, cls) {
+            let mut lists = self.sp.class_lists(c, cls);
+            // a subclass's list counts as the class's
+            if let Some(sub) = c.subclass_of(cls) {
+                lists.push(sub.key.clone());
+            }
+            for list in lists {
                 // the class abbreviation: FACT:Abb, else its first letters
-                let abbr = match c.ds.get(crate::lst::kind::FileKind::Class, &list) {
+                let named =
+                    c.ds.get(crate::lst::kind::FileKind::Class, &list)
+                        .or_else(|| {
+                            c.subclass_of(cls)
+                                .is_some_and(|x| x.key == list)
+                                .then_some(*cls)
+                        });
+                let abbr = match named {
                     Some(o) => o
                         .values("FACT")
                         .find_map(|v| {
@@ -438,6 +449,11 @@ mod tests {
         assert_eq!(spell_text("+(min(6,(CASTERLEVEL/3)))", &cl), "+0");
         assert_eq!(spell_text("(up to (CASTERLEVEL))", &cl), "[up to 3]");
         assert_eq!(spell_text("no parens", &cl), "no parens");
+        assert_eq!(spell_text("x (up to 100 lb./level)", &cl), "x 0");
+        assert_eq!(
+            spell_text("(Should be CL x 10)", &cl),
+            "[Should be CL x 10]"
+        );
         assert_eq!(spell_text("unclosed (oops", &cl), "unclosed (oops");
     }
 }

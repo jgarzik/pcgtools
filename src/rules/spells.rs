@@ -90,6 +90,8 @@ fn level_groups(v: &str) -> Vec<(Vec<String>, i64)> {
         if Prereq::is_pre_tag(g.split(':').next().unwrap_or("")) || g.starts_with("!PRE") {
             continue;
         }
+        // a level may carry prerequisites: `Psion=1[PREVARGTEQ:X,1]`
+        let g = g.split('[').next().unwrap_or(g);
         let Some((names, lvl)) = g.rsplit_once('=') else {
             continue;
         };
@@ -992,5 +994,9 @@ mod tests {
             vec![(vec!["Sun".to_string()], 3)]
         );
         assert!(level_groups("bogus").is_empty());
+        assert_eq!(
+            level_groups("Psion=1[PREVARGTEQ:PsionicTelepath,1]"),
+            vec![(vec!["Psion".to_string()], 1)]
+        );
     }
 }

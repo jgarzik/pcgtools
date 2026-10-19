@@ -209,8 +209,8 @@ pub fn substitute(text: &str, value: impl Fn(usize) -> String) -> String {
     out
 }
 
-/// Where an object comes from: `Publisher - Book, page`.
-pub fn source_text(s: &SheetCtx, o: &Object) -> String {
+/// A tag of the campaign that defined (or last modified) an object.
+pub fn campaign_meta(s: &SheetCtx, o: &Object, tag: &str) -> Option<String> {
     let ds = &s.ctx.dataset;
     let origin = o.history.last().map(|c| c.origin).unwrap_or(o.origin);
     let file = ds.file_path(origin);
@@ -221,15 +221,17 @@ pub fn source_text(s: &SheetCtx, o: &Object) -> String {
         .values()
         .flatten()
         .find(|f| f.path == file)
-        .and_then(|f| s.ctx.registry.get(&f.campaign));
-    let meta = |tag: &str| -> Option<String> {
-        campaign.and_then(|c| {
-            c.meta
-                .iter()
-                .find(|(t, _)| t == tag)
-                .map(|(_, v)| v.clone())
-        })
-    };
+        .and_then(|f| s.ctx.registry.get(&f.campaign))?;
+    campaign
+        .meta
+        .iter()
+        .find(|(t, _)| t == tag)
+        .map(|(_, v)| v.clone())
+}
+
+/// Where an object comes from: `Publisher - Book, page`.
+pub fn source_text(s: &SheetCtx, o: &Object) -> String {
+    let meta = |tag: &str| campaign_meta(s, o, tag);
     // a later .MOD from another book makes that book the source
     let modified = !o.history.is_empty();
     let src = |tag: &str| -> Option<String> {

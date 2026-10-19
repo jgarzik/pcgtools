@@ -403,23 +403,23 @@ impl<'a> Spells<'a> {
 
     /// The spell lists a class uses (its own, or those saved for it).
     pub fn class_lists(&self, calc: &Calc<'a>, cls: &Object) -> Vec<String> {
+        // SPELLLIST:Class|CLASS.Sorcerer|CLASS.Cleric (parts without a
+        // colon, so read from the line's text)
         let saved: Vec<String> = calc
             .ch
             .pcg
             .lines_tagged("SPELLLIST")
-            .filter(|l| {
-                l.head()
-                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(&cls.key))
+            .filter_map(|l| l.raw.strip_prefix("SPELLLIST:").map(str::to_string))
+            .filter_map(|rest| {
+                let mut parts = rest.split('|');
+                let head = crate::pcg::decode(parts.next()?);
+                head.eq_ignore_ascii_case(&cls.key).then(|| {
+                    parts
+                        .filter_map(|p| p.strip_prefix("CLASS.").map(crate::pcg::decode))
+                        .collect::<Vec<_>>()
+                })
             })
-            .flat_map(|l| {
-                l.elems
-                    .iter()
-                    .flatten()
-                    .skip(1)
-                    .filter(|e| e.tag == "CLASS")
-                    .map(|e| e.value_text())
-                    .collect::<Vec<_>>()
-            })
+            .flatten()
             .collect();
         if saved.is_empty() {
             vec![cls.key.clone()]
@@ -796,9 +796,45 @@ pub fn known_at(calc: &Calc, cls: &Object, level: i64, granted: i64) -> i64 {
     total as i64 + granted
 }
 
-/// Does the spell's owner make it a bonus (specialty or domain) spell?
-pub fn is_specialty(cs: &CharSpell) -> bool {
-    matches!(cs.owner, Owner::Domain(..))
+/// Does the spell's owner make it a bonus (specialty or domain) spell:
+/// a domain spell, or a class spell of the class's specialty school?
+pub fn is_specialty(calc: &Calc, cs: &CharSpell) -> bool {
+    match &cs.owner {
+        Owner::Domain(..) => true,
+        Owner::Class(cls) => {
+            let specs = specialties(calc, cls);
+            let sp = cs.spell;
+            specs.iter().any(|x| {
+                sp.values("SCHOOL")
+                    .chain(sp.values("SUBSCHOOL"))
+                    .chain(sp.values("DESCRIPTOR"))
+                    .flat_map(|v| v.split(['|', ',']))
+                    .any(|v| v.trim().eq_ignore_ascii_case(x))
+            })
+        }
+        Owner::Race => false,
+    }
+}
+
+/// Specialties chosen for a class (SPECIALTIES on its level lines).
+pub fn specialties(calc: &Calc, cls: &Object) -> Vec<String> {
+    let mut out = Vec::new();
+    for l in calc.ch.pcg.lines_tagged("CLASSABILITIESLEVEL") {
+        let of_class = l
+            .head()
+            .map(|h| h.value_text())
+            .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
+            .is_some_and(|c| c.eq_ignore_ascii_case(&cls.key));
+        if !of_class {
+            continue;
+        }
+        if let Some(e) = l.get("SPECIALTIES") {
+            for c in e.children().iter().filter(|c| c.tag == "SPECIALTY") {
+                out.push(c.value_text());
+            }
+        }
+    }
+    out
 }
 
 /// The class whose casting a spell uses (a domain's source class).

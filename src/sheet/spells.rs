@@ -72,8 +72,12 @@ struct Ctx<'s, 'a> {
     units: Units,
 }
 
+/// A tag's values (each may list several, `|`-separated), joined.
 fn joined(o: &Object, tag: &str) -> String {
-    o.values(tag).collect::<Vec<_>>().join(", ")
+    o.values(tag)
+        .flat_map(|v| v.split('|'))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl Ctx<'_, '_> {
@@ -95,15 +99,17 @@ impl Ctx<'_, '_> {
         let mut out: Vec<String> = Vec::new();
         for (cls, _) in c.classes() {
             for list in self.sp.class_lists(c, cls) {
-                let abbr =
-                    c.ds.get(crate::lst::kind::FileKind::Class, &list)
-                        .and_then(|o| {
-                            o.values("FACT").find_map(|v| {
-                                let (k, val) = v.split_once('|')?;
-                                k.eq_ignore_ascii_case("Abb").then(|| val.to_string())
-                            })
+                // the class abbreviation: FACT:Abb, else its first letters
+                let abbr = match c.ds.get(crate::lst::kind::FileKind::Class, &list) {
+                    Some(o) => o
+                        .values("FACT")
+                        .find_map(|v| {
+                            let (k, val) = v.split_once('|')?;
+                            k.eq_ignore_ascii_case("Abb").then(|| val.to_string())
                         })
-                        .unwrap_or_else(|| list.clone());
+                        .unwrap_or_else(|| o.name.chars().take(3).collect()),
+                    None => list.clone(),
+                };
                 for l in self.sp.levels_on('C', &list, spell) {
                     out.push(format!("{}{}", abbr, l));
                 }
@@ -177,7 +183,7 @@ impl Ctx<'_, '_> {
         let sub = joined(sp, "SUBSCHOOL");
         let descr: Vec<&str> = sp
             .values("DESCRIPTOR")
-            .flat_map(|v| v.split(','))
+            .flat_map(|v| v.split('|'))
             .map(str::trim)
             .collect();
         let mut full = school.clone();
@@ -204,6 +210,7 @@ impl Ctx<'_, '_> {
                     .find(|(t, _)| t == "SOURCESHORT")
                     .map(|(_, v)| v.clone())
             })
+            .or_else(|| super::campaign_meta(self.s, sp, "SOURCESHORT"))
             .unwrap_or_default()
             .chars()
             .take(8)
@@ -220,14 +227,14 @@ impl Ctx<'_, '_> {
         );
         e.add("spell_resistance", joined(sp, "SPELLRES"));
         e.add("description", desc);
-        let bonus = if is_specialty(cs) {
+        let bonus = if is_specialty(c, cs) {
             let same: Vec<_> = self
                 .sp
                 .spells_in(caster, &info.book, Some(info.level))
                 .into_iter()
                 .filter(|(x, _)| std::ptr::eq(x.spell, sp))
                 .collect();
-            if same.iter().all(|(x, _)| is_specialty(x)) {
+            if same.iter().all(|(x, _)| is_specialty(c, x)) {
                 "*"
             } else {
                 "**"

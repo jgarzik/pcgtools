@@ -2983,6 +2983,50 @@ impl<'a> Calc<'a> {
                 }
             }
         }
+        // bonuses saved with choices made (SAVE:BONUS|... on ability
+        // lines and level lines)
+        let mut saved: Vec<String> = Vec::new();
+        for l in self.ch.pcg.lines_tagged("ABILITY") {
+            for e in l.elems.iter().flatten().filter(|e| e.tag == "SAVE") {
+                saved.push(e.value_text());
+            }
+        }
+        for l in self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL") {
+            if let Some(e) = l.get("SAVES") {
+                for c in e.children().iter().filter(|c| c.tag == "SAVE") {
+                    saved.push(c.value_text());
+                }
+            }
+        }
+        let origin = Source {
+            origin: "Saved bonus".into(),
+            kind: "Saved".into(),
+            key: String::new(),
+            category: None,
+            temp: false,
+        };
+        let env = Ctx {
+            calc: self,
+            src: None,
+        };
+        for v in saved {
+            let Some(rest) = v.strip_prefix("BONUS|") else {
+                continue;
+            };
+            let Ok(b) = Bonus::parse(rest) else { continue };
+            if !b.prereqs().all(|p| self.passes(p, None)) {
+                continue;
+            }
+            let Ok(e) = b.expr() else { continue };
+            let val = eval(&e, &env);
+            let btype = b.opts.iter().find_map(|o| match o {
+                BonusOpt::Type(t) => Some(t.as_str()),
+                _ => None,
+            });
+            for tg in &b.targets {
+                table.add_from(&b.category, tg, btype, val, &origin);
+            }
+        }
         self.bonus = table;
         self.vars = vars;
         self.defined = defined;

@@ -134,6 +134,8 @@ pub struct AbilityEntry {
     pub nature: String,
     pub category: String,
     pub key: String,
+    /// choices made; for abilities taken several times without a
+    /// choice, one empty entry per time taken
     pub applied_to: Vec<String>,
 }
 
@@ -340,12 +342,8 @@ impl Character {
                     key: l.text("KEY")?,
                     applied_to: l
                         .text("APPLIEDTO")
-                        .map(|s| {
-                            s.split(',')
-                                .filter(|x| !x.is_empty())
-                                .map(str::to_string)
-                                .collect()
-                        })
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.split(',').map(str::to_string).collect())
                         .unwrap_or_default(),
                 })
             })

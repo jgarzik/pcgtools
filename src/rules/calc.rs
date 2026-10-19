@@ -66,6 +66,8 @@ pub struct Src<'a> {
     pub choices: Vec<String>,
     /// index of the equipped item this source belongs to
     pub item: Option<usize>,
+    /// times the object applies (abilities taken more than once)
+    pub times: f64,
 }
 
 /// An equipped item.
@@ -273,6 +275,165 @@ impl<'a> Calc<'a> {
             .unwrap_or_else(|| key.to_string())
     }
 
+    /// Item types include the ITYPE values its modifiers add.
+    fn item_is_type(&self, i: usize, t: &str) -> bool {
+        let it = &self.items[i];
+        it.obj.is_type(t)
+            || it.eqmods.iter().any(|m| {
+                m.values("ITYPE")
+                    .flat_map(|v| v.split('.'))
+                    .any(|x| x.eq_ignore_ascii_case(t))
+            })
+    }
+
+    /// Weight carried: items placed in the calculation equipment set,
+    /// except those under "Not Carried".
+    pub fn carried_weight(&self) -> f64 {
+        let sets = self.ch.equipped();
+        let not_carried: Vec<String> = sets
+            .iter()
+            .filter(|e| e.location.eq_ignore_ascii_case("Not Carried"))
+            .map(|e| format!("{}.", e.id))
+            .collect();
+        let mut total = 0.0;
+        for e in &sets {
+            if e.location.eq_ignore_ascii_case("Not Carried")
+                || not_carried.iter().any(|p| e.id.starts_with(p.as_str()))
+            {
+                continue;
+            }
+            let Some(item) = &e.item else { continue };
+            let wt: f64 = self
+                .ch
+                .pcg
+                .lines_tagged("EQUIPNAME")
+                .find(|l| l.head().is_some_and(|h| h.value_text() == *item))
+                .and_then(|l| l.text("WT"))
+                .and_then(|w| w.parse().ok())
+                .unwrap_or(0.0);
+            total += wt * e.quantity.unwrap_or(1.0);
+        }
+        total
+    }
+
+    /// Maximum load before the heaviest category.
+    fn max_load(&self) -> f64 {
+        let Some(g) = self.gm else { return 0.0 };
+        let score = self
+            .var_value("LOADSCORE", None)
+            .unwrap_or_else(|| self.stat_score("STR"));
+        let table: Vec<(f64, f64)> = g
+            .lines("load.lst", "LOAD")
+            .filter_map(|l| {
+                let (a, b) = l.value.split_once('|')?;
+                Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+            })
+            .collect();
+        if table.is_empty() {
+            return 0.0;
+        }
+        let mult: f64 = g
+            .lines("load.lst", "LOADMULT")
+            .next()
+            .and_then(|l| l.value.parse().ok())
+            .unwrap_or(4.0);
+        let (min, max) = (table[0].0, table[table.len() - 1].0);
+        let lookup = |s: f64| -> f64 {
+            table
+                .iter()
+                .rev()
+                .find(|(k, _)| *k <= s)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0)
+        };
+        let mut s = score.floor();
+        let mut factor = 1.0;
+        if s < min {
+            return 0.0;
+        }
+        while s > max {
+            s -= 10.0;
+            factor *= mult;
+        }
+        let size = self.size_key();
+        let size_mult: f64 = g
+            .lines("load.lst", "SIZEMULT")
+            .find_map(|l| {
+                let (a, b) = l.value.split_once('|')?;
+                a.eq_ignore_ascii_case(&size)
+                    .then(|| b.parse().ok())
+                    .flatten()
+            })
+            .unwrap_or(1.0);
+        lookup(s) * factor * size_mult
+    }
+
+    /// Load category: 0 light, 1 medium, 2 heavy, 3 overloaded.
+    pub fn encumbrance(&self) -> u32 {
+        if !self.rules.get("SYS_LDPACSK").copied().unwrap_or(true) {
+            return 0;
+        }
+        let Some(g) = self.gm else { return 0 };
+        let max = self.max_load();
+        if max <= 0.0 {
+            return 0;
+        }
+        let ratio = self.carried_weight() / max;
+        let frac = |name: &str| -> Option<f64> {
+            let l = g.lines("load.lst", "ENCUMBRANCE").find(|l| {
+                l.value
+                    .split('|')
+                    .next()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })?;
+            let f = l.value.split('|').nth(1)?;
+            match f.split_once('/') {
+                Some((a, b)) => Some(a.parse::<f64>().ok()? / b.parse::<f64>().ok()?),
+                None => f.parse().ok(),
+            }
+        };
+        for (i, n) in ["Light", "Medium", "Heavy"].iter().enumerate() {
+            if frac(n).is_some_and(|f| ratio <= f) {
+                return i as u32;
+            }
+        }
+        3
+    }
+
+    /// Maximum dexterity bonus allowed by equipped armor and load.
+    pub fn max_dex(&self) -> f64 {
+        const MAX: f64 = 100.0;
+        let stat_bonus = self
+            .sources
+            .iter()
+            .filter(|s| s.kind == SrcKind::Stat)
+            .count() as f64
+            * 0.0;
+        let load = self.encumbrance();
+        let mut bonus = match load {
+            1 => 3.0,
+            2 => 1.0,
+            3 => 0.0,
+            _ => stat_bonus,
+        };
+        let mut use_max = load == 0;
+        for (i, it) in self.items.iter().enumerate() {
+            let Some(md) = it.obj.get("MAXDEX").and_then(|v| v.parse::<f64>().ok()) else {
+                continue;
+            };
+            let md = md + self.bonus.total(&format!("ITEM{}.EQMARMOR", i), "MAXDEX");
+            if use_max || bonus > md {
+                bonus = md;
+            }
+            use_max = false;
+        }
+        if use_max {
+            bonus = MAX;
+        }
+        bonus += self.bonus.total("MISC", "MAXDEX") - stat_bonus;
+        bonus.clamp(0.0, MAX)
+    }
+
     /// Movement types and speeds from active objects.
     pub fn movement(&self) -> BTreeMap<String, f64> {
         let mut m = BTreeMap::new();
@@ -403,34 +564,93 @@ impl<'a> Calc<'a> {
             .or_else(|| self.ds.get(FileKind::Race, &self.migrate("RACE", &r)))
     }
 
-    pub fn size_key(&self) -> String {
-        let mut size = self
+    /// Size categories in order, smallest first.
+    fn size_list(&self) -> Vec<&'a Object> {
+        let mut v: Vec<&Object> = self.ds.objects(FileKind::Size).iter().collect();
+        if v.iter().all(|o| o.get("SIZENUM").is_some()) {
+            v.sort_by_key(|o| {
+                o.get("SIZENUM")
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .unwrap_or(0)
+            });
+        }
+        v
+    }
+
+    /// Resolve a SIZE value: a size key, or a formula giving an index.
+    fn size_value_index(&self, v: &str, src: Option<&Src<'a>>) -> Option<i64> {
+        let sizes = self.size_list();
+        if let Some(i) = sizes.iter().position(|o| o.key.eq_ignore_ascii_case(v)) {
+            return Some(i as i64);
+        }
+        if v.eq_ignore_ascii_case("PC") {
+            return None;
+        }
+        let env = Ctx { calc: self, src };
+        Some(eval_str(v, &env) as i64)
+    }
+
+    /// Index of a size named by key, name or display name.
+    fn size_named(&self, name: &str) -> Option<i64> {
+        self.size_list()
+            .iter()
+            .position(|o| {
+                o.key.eq_ignore_ascii_case(name)
+                    || o.name.eq_ignore_ascii_case(name)
+                    || o.get("DISPLAYNAME")
+                        .is_some_and(|d| d.eq_ignore_ascii_case(name))
+            })
+            .map(|i| i as i64)
+    }
+
+    fn default_size_index(&self) -> i64 {
+        let sizes = self.size_list();
+        sizes
+            .iter()
+            .position(|o| {
+                o.get("ISDEFAULTSIZE")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("Y") || v.eq_ignore_ascii_case("YES"))
+            })
+            .unwrap_or(sizes.len().min(5).saturating_sub(1)) as i64
+    }
+
+    /// Racial size: the race's size, or the last template that sets
+    /// one (before SIZEMOD adjustments).
+    pub fn base_size_index(&self) -> i64 {
+        let mut idx = self
             .race()
             .and_then(|r| r.get("SIZE"))
-            .unwrap_or("M")
-            .to_string();
+            .and_then(|v| self.size_value_index(v, None))
+            .unwrap_or_else(|| self.default_size_index());
         for s in &self.sources {
             if s.kind == SrcKind::Template {
                 if let Some(v) = s.obj.get("SIZE") {
-                    size = v.to_string();
+                    if let Some(i) = self.size_value_index(v, Some(s)) {
+                        idx = i;
+                    }
                 }
             }
         }
-        size
+        idx
+    }
+
+    /// Index of the character's size category.
+    pub fn size_index(&self) -> i64 {
+        let n = self.size_list().len();
+        let idx = self.base_size_index() + self.bonus.total("SIZEMOD", "NUMBER") as i64;
+        idx.clamp(0, n.saturating_sub(1) as i64)
+    }
+
+    pub fn size_key(&self) -> String {
+        let sizes = self.size_list();
+        sizes
+            .get(self.size_index() as usize)
+            .map(|o| o.key.clone())
+            .unwrap_or_else(|| "M".into())
     }
 
     pub fn size_num(&self) -> f64 {
-        let key = self.size_key();
-        let sizes = self.ds.objects(FileKind::Size);
-        if let Some(o) = self.ds.get(FileKind::Size, &key) {
-            if let Some(n) = o.get("SIZENUM").and_then(|v| v.parse().ok()) {
-                return n;
-            }
-            if let Some(i) = sizes.iter().position(|x| std::ptr::eq(x, o)) {
-                return i as f64;
-            }
-        }
-        4.0
+        self.size_index() as f64
     }
 
     /// Abilities active now: (category, key, choices)
@@ -487,7 +707,9 @@ impl<'a> Calc<'a> {
             }
             "BAB" => return Some(self.bonus.total("COMBAT", "BASEAB")),
             "SIZE" | "SIZEMOD" => return Some(self.size_num()),
-            "ACCHECK" | "ACHECK" => return Some(self.armor_check() as f64),
+            "ACCHECK" | "ACHECK" | "MODEQUIPACCHECK" => return Some(self.armor_check() as f64),
+            "MODEQUIPMAXDEX" => return Some(self.max_dex()),
+            "ENCUMBERANCE" => return Some(self.encumbrance() as f64),
             "SCORE" => return Some(0.0),
             "COUNT[CLASSES]" => return Some(self.classes.len() as f64),
             "COUNT[FEATS]" | "COUNT[FEATS.ALL]" | "COUNT[FEATSALL]" => {
@@ -611,8 +833,12 @@ impl<'a> Calc<'a> {
         match lower(name).as_str() {
             "var" => self.var_value(&s(0)?, src),
             "classlevel" => {
-                let a = s(0)?;
-                if a.eq_ignore_ascii_case("APPLIEDAS=NONEPIC") || a.is_empty() {
+                let a = s(0).unwrap_or_default();
+                if a.is_empty() {
+                    let c = src.and_then(|x| x.class.as_deref())?;
+                    return Some(self.class_level(c) as f64);
+                }
+                if a.eq_ignore_ascii_case("APPLIEDAS=NONEPIC") {
                     let c = src.and_then(|x| x.class.as_deref())?;
                     let lvl = self.class_level(c);
                     let max_non_epic: u32 = self
@@ -870,13 +1096,15 @@ impl<'a> Calc<'a> {
                 let op = kind.trim_start_matches("BASE").trim_start_matches("SIZE");
                 let op = if op.is_empty() { "EQ" } else { op };
                 let want = args.first().map(|a| a.trim()).unwrap_or("M");
-                let wn = self
-                    .ds
-                    .get(FileKind::Size, want)
-                    .and_then(|o| o.get("SIZENUM"))
-                    .and_then(|v| v.parse::<f64>().ok())
-                    .unwrap_or(4.0);
-                cmp(op, self.size_num(), wn)
+                let Some(wn) = self.size_named(want) else {
+                    return false;
+                };
+                let cur = if kind.starts_with("BASE") {
+                    self.base_size_index()
+                } else {
+                    self.size_index()
+                };
+                cmp(op, cur as f64, wn as f64)
             }
             "RULE" => self.count_items(args, |a| {
                 self.rules.get(&upper(a)).copied().unwrap_or(false)
@@ -892,8 +1120,10 @@ impl<'a> Calc<'a> {
                             })
                         });
                     }
-                    let obj = s.item.map(|i| self.items[i].obj).unwrap_or(s.obj);
-                    a.split('.').all(|t| obj.is_type(t))
+                    match s.item {
+                        Some(i) => a.split('.').all(|t| self.item_is_type(i, t)),
+                        None => a.split('.').all(|t| s.obj.is_type(t)),
+                    }
                 })
             }
             "EQUIP" | "EQUIPPRIMARY" | "EQUIPSECONDARY" | "EQUIPBOTH" | "EQUIPTWOWEAPON"
@@ -1071,6 +1301,7 @@ impl<'a> Calc<'a> {
             class: None,
             choices: Vec::new(),
             item: None,
+            times: 1.0,
         }
     }
 
@@ -1139,6 +1370,11 @@ impl<'a> Calc<'a> {
         }
         if let Some(r) = self.race() {
             srcs.push(self.src(SrcKind::Race, r));
+        }
+        // size: the race's size, overridden by templates gathered last pass
+        let size = self.size_key();
+        if let Some(o) = ds.get(FileKind::Size, &size) {
+            srcs.push(self.src(SrcKind::Size, o));
         }
         let mut templates: Vec<String> = self.ch.templates();
         for (o, level) in self.classes.clone() {
@@ -1298,7 +1534,15 @@ impl<'a> Calc<'a> {
                     continue;
                 }
                 let mut s = self.src(SrcKind::Ability, obj);
-                s.choices = choices;
+                // stacking abilities apply once per time taken
+                if obj
+                    .get("STACK")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("YES"))
+                    && choices.len() > 1
+                {
+                    s.times = choices.len() as f64;
+                }
+                s.choices = choices.into_iter().filter(|c| !c.is_empty()).collect();
                 s.class = class;
                 srcs.push(s);
             }
@@ -1402,20 +1646,35 @@ impl<'a> Calc<'a> {
                         };
                         // item-local bonus categories apply to the item
                         if cat.starts_with("EQM") && s.item.is_some() {
+                            let origin = format!("{:?} {}", s.kind, s.obj.key);
                             for tg in &b.targets {
-                                table.add(&format!("ITEM{}.{}", si_item(s), cat), tg, btype, v);
+                                table.add_from(
+                                    &format!("ITEM{}.{}", si_item(s), cat),
+                                    tg,
+                                    btype,
+                                    v,
+                                    &origin,
+                                );
                             }
                             continue;
                         }
                         for tg in &b.targets {
-                            let tgs: Vec<String> = if tg.contains("%LIST") || tg.contains("%CHOICE")
-                            {
+                            // a stacking ability taken several times applies
+                            // its plain bonuses once per time taken
+                            let per_choice =
+                                tg.contains("%LIST") || tg.contains("%CHOICE") || tg == "LIST";
+                            let v = if per_choice { v } else { v * s.times };
+                            let tgs: Vec<String> = if tg == "LIST" {
+                                if s.choices.is_empty() {
+                                    vec![tg.clone()]
+                                } else {
+                                    s.choices.clone()
+                                }
+                            } else if per_choice {
                                 s.choices
                                     .iter()
                                     .map(|c| tg.replace("%LIST", c).replace("%CHOICE", c))
                                     .collect()
-                            } else if tg == "LIST" && !s.choices.is_empty() {
-                                s.choices.clone()
                             } else {
                                 vec![tg.clone()]
                             };

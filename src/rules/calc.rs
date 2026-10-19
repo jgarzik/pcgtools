@@ -143,6 +143,12 @@ pub struct Calc<'a> {
     stat_base: HashMap<String, f64>,
     /// DEFINESTAT locks and limits, by stat (as of the last pass)
     stat_limits: HashMap<String, StatLimit>,
+    /// the character's spells by level, as of the last pass (class and
+    /// race spells, each at every level it is placed)
+    spell_entries: Vec<(&'a Object, i64)>,
+    /// spells on the character's domain lists and granted by the race,
+    /// as of the last pass
+    spell_extras: Vec<&'a Object>,
     ranks: HashMap<String, f64>,
     pcg_class_skills: HashSet<String>,
     items: Vec<Item<'a>>,
@@ -203,6 +209,8 @@ impl<'a> Calc<'a> {
             classes: Vec::new(),
             stat_base: HashMap::new(),
             stat_limits: HashMap::new(),
+            spell_entries: Vec::new(),
+            spell_extras: Vec::new(),
             ranks: HashMap::new(),
             pcg_class_skills: HashSet::new(),
             items: Vec::new(),
@@ -1349,6 +1357,73 @@ impl<'a> Calc<'a> {
     }
 
     /// Spell resistance: the best SR of any source, plus MISC|SR.
+    /// Record the character's spells for spell prerequisites: what the
+    /// classes and race have at each level, plus the spells on its
+    /// domains' lists and those its race grants.
+    fn snapshot_spells(&mut self) {
+        use super::spells::Spells;
+        let sp = Spells::new(self);
+        let mut entries: Vec<(&'a Object, i64)> = Vec::new();
+        for list in &sp.by_caster {
+            for cs in list {
+                let mut levels: Vec<i64> = cs.infos.iter().map(|i| i.level).collect();
+                levels.sort();
+                levels.dedup();
+                entries.extend(levels.into_iter().map(|l| (cs.spell, l)));
+            }
+        }
+        let mut extras: Vec<&'a Object> = Vec::new();
+        for d in self.ch.domains() {
+            for l in 0..=20 {
+                extras.extend(sp.on_list('D', &d, l));
+            }
+        }
+        let auto = self
+            .ch
+            .pcg
+            .value("AUTOSPELLS")
+            .is_none_or(|v| !v.eq_ignore_ascii_case("N"));
+        if auto {
+            for src in self.sources.iter().filter(|s| s.kind == SrcKind::Race) {
+                for t in src.tokens.iter().filter(|t| t.tag == "SPELLS") {
+                    for part in t.value.split('|').skip(1) {
+                        if part.contains('=')
+                            || Prereq::is_pre_tag(part.split(':').next().unwrap_or(""))
+                            || part.starts_with("!PRE")
+                        {
+                            continue;
+                        }
+                        let name = part.split(',').next().unwrap_or(part).trim();
+                        if let Some(o) = self.ds.get(FileKind::Spell, name) {
+                            extras.push(o);
+                        }
+                    }
+                }
+            }
+        }
+        self.spell_entries = entries;
+        self.spell_extras = extras;
+    }
+
+    /// Spell entries (as of the last pass) of at least a level whose
+    /// values of a tag include a name (case-insensitive or exact).
+    fn spells_with(&self, tag: &str, name: &str, min_level: i64, exact: bool) -> usize {
+        self.spell_entries
+            .iter()
+            .filter(|(sp, l)| {
+                *l >= min_level
+                    && sp.values(tag).flat_map(|v| v.split('|')).any(|v| {
+                        let v = v.trim();
+                        if exact {
+                            v == name
+                        } else {
+                            v.eq_ignore_ascii_case(name)
+                        }
+                    })
+            })
+            .count()
+    }
+
     /// Natural reach: the race's (5 if it gives none), replaced by the
     /// last template giving one, plus COMBAT|REACH bonuses.
     pub fn natural_reach(&self) -> f64 {
@@ -2650,6 +2725,45 @@ impl<'a> Calc<'a> {
                     false
                 }
             }),
+            // the character's spells (entries at each level, those on
+            // its domains' lists and those its race grants), by name
+            "SPELL" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let count: usize = args
+                    .iter()
+                    .skip(1)
+                    .map(|a| {
+                        let a = a.trim();
+                        self.spell_entries
+                            .iter()
+                            .filter(|(sp, _)| sp.key.eq_ignore_ascii_case(a))
+                            .count()
+                            + self
+                                .spell_extras
+                                .iter()
+                                .filter(|sp| sp.key.eq_ignore_ascii_case(a))
+                                .count()
+                    })
+                    .sum();
+                count as f64 >= n.max(1.0)
+            }
+            // spell entries of a school, subschool or descriptor from a
+            // minimum level; the count is how many entries are needed
+            "SPELLSCHOOL" | "SPELLSCHOOLSUB" | "SPELLDESCRIPTOR" => {
+                let (tag, exact) = match kind.as_str() {
+                    "SPELLSCHOOL" => ("SCHOOL", false),
+                    "SPELLSCHOOLSUB" => ("SUBSCHOOL", true),
+                    _ => ("DESCRIPTOR", true),
+                };
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let count: usize = args
+                    .iter()
+                    .skip(1)
+                    .filter_map(|a| a.trim().split_once('='))
+                    .map(|(name, lv)| self.spells_with(tag, name.trim(), num(lv) as i64, exact))
+                    .sum();
+                count as f64 >= n.max(1.0)
+            }
             // spells of a type at exactly a level: what classes of the
             // type know there, else what they can cast; summed over the
             // items, the count being how many are needed
@@ -3917,8 +4031,16 @@ impl<'a> Calc<'a> {
         while passes < MAX_PASSES {
             passes += 1;
             self.pass();
+            self.snapshot_spells();
             let mut vs: Vec<(String, f64)> =
                 self.vars.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            // spells feed prerequisites of the next pass
+            vs.extend(
+                self.spell_entries
+                    .iter()
+                    .map(|(sp, l)| (format!("spell {} {}", sp.key, l), 1.0)),
+            );
+            vs.push(("spell extras".into(), self.spell_extras.len() as f64));
             vs.sort_by(|a, b| a.0.cmp(&b.0));
             let snap = (self.bonus.snapshot(), vs);
             if last.as_ref() == Some(&snap) {

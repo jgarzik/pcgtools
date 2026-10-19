@@ -318,3 +318,20 @@ class add Cleric
 skill "Knowledge (Arcana)" 6 Wizard
 skill "Knowledge (Religion)" 6 Cleric
 class add "Mystic Theurge"
+
+== thaumaturgist_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat WIS 16
+set stat CON 12
+race Human
+set align LN
+class add Cleric
+class add Cleric
+class add Cleric
+class add Cleric
+class add Cleric
+class add Cleric
+class add Cleric
+feat add "Spell Focus" Conjuration
+class add Thaumaturgist

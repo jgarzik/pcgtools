@@ -320,3 +320,30 @@ fn spell_level_grants_check_their_prerequisites() {
     levels.sort();
     assert_eq!(levels, vec![1, 3]);
 }
+
+#[test]
+fn spell_list_prerequisites() {
+    // the Chanter is granted Spark and Glow as known level 0 spells
+    let chanter = ["class add Chanter"];
+    assert!(meets(&chanter, "PRESPELL:1,Spark"));
+    assert!(!meets(&[], "PRESPELL:1,Spark"));
+    // several names add up their entries
+    assert!(meets(&chanter, "PRESPELL:2,Spark,Glow"));
+    assert!(!meets(&chanter, "PRESPELL:3,Spark,Glow"));
+    // spells on a domain's list count, known or not
+    assert!(meets(
+        &["class add Tinker", "domain add Cogs"],
+        "PRESPELL:1,Spark"
+    ));
+    // by school, from a minimum level; the count is of spells
+    assert!(meets(&chanter, "PRESPELLSCHOOL:1,Evocation=0"));
+    assert!(meets(&chanter, "PRESPELLSCHOOL:2,Evocation=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOL:3,Evocation=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOL:1,Evocation=1"));
+    // subschool and descriptor names are compared exactly
+    assert!(meets(&chanter, "PRESPELLSCHOOLSUB:1,Lightning=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOLSUB:1,lightning=0"));
+    assert!(meets(&chanter, "PRESPELLDESCRIPTOR:1,Fire=0"));
+    assert!(!meets(&chanter, "PRESPELLDESCRIPTOR:2,Fire=0"));
+    assert!(!meets(&chanter, "!PRESPELLDESCRIPTOR:1,Fire=0"));
+}

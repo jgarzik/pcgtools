@@ -3,6 +3,7 @@
 use crate::common;
 use pcgtools::pcc::resolve::DataDirs;
 use pcgtools::repl::{Outcome, Session};
+use pcgtools::rules::calc::Calc;
 
 fn dirs() -> DataDirs {
     DataDirs {
@@ -398,4 +399,114 @@ fn new_characters_record_an_age() {
     // without one PCGen rolls an age each time it loads the file
     let s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     assert_eq!(s.ch.pcg.value("AGE").as_deref(), Some("0"));
+}
+
+/// Lines of a session's character file starting with `prefix`.
+fn lines(s: &Session, prefix: &str) -> Vec<String> {
+    String::from_utf8(s.ch.pcg.encode())
+        .unwrap()
+        .lines()
+        .filter(|l| l.starts_with(prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Feat points left.
+fn feats_left(s: &Session) -> f64 {
+    let mut c = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    c.run();
+    pcgtools::rules::pools::pools(&c)
+        .iter()
+        .find(|p| p.category == "FEAT")
+        .map_or(0.0, |p| p.left())
+}
+
+#[test]
+fn level_choices_from_add_tokens() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "class add Chanter");
+
+    // ADD:SPELLCASTER|ANY offers both spellcasting classes
+    let e = err(&mut s, "class add Mystic");
+    assert!(e.contains("Chanter, Tinker"), "{}", e);
+    let e = err(&mut s, "class add Mystic --choose Drifter");
+    assert!(e.contains("'Drifter' is not"), "{}", e);
+    assert!(e.contains("Chanter, Tinker"), "{}", e);
+    // the class line's own choice (of two class skills) is needed too
+    let e = err(&mut s, "class add Mystic --choose Tinker");
+    assert!(e.contains("Climbing, Tinkering"), "{}", e);
+    let e = err(
+        &mut s,
+        "class add Mystic --choose Tinker --choose Climbing --choose x",
+    );
+    assert!(e.contains("unused"), "{}", e);
+    assert!(s.ch.classes().iter().all(|c| c.name != "Mystic"));
+
+    // Divine has one class to offer, which is taken without asking
+    // (naming it is accepted too)
+    ok(
+        &mut s,
+        "class add Mystic --choose tinker --choose Chanter --choose climbing",
+    );
+    assert_eq!(
+        lines(&s, "CLASS:Mystic"),
+        ["CLASS:Mystic|LEVEL:1|SKILLPOOL:0|ADD:[CLASSSKILLS:Climbing,Tinkering|CHOICE:Climbing]"]
+    );
+    let lvl = &lines(&s, "CLASSABILITIESLEVEL:Mystic=1")[0];
+    assert!(
+        lvl.starts_with(
+            "CLASSABILITIESLEVEL:Mystic=1|HITPOINTS:4|SAVES:[SAVE:BONUS&pipe;PCLEVEL&pipe;TINKER&pipe;1|SAVE:BONUS&pipe;PCLEVEL&pipe;CHANTER&pipe;1]|ADD:[SPELLCASTER:ANY|CHOICE:Tinker]|ADD:[SPELLCASTER:Divine|CHOICE:Chanter]|SKILLSGAINED:"
+        ),
+        "{}",
+        lvl
+    );
+    // the choices take effect
+    assert!(ok(&mut s, "explain PCLEVEL.Tinker").contains("+1"));
+    assert!(ok(&mut s, "explain PCLEVEL.Chanter").contains("+1"));
+    {
+        let mut c = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        c.run();
+        assert!(c.is_class_skill_for("Climbing", "Mystic"));
+        assert!(c.is_class_skill("Climbing"));
+        assert!(!c.is_class_skill_for("Tinkering", "Mystic"));
+    }
+
+    // one ability qualifies (Steady Hands is had already); the
+    // language needs a choice
+    let e = err(&mut s, "class add Mystic");
+    assert!(e.contains("Old Script, Trade Tongue"), "{}", e);
+    let left = feats_left(&s);
+    ok(&mut s, "class add Mystic --choose \"Trade Tongue\"");
+    let lvl = &lines(&s, "CLASSABILITIESLEVEL:Mystic=2")[0];
+    assert!(
+        lvl.starts_with(
+            "CLASSABILITIESLEVEL:Mystic=2|HITPOINTS:4|ADD:[ABILITY:Iron Fist,TYPE=Combat|CHOICE:CATEGORY=FEAT&pipe;NATURE=NORMAL&pipe;Iron Fist]|ADD:[LANGUAGE:Old Script,TYPE=Spoken|CHOICE:Trade Tongue]|SKILLSGAINED:"
+        ),
+        "{}",
+        lvl
+    );
+    assert_eq!(lines(&s, "LANGUAGE"), ["LANGUAGE:Trade Tongue"]);
+    assert!(lines(&s, "ABILITY:")
+        .contains(&"ABILITY:FEAT|TYPE:NORMAL|CATEGORY:FEAT|KEY:Iron Fist".to_string()));
+    // the granted feat costs no feat points
+    assert_eq!(lines(&s, "USERPOOL"), ["USERPOOL:FEAT|POOLPOINTS:1.0"]);
+    assert_eq!(feats_left(&s), left);
+
+    // a token whose prerequisites fail offers nothing
+    ok(&mut s, "class add Mystic");
+    assert!(!lines(&s, "CLASSABILITIESLEVEL:Mystic=3")[0].contains("ADD:"));
+    ok(&mut s, "undo");
+    ok(&mut s, "undo");
+    assert!(lines(&s, "USERPOOL").is_empty());
+    assert!(lines(&s, "LANGUAGE").is_empty());
+
+    // with --force, a choice not offered skips its token
+    ok(&mut s, "class add Mystic --choose Nonsense --force");
+    let lvl = &lines(&s, "CLASSABILITIESLEVEL:Mystic=2")[0];
+    assert!(
+        lvl.contains("ABILITY:Iron Fist") && !lvl.contains("LANGUAGE"),
+        "{}",
+        lvl
+    );
 }

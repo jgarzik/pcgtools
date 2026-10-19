@@ -108,7 +108,8 @@ fn feats_on_schedule(levels: u32, start: u32, interval: u32) -> u32 {
 pub fn pools(c: &Calc) -> Vec<Pool> {
     let mut out = Vec::new();
     for cat in categories(c) {
-        let mut total = c.bonus.total("ABILITYPOOL", &cat);
+        // points granted, and points added by hand
+        let mut total = c.bonus.total("ABILITYPOOL", &cat) + c.ch.user_pool(&cat);
         if cat.eq_ignore_ascii_case("FEAT") {
             total += level_feats(c);
         }

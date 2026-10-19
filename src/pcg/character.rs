@@ -177,6 +177,13 @@ fn num<T: std::str::FromStr>(e: Option<String>) -> Option<T> {
     e.and_then(|s| s.trim().parse().ok())
 }
 
+/// `ADD:[SET:what|CHOICE:...]`: choices made for an ADD token.
+fn add_elem(set: &str, what: &str, choices: &[String]) -> Elem {
+    let mut kids = vec![Elem::text(set, what)];
+    kids.extend(choices.iter().map(|c| Elem::text("CHOICE", c)));
+    Elem::list("ADD", kids)
+}
+
 impl Character {
     pub fn read(path: &Path) -> Result<Character> {
         Ok(Character {
@@ -668,11 +675,136 @@ impl Character {
         }
     }
 
+    /// Record choices made for an ADD token of a class level:
+    /// `ADD:[SET:what|CHOICE:...]`, placed before the level's stat
+    /// changes and skill points.
+    pub fn add_level_choice(
+        &mut self,
+        class: &str,
+        level: u32,
+        set: &str,
+        what: &str,
+        choices: &[String],
+    ) {
+        let Some(i) = self.level_line(class, level) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let at = elems
+            .iter()
+            .position(|e| {
+                matches!(
+                    e.tag.as_str(),
+                    "PRESTAT" | "POSTSTAT" | "SKILLSGAINED" | "SKILLSREMAINING"
+                )
+            })
+            .unwrap_or(elems.len());
+        elems.insert(at, add_elem(set, what, choices));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Record choices made for an ADD token of a class's own line.
+    pub fn add_class_choice(&mut self, class: &str, set: &str, what: &str, choices: &[String]) {
+        let Some(i) = self.pcg.indices("CLASS").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(class))
+        }) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems.push(add_elem(set, what, choices));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Save a bonus with a class level (`SAVES:[SAVE:BONUS|...]`, after
+    /// its hit points).
+    pub fn add_level_save(&mut self, class: &str, level: u32, bonus: &str) {
+        let Some(i) = self.level_line(class, level) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let save = Elem::text("SAVE", bonus);
+        match elems.iter_mut().find(|e| e.tag == "SAVES") {
+            Some(e) => {
+                let mut kids = e.children().to_vec();
+                kids.push(save);
+                *e = Elem::list("SAVES", kids);
+            }
+            None => {
+                let at = elems
+                    .iter()
+                    .position(|e| e.tag == "HITPOINTS")
+                    .map_or(elems.len(), |p| p + 1);
+                elems.insert(at, Elem::list("SAVES", vec![save]));
+            }
+        }
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Points added to an ability pool by hand (USERPOOL).
+    pub fn user_pool(&self, category: &str) -> f64 {
+        self.pcg
+            .lines_tagged("USERPOOL")
+            .filter(|l| {
+                l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(category))
+            })
+            .filter_map(|l| num::<f64>(l.text("POOLPOINTS")))
+            .sum()
+    }
+
+    /// Add points to an ability pool by hand.
+    pub fn adjust_user_pool(&mut self, category: &str, delta: f64) {
+        let total = self.user_pool(category) + delta;
+        let value = format!("{:?}", total);
+        let idx = self.pcg.indices("USERPOOL").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(category))
+        });
+        match idx {
+            Some(i) => self.set_elem(i, "POOLPOINTS", &value),
+            None => {
+                self.insert_ordered(
+                    "USERPOOL",
+                    PcgLine::new(vec![
+                        Elem::text("USERPOOL", category),
+                        Elem::raw("POOLPOINTS", &value),
+                    ]),
+                );
+            }
+        }
+    }
+
+    /// The level line of a class level.
+    fn level_line(&self, class: &str, level: u32) -> Option<usize> {
+        self.class_level_lines(class).into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .map(|h| h.value_text())
+                .and_then(|h| h.rsplit_once('=').map(|(_, n)| n.trim().to_string()))
+                .is_some_and(|n| n == level.to_string())
+        })
+    }
+
     /// Add a chosen ability.
     pub fn add_ability(&mut self, pool: &str, category: &str, key: &str, applied_to: &[String]) {
+        self.add_ability_as(pool, category, key, "NORMAL", applied_to);
+    }
+
+    /// Add an ability the character has by a nature (NORMAL, VIRTUAL).
+    pub fn add_ability_as(
+        &mut self,
+        pool: &str,
+        category: &str,
+        key: &str,
+        nature: &str,
+        applied_to: &[String],
+    ) {
         let mut elems = vec![
             Elem::text("ABILITY", pool),
-            Elem::raw("TYPE", "NORMAL"),
+            Elem::raw("TYPE", nature),
             Elem::text("CATEGORY", category),
             Elem::text("KEY", key),
         ];

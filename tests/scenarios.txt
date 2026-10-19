@@ -483,3 +483,40 @@ equip add Longsword
 equip wear Longsword
 equip add "Armor ~ Leather"
 equip wear "Armor ~ Leather"
+
+== theurge_choices_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+set stat WIS 15
+set stat CHA 14
+race Human
+set align TN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Sorcerer
+class add Sorcerer
+class add Cleric
+class add Cleric
+class add Cleric
+skill "Knowledge (Arcana)" 6 Wizard
+skill "Knowledge (Religion)" 6 Cleric
+class add "Mystic Theurge" --choose Wizard --choose Cleric
+class add "Mystic Theurge" --choose Wizard --choose Cleric
+
+== faceman_spycraft
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+class add Faceman --choose "Arabic (Modern)" --choose Armenian
+
+== expert_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat INT 14
+race "None Selected"
+class add Expert --choose Appraise --choose Bluff --choose Climb --choose Diplomacy --choose Hide --choose Listen --choose "Move Silently" --choose Search --choose Spot --choose Swim
+skill Climb 4
+skill Hide 4
+skill Spot 4
+skill Jump 2

@@ -812,7 +812,7 @@ impl<'a> Calc<'a> {
 
     /// The ability category an ability pool draws from (pools are
     /// declared by ABILITYCATEGORY objects; a category is its own pool).
-    fn pool_category(&self, pool: &str) -> String {
+    pub fn pool_category(&self, pool: &str) -> String {
         self.ds
             .get(FileKind::AbilityCategory, pool)
             .and_then(|o| o.get("CATEGORY"))
@@ -1936,19 +1936,26 @@ impl<'a> Calc<'a> {
         }) {
             return true;
         }
-        // class skills chosen when a level was taken
-        self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL").any(|l| {
-            let of_class = l
-                .head()
-                .map(|h| h.value_text())
-                .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
-                .is_some_and(|c| c.eq_ignore_ascii_case(class));
+        self.chosen_class_skill(&sk.key, class)
+    }
+
+    /// Was the skill chosen as a class skill of the class (by an
+    /// ADD:CLASSSKILLS of the class or one of its levels)?
+    fn chosen_class_skill(&self, skill: &str, class: &str) -> bool {
+        let levels = self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL");
+        levels.chain(self.ch.pcg.lines_tagged("CLASS")).any(|l| {
+            let head = l.head().map(|h| h.value_text()).unwrap_or_default();
+            let of_class = match (l.tag(), head.rsplit_once('=')) {
+                (Some("CLASS"), _) => head.eq_ignore_ascii_case(class),
+                (_, Some((c, _))) => c.eq_ignore_ascii_case(class),
+                _ => false,
+            };
             of_class
                 && l.elems.iter().flatten().any(|e| {
                     e.tag == "ADD"
                         && e.children().iter().any(|c| c.tag == "CLASSSKILLS")
                         && e.children().iter().any(|c| {
-                            c.tag == "CHOICE" && c.value_text().eq_ignore_ascii_case(&sk.key)
+                            c.tag == "CHOICE" && c.value_text().eq_ignore_ascii_case(skill)
                         })
                 })
         })
@@ -1962,6 +1969,13 @@ impl<'a> Calc<'a> {
     pub fn is_class_skill(&self, skill: &str) -> bool {
         let s = lower(skill);
         if self.class_skills.contains(&s) || self.pcg_class_skills.contains(&s) {
+            return true;
+        }
+        if self
+            .classes
+            .iter()
+            .any(|(cl, _)| self.chosen_class_skill(skill, &cl.key))
+        {
             return true;
         }
         // the skill may name the classes it is a class skill for
@@ -2118,7 +2132,7 @@ impl<'a> Calc<'a> {
     }
 
     /// Abilities active now: (category, key, choices)
-    fn has_ability(&self, category: Option<&str>, key: &str) -> bool {
+    pub fn has_ability(&self, category: Option<&str>, key: &str) -> bool {
         let k = lower(key);
         self.sources.iter().any(|s| {
             s.kind == SrcKind::Ability

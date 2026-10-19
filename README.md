@@ -135,7 +135,8 @@ Commands (`help` in the editor lists them):
     ls KIND [GLOB] [COND...] | show KIND KEY | prereq KIND KEY
     set stat ABB SCORE | set xp N | set align ABB | set FIELD VALUE
     race KEY | deity KEY|none | domain add KEY
-    class add KEY [HP] [--subclass SUB] | class rm | class subclass KEY SUB
+    class add KEY [HP] [--subclass SUB] [--choose CHOICE]...
+    class rm | class subclass KEY SUB
     ability add [CATEGORY|]KEY [CHOICE...] | ability rm [CATEGORY|]KEY
     feat add KEY [CHOICE...] | feat rm KEY
     skill KEY RANKS [CLASS]
@@ -152,7 +153,10 @@ choices must be ones its `CHOOSE` offers; abilities are paid for from
 their category's pool (bonus pools, the race's starting feats and the
 game mode's feat schedule); skill ranks are capped at the level
 maximum and paid for with the class's skill points. `info` shows the
-pools and skill points left. `--force` overrides the checks. After
+pools and skill points left. A class level that offers choices
+(`ADD:` tokens granting spellcasting class levels, abilities, class
+skills or languages) takes them from `--choose`, in order; a choice
+with only as many options as it grants is made without asking. `--force` overrides the checks. After
 each change the editor shows the updated level, attack bonus, hit
 points, armor class and saves.
 

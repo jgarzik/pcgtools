@@ -22,6 +22,7 @@ use crate::pcc::resolve::DataDirs;
 use crate::pcg::character::Character;
 use crate::query::Query;
 use crate::rules::calc::{Calc, Sheet};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 const MAX_UNDO: usize = 100;
@@ -61,7 +62,9 @@ Commands (names may be quoted; most accept --force to skip checks):
   race KEY                     set race
   deity KEY | deity none       set or clear deity
   domain add KEY               add a domain
-  class add KEY [HP] [--subclass SUB]   gain a level (HP defaults to the hit die)
+  class add KEY [HP] [--subclass SUB] [--choose CHOICE]...
+                               gain a level (HP defaults to the hit die);
+                               choices for the level's ADD tokens, in order
   class rm                     remove the last level gained
   class subclass KEY SUB       choose a class's subclass
   ability add [CATEGORY|]KEY [CHOICE...]   add an ability (feat by default)
@@ -536,12 +539,40 @@ impl Session {
                     } else {
                         self.check_prereqs(o, force)?
                     };
+                    let mut choices: VecDeque<String> = w
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| **x == "--choose")
+                        .filter_map(|(i, _)| w.get(i + 1).map(|s| s.to_string()))
+                        .collect();
+                    let was_dirty = self.dirty;
                     self.checkpoint();
                     let lvl = self.ch.add_level(&key, hp, skills);
                     if let Some(sub) = &subclass {
                         self.ch.set_subclass(&key, sub);
                     }
-                    changed(self, format!("{}{} is now level {}", warn, key, lvl))
+                    let chosen = match self.level_choices(&key, lvl, &mut choices, force) {
+                        Ok(_) if !choices.is_empty() => Err(Error::Other(format!(
+                            "unused choices: {}",
+                            Vec::from(choices).join(", ")
+                        ))),
+                        r => r,
+                    };
+                    let chosen = match chosen {
+                        Ok(c) => c,
+                        Err(e) => {
+                            if let Some(prev) = self.undo.pop() {
+                                self.ch = prev;
+                            }
+                            self.dirty = was_dirty;
+                            return Err(e);
+                        }
+                    };
+                    let chosen: String = chosen.iter().map(|c| format!("\nchose {}", c)).collect();
+                    changed(
+                        self,
+                        format!("{}{} is now level {}{}", warn, key, lvl, chosen),
+                    )
                 }
                 "subclass" => {
                     let o = self.find(FileKind::Class, arg(2)?)?;
@@ -926,6 +957,153 @@ impl Session {
             }
             other => Err(Error::Other(format!("unknown equip command '{}'", other))),
         }
+    }
+
+    /// Make the choices the ADD tokens of a newly gained class level
+    /// offer (those of its level lines, then on the class's first level
+    /// those of the class line), taking `choices` in order, and record
+    /// them with their effects.  A token offering no more than it
+    /// grants takes everything.  Returns what was chosen.
+    fn level_choices(
+        &mut self,
+        class: &str,
+        level: u32,
+        choices: &mut VecDeque<String>,
+        force: bool,
+    ) -> Result<Vec<String>> {
+        use crate::rules::adds::{level_line_at, AddKind, AddToken};
+        let Some(o) = self.ctx.dataset.get(FileKind::Class, class) else {
+            return Ok(Vec::new());
+        };
+        let adds = |toks: &[crate::dataset::Tok]| -> Vec<AddToken> {
+            toks.iter()
+                .filter(|t| t.tag == "ADD")
+                .filter_map(|t| AddToken::parse(&t.value))
+                .collect()
+        };
+        let mut tokens: Vec<(bool, AddToken)> = o
+            .sublines
+            .iter()
+            .filter(|sl| sl.tag == "LEVEL" && level_line_at(&sl.value, level))
+            .flat_map(|sl| adds(&sl.tokens))
+            .map(|t| (false, t))
+            .collect();
+        if level == 1 {
+            tokens.extend(adds(&o.tokens).into_iter().map(|t| (true, t)));
+        }
+        let mut done = Vec::new();
+        for (class_line, add) in tokens {
+            let (offered, count) = {
+                let mut c = self.calc();
+                c.run();
+                if !add.passes(&c) {
+                    continue;
+                }
+                (add.options(&c, class), add.count(&c))
+            };
+            let what = format!("ADD:{}|{}", add.set_name(), add.lst_format());
+            let listed = || {
+                let shown: Vec<&str> = offered.iter().take(30).map(String::as_str).collect();
+                let more = offered.len().saturating_sub(shown.len());
+                format!(
+                    "choose from: {}{}",
+                    shown.join(", "),
+                    if more > 0 {
+                        format!(" ... ({} more)", more)
+                    } else {
+                        String::new()
+                    }
+                )
+            };
+            let picked: Vec<String> = if offered.len() <= count {
+                // nothing to choose, though choices naming what is
+                // taken anyway are accepted
+                for _ in 0..offered.len() {
+                    match choices.front() {
+                        Some(ch) if offered.iter().any(|x| x.eq_ignore_ascii_case(ch)) => {
+                            choices.pop_front();
+                        }
+                        _ => break,
+                    }
+                }
+                offered.clone()
+            } else {
+                let mut v: Vec<String> = Vec::new();
+                for _ in 0..count {
+                    let found = choices.pop_front().map(|ch| {
+                        let hit = offered
+                            .iter()
+                            .find(|x| x.eq_ignore_ascii_case(&ch) && !v.iter().any(|y| y == *x));
+                        (ch, hit.cloned())
+                    });
+                    match found {
+                        Some((_, Some(k))) => v.push(k),
+                        _ if force => {
+                            v.clear();
+                            break;
+                        }
+                        Some((ch, None)) => {
+                            return Err(Error::Other(format!(
+                                "'{}' is not a choice for {}; {} (or use --force)",
+                                ch,
+                                what,
+                                listed()
+                            )))
+                        }
+                        None => {
+                            return Err(Error::Other(format!(
+                                "{} needs {} choice{} (--choose); {} (or use --force)",
+                                what,
+                                count,
+                                if count == 1 { "" } else { "s" },
+                                listed()
+                            )))
+                        }
+                    }
+                }
+                v
+            };
+            if picked.is_empty() {
+                continue;
+            }
+            let encoded: Vec<String> = picked.iter().map(|k| add.encode(k)).collect();
+            let lst = add.lst_format();
+            if class_line {
+                self.ch
+                    .add_class_choice(class, add.set_name(), &lst, &encoded);
+            } else {
+                self.ch
+                    .add_level_choice(class, level, add.set_name(), &lst, &encoded);
+            }
+            for k in &picked {
+                match &add.kind {
+                    // the chosen class's level counts one higher for spells
+                    AddKind::SpellCaster => self.ch.add_level_save(
+                        class,
+                        level,
+                        &format!("BONUS|PCLEVEL|{}|1", k.to_uppercase()),
+                    ),
+                    AddKind::Ability { category, nature } => {
+                        let parent = self.calc().pool_category(category);
+                        let Some(ab) = self.ctx.dataset.get_in(FileKind::Ability, &parent, k)
+                        else {
+                            continue;
+                        };
+                        let cat = ab.category.clone().unwrap_or(parent);
+                        // a granted ability is paid for by the pool
+                        if nature == "NORMAL" {
+                            let cost = crate::rules::pools::ability_cost(ab);
+                            self.ch.adjust_user_pool(category, cost);
+                        }
+                        self.ch.add_ability_as(category, &cat, k, nature, &[]);
+                    }
+                    AddKind::Language => self.ch.add_language(k),
+                    AddKind::ClassSkills => {}
+                }
+                done.push(format!("{} ({})", k, add.set_name()));
+            }
+        }
+        Ok(done)
     }
 
     /// Check choices against what the ability's CHOOSE offers.

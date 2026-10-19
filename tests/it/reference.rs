@@ -117,10 +117,13 @@ fn pcgen_sheet(
         .map_err(|e| format!("running PCGen: {}", e))?;
     let log =
         String::from_utf8_lossy(&run.stdout).into_owned() + &String::from_utf8_lossy(&run.stderr);
-    // problems after the character is loaded are about the character
+    // problems reading the character, and after it is loaded, are
+    // about the character
     let complaints = log
         .lines()
-        .skip_while(|l| !l.contains("Loaded character"))
+        .skip_while(|l| {
+            !l.contains("Loaded character") && !l.contains("were encountered while loading")
+        })
         .filter(|l| l.contains(" SEVERE ") || l.contains(" WARNING "))
         // reports on the data's own syntax, not on the character
         .filter(|l| {

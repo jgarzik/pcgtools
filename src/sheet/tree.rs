@@ -199,16 +199,32 @@ impl Element {
         if !text.is_empty() {
             out.push((format!("{}/#text", path), text.to_string()));
         }
-        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        let mut name_counts: std::collections::HashMap<(String, String), usize> =
+        // children sharing a tag and name are numbered in the order of
+        // their contents, so that the order of such ties (which carries
+        // no meaning) does not matter
+        let mut groups: std::collections::HashMap<(String, String), Vec<usize>> =
             std::collections::HashMap::new();
-        for c in &self.children {
+        for (ci, c) in self.children.iter().enumerate() {
+            if let Some(n) = c.name_key() {
+                groups.entry((c.tag.clone(), n)).or_default().push(ci);
+            }
+        }
+        let mut rank: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for members in groups.values_mut() {
+            if members.len() > 1 {
+                members.sort_by_cached_key(|&ci| self.children[ci].to_xml());
+            }
+            for (r, &ci) in members.iter().enumerate() {
+                rank.insert(ci, r + 1);
+            }
+        }
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (ci, c) in self.children.iter().enumerate() {
             let i = counts.entry(c.tag.as_str()).or_default();
             let seg = match c.name_key() {
                 Some(n) => {
-                    let k = name_counts.entry((c.tag.clone(), n.clone())).or_default();
-                    *k += 1;
-                    if *k > 1 {
+                    let k = rank.get(&ci).copied().unwrap_or(1);
+                    if k > 1 {
                         format!("{}[{}#{}]", c.tag, n, k)
                     } else {
                         format!("{}[{}]", c.tag, n)
@@ -351,6 +367,25 @@ mod tests {
             section("character/skills[0]/skill[Swim]/ranks[0]"),
             "skills"
         );
+    }
+
+    #[test]
+    fn duplicate_names_compare_in_any_order() {
+        let a = Element::parse_xml(
+            "<r><s><name>A</name><v>1</v></s><s><name>A</name><v>2</v></s><s><name>B</name><v>3</v></s></r>",
+        )
+        .unwrap();
+        let swapped = Element::parse_xml(
+            "<r><s><name>A</name><v>2</v></s><s><name>A</name><v>1</v></s><s><name>B</name><v>3</v></s></r>",
+        )
+        .unwrap();
+        assert!(compare(&a, &swapped).mismatches.is_empty());
+        // a real difference among them is still found
+        let changed = Element::parse_xml(
+            "<r><s><name>A</name><v>2</v></s><s><name>A</name><v>9</v></s><s><name>B</name><v>3</v></s></r>",
+        )
+        .unwrap();
+        assert!(!compare(&a, &changed).mismatches.is_empty());
     }
 
     #[test]

@@ -627,7 +627,7 @@ set align LN
 class add Wizard
 class add Wizard
 class add Wizard
-class add Wizard
+class add Wizard --stat INT
 class add Wizard
 feat add "Heighten Spell"
 feat add "Extend Spell"

@@ -1,12 +1,25 @@
 [package]
 name = "pcgtools"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Jeff Garzik"]
-description = "Read, query, edit and write PCGen data and character files"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Read, query, lint, edit and write PCGen data and character files; compute character sheets"
+repository = "https://github.com/jgarzik/pcgtools"
+homepage = "https://github.com/jgarzik/pcgtools"
+readme = "README.md"
+keywords = ["pcgen", "rpg", "ttrpg", "character-sheet", "tabletop"]
+categories = ["command-line-utilities", "parser-implementations", "games"]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/tools",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }

@@ -179,3 +179,85 @@ class add Fighter
 gamemode Spycraft
 campaign Spycraft Espionage Handbook
 class add Soldier
+
+== cleric_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat WIS 16
+set stat CON 14
+set stat STR 12
+race Human
+set align LG
+deity Iomedae
+class add Cleric
+class add Cleric
+class add Cleric
+domain add Glory
+domain add Law
+spell add Cleric Bless
+spell add Cleric "Cure Light Wounds"
+spell add Cleric "Spiritual Weapon"
+equip add "Scale Mail"
+equip wear "Scale Mail"
+equip add "Shield (Heavy/Wooden)"
+equip wear "Shield (Heavy/Wooden)"
+equip add Longsword
+equip wear Longsword
+
+== monk_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat DEX 16
+set stat WIS 16
+set stat STR 14
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk
+skill Acrobatics 4
+skill Perception 4
+
+== magic_gear_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 17
+set stat DEX 13
+set stat CON 14
+race Human
+set align NG
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter
+equip add Longsword
+equip customize Longsword +PLUS1W
+equip wear Longsword
+equip add "Full Plate"
+equip customize "Full Plate" +PLUS1A
+equip wear "Full Plate"
+template add "Inherent Strength Bonus +2"
+
+== rogue_pf_levels
+gamemode Pathfinder
+campaign Core Rulebook
+set stat DEX 17
+set stat INT 14
+race Halfling
+set align CN
+class add Rogue
+class add Rogue
+class add Rogue
+class add Rogue
+class add Rogue
+class add Rogue
+class add Rogue
+skill Stealth 7
+skill "Disable Device" 7
+skill Perception 7
+equip add "Studded Leather"
+equip wear "Studded Leather"
+equip add "Rapier"
+equip wear "Rapier"

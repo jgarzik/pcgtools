@@ -864,3 +864,15 @@ class add Fighter
 template add Half-Dragon
 skill Survival 3 Humanoid
 skill Climb 1 Fighter
+
+== hit_die_bonus_arcanis
+gamemode 35e
+campaign Player's Guide to Arcanis
+set stat CON 14
+set stat CHA 14
+race Human
+set align LG
+deity Sarish
+class add "Holy Champion (Inner Demon)"
+class add "Holy Champion (Inner Demon)"
+class add "Holy Champion (Inner Demon)" 3

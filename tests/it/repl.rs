@@ -1339,3 +1339,36 @@ fn temporary_bonuses_switched_and_removed() {
         .lines_tagged("EQUIPSET")
         .all(|l| l.raw.ends_with("|USETEMPMODS:Y")));
 }
+
+#[test]
+fn hit_points_rolled_within_bonus_bounds() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Hale", dirs());
+    let hp = |s: &Session, cls: &str, n: u32| {
+        let l = &lines(s, &format!("CLASSABILITIESLEVEL:{}={}|", cls, n))[0];
+        l.split('|').nth(1).unwrap().to_string()
+    };
+    // the Warden's minimum is 1 + 3 with the new level's bonus; the
+    // die's maximum would be 8 + 1 + 2, but a saved roll keeps only
+    // the class's bonuses from below the level (here its class line);
+    // the default is the maximum
+    ok(&mut s, "class add Warden");
+    assert_eq!(hp(&s, "Warden", 1), "HITPOINTS:9");
+    let e = err(&mut s, "class add Warden 12");
+    assert!(e.contains("4 to 11"), "{}", e);
+    assert!(err(&mut s, "class add Warden 3").contains("4 to 11"));
+    ok(&mut s, "class add Warden 4");
+    assert_eq!(hp(&s, "Warden", 2), "HITPOINTS:4");
+    ok(&mut s, "undo");
+    ok(&mut s, "class add Warden");
+    assert_eq!(hp(&s, "Warden", 2), "HITPOINTS:11");
+    // the minimum bonus is the Warden's own, and another class's roll
+    // keeps none of the Warden's maximum bonuses
+    let e = err(&mut s, "class add Tinker 9");
+    assert!(e.contains("1 to 8"), "{}", e);
+    ok(&mut s, "class add Tinker 1");
+    ok(&mut s, "undo");
+    ok(&mut s, "class add Tinker");
+    assert_eq!(hp(&s, "Tinker", 1), "HITPOINTS:8");
+    ok(&mut s, "class add Tinker 12 --force");
+    assert_eq!(hp(&s, "Tinker", 2), "HITPOINTS:12");
+}

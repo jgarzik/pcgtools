@@ -264,6 +264,54 @@ impl Session {
         None
     }
 
+    /// The range a hit point roll for a new level of `cls` may take:
+    /// 1 to the hit die `hd`, moved by BONUS:HD|MIN and HD|MAX (and
+    /// their `;CLASS.key` forms for this class), counting the bonuses
+    /// the new level itself brings.  A class without a hit die rolls
+    /// nothing.
+    ///
+    /// The top is also held to what PCGen keeps when it loads the
+    /// character: it lowers a roll above the hit die plus the HD|MAX
+    /// bonuses of the class's own line and of its levels below this
+    /// one (so a bonus a class grants at level 1 first counts at 2).
+    fn hit_point_range(&self, work: &Character, cls: &Object, hd: i64) -> (i64, i64) {
+        if hd <= 0 {
+            return (0, 0);
+        }
+        let mut next = work.clone();
+        let level = next.add_level(&cls.key, 0, 0.0);
+        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &next);
+        c.run();
+        let b = |t: &str| {
+            let own = format!("{};CLASS.{}", t, cls.key);
+            (c.bonus.total("HD", t) + c.bonus.total("HD", &own)) as i64
+        };
+        let mut kept = 0.0;
+        let below = |sl: &crate::dataset::SubLine| {
+            sl.tag == "LEVEL" && (1..level).any(|l| crate::rules::adds::level_line_at(&sl.value, l))
+        };
+        let lines = std::iter::once(&cls.tokens).chain(
+            cls.sublines
+                .iter()
+                .filter(|sl| below(sl))
+                .map(|sl| &sl.tokens),
+        );
+        for t in lines.flatten().filter(|t| t.tag == "BONUS") {
+            let Ok(bonus) = crate::token::bonus::Bonus::parse(&t.value) else {
+                continue;
+            };
+            if bonus.category.eq_ignore_ascii_case("HD")
+                && bonus.targets.iter().any(|x| x.eq_ignore_ascii_case("MAX"))
+                && bonus.prereqs().all(|p| c.passes(p, None))
+            {
+                kept += c.eval_formula(&bonus.formula);
+            }
+        }
+        let lo = 1 + b("MIN");
+        let hi = (hd + b("MAX")).min(hd + kept as i64);
+        (lo, hi.max(lo))
+    }
+
     fn calc(&self) -> Calc<'_> {
         Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &self.ch)
     }
@@ -593,12 +641,19 @@ impl Session {
                                 + c.bonus_skill_points(o, class_level, char_level),
                         )
                     };
+                    let (lo, hi) = self.hit_point_range(&work, o, hd);
                     let hp: i64 = match w.get(3).filter(|v| !v.starts_with("--")) {
                         Some(v) => v
                             .parse()
                             .map_err(|_| Error::Other(format!("bad hit points '{}'", v)))?,
-                        None => hd,
+                        None => hi,
                     };
+                    if hd > 0 && (hp < lo || hp > hi) && !force {
+                        return Err(Error::Other(format!(
+                            "hit points must be {} to {} (use --force)",
+                            lo, hi
+                        )));
+                    }
                     let subclass = w
                         .iter()
                         .position(|x| *x == "--subclass")

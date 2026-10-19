@@ -18,6 +18,7 @@ mod combat;
 mod gear;
 mod lists;
 mod skills;
+mod spells;
 pub mod tree;
 pub mod units;
 mod weapons;
@@ -290,6 +291,7 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
     }
     root.push(lists::misc(&s));
     root.push(lists::companions(&s));
+    root.push(spells::build(&s));
     if let Some(e) = lists::prohibited_schools(&s) {
         root.push(e);
     }

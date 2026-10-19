@@ -334,8 +334,87 @@ fn to_hit_bonus(s: &SheetCtx, w: &Weapon, distance: Option<f64>) -> i64 {
     }
     t += b.total("TOHIT", "TOHIT") as i64 as f64;
     t += b.total("COMBAT", "TOHIT") as i64 as f64;
+    t += nonproficient_armor_penalty(s) as f64;
     t += item_bonus(s, w, "TOHIT");
     t as i64
+}
+
+/// Armor and shields worn without proficiency apply their check
+/// penalty to attacks.
+fn nonproficient_armor_penalty(s: &SheetCtx) -> i64 {
+    let c = &s.calc;
+    let (_, items) = placed(s);
+    let mut total = 0;
+    for p in items.iter().filter(|p| p.equipped && p.parent.is_none()) {
+        let it = &p.item;
+        let (kind, grants) = if it.is_type(c, "Shield") {
+            (FileKind::ShieldProf, "SHIELDPROF")
+        } else if it.is_type(c, "Armor") {
+            (FileKind::ArmorProf, "ARMORPROF")
+        } else {
+            continue;
+        };
+        let prof = it
+            .data
+            .get("PROFICIENCY")
+            .and_then(|v| v.split_once('|'))
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| it.base.name.clone());
+        if armor_proficient(s, kind, grants, &prof, it) {
+            continue;
+        }
+        let acp = num(it.data.get("ACCHECK")) + it.bonus(c, "EQMARMOR", "ACCHECK", true);
+        total += acp.min(0.0) as i64;
+    }
+    total
+}
+
+fn num(v: Option<&str>) -> f64 {
+    v.and_then(|x| x.trim().parse().ok()).unwrap_or(0.0)
+}
+
+/// Is the character proficient with a worn armor or shield: granted
+/// its proficiency by name, or every item of one of its types
+/// (AUTO:ARMORPROF|ARMORTYPE=x, AUTO:SHIELDPROF|SHIELDTYPE=x)?
+fn armor_proficient(s: &SheetCtx, kind: FileKind, grants: &str, prof: &str, item: &EqItem) -> bool {
+    let c = &s.calc;
+    let obj = c.ds.get(kind, prof);
+    let prefix = format!("{}|", grants);
+    for src in &c.sources {
+        for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
+            let Some(rest) = t.value.strip_prefix(&prefix) else {
+                continue;
+            };
+            let items: Vec<&str> = rest.split('|').collect();
+            let ok = items
+                .iter()
+                .filter(|i| {
+                    crate::token::pre::Prereq::is_pre_tag(i.split(':').next().unwrap_or(""))
+                        || i.starts_with("!PRE")
+                })
+                .filter_map(|i| crate::token::pre::Prereq::parse(i).ok())
+                .all(|p| c.passes(&p, Some(src)));
+            if !ok {
+                continue;
+            }
+            for i in items {
+                if let Some(ty) = i
+                    .strip_prefix("ARMORTYPE=")
+                    .or_else(|| i.strip_prefix("SHIELDTYPE="))
+                    .or_else(|| i.strip_prefix("TYPE="))
+                {
+                    if item.is_type(c, ty) || obj.is_some_and(|o| o.is_type(ty)) {
+                        return true;
+                    }
+                } else if i.eq_ignore_ascii_case(prof)
+                    || i == "%LIST" && src.choices.iter().any(|x| x.eq_ignore_ascii_case(prof))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// An item's own WEAPON bonus, with temporary bonuses on a copy.
@@ -470,6 +549,15 @@ fn resolve_mode(w: &Weapon, all_w: &[Weapon], mode: Mode) -> Mode {
     }
     if w.hand == Hand::Both {
         return Mode::TwoHands;
+    }
+    // a pair held as two weapons attacks as primary with the other
+    // in the off hand
+    if w.hand == Hand::TwoWeapons && !w.is("Double") && w.name == w.item.name {
+        return if light(w) {
+            Mode::PrimaryLight
+        } else {
+            Mode::PrimaryHeavy
+        };
     }
     if two_handed(w) {
         Mode::TwoHands

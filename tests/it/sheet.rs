@@ -424,3 +424,23 @@ fn double_weapon_in_one_hand() {
     assert_eq!(at(&m, &format!("{}/simple[0]/to_hit[0]", w)), "N/A");
     assert_eq!(at(&m, &format!("{}/simple[0]/damage[0]", w)), "N/A");
 }
+
+#[test]
+fn stat_columns_past_the_game_modes_stats_are_empty() {
+    // the fixture mode has two stats; saves and initiative take theirs
+    // by position, so positions past the second show nothing
+    let m = tess();
+    assert_eq!(
+        at(&m, "saving_throws[0]/saving_throw[fortitude]/abil_mod[0]"),
+        ""
+    );
+    assert_eq!(
+        at(&m, "saving_throws[0]/saving_throw[will]/abil_mod[0]"),
+        ""
+    );
+    assert_ne!(
+        at(&m, "saving_throws[0]/saving_throw[reflex]/abil_mod[0]"),
+        ""
+    );
+    assert_ne!(at(&m, "initiative[0]/dex_mod[0]"), "");
+}

@@ -14,8 +14,8 @@ use super::{describe, output_name, source_text, Element, SheetCtx};
 use crate::dataset::Object;
 use crate::rules::calc::Calc;
 use crate::rules::spells::{
-    cast_per_day, caster_level, is_specialty, known_at, owner_class, save_dc, spell_type, Caster,
-    CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
+    cast_per_day, caster_level, is_specialty, known_at, metamagic_suffix, owner_class, save_dc,
+    spell_type, Caster, CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
 };
 
 /// Evaluate parenthesized parts of spell text: `(CASTERLEVEL)` becomes
@@ -141,7 +141,7 @@ impl Ctx<'_, '_> {
         let c = self.calc();
         let sp = cs.spell;
         let cl = caster_level(c, &self.sp, cs);
-        let name = output_name(sp);
+        let name = output_name(sp) + &metamagic_suffix(c, info);
         let mut e = Element::new("spell");
         e.add("name", &name);
         e.add("outputname", &name);

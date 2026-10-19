@@ -68,7 +68,7 @@ fn objects_and_operations() {
     let spark = ds.get(FileKind::Spell, "Spark").unwrap();
     assert_eq!(spark.get("DESC"), Some("A tiny spark."));
     assert!(ds.get(FileKind::Spell, "Doomed Spell").is_none());
-    assert_eq!(ds.objects(FileKind::Spell).len(), 2);
+    assert_eq!(ds.objects(FileKind::Spell).len(), 4);
 
     // class: merged CLASS lines, level lines, subclass, .MOD with level line
     let t = ds.get(FileKind::Class, "Tinker").unwrap();

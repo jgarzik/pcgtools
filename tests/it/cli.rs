@@ -53,8 +53,8 @@ fn load_json_counts() {
     assert!(o.status.success(), "{}", stderr(&o));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["campaigns"], 2);
-    assert_eq!(v["objects"]["SPELL"], 2);
-    assert_eq!(v["objects"]["CLASS"], 5);
+    assert_eq!(v["objects"]["SPELL"], 4);
+    assert_eq!(v["objects"]["CLASS"], 6);
     assert_eq!(v["tables"], 1);
     assert_eq!(v["errors"], 0);
 }

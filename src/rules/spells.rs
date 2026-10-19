@@ -52,6 +52,10 @@ pub struct SpellInfo {
     pub times: i64,
     pub unit: String,
     pub fixed_dc: Option<String>,
+    /// keys of the metamagic feats it was prepared with
+    pub feats: Vec<String>,
+    /// pages it takes in a spellbook
+    pub pages: i64,
 }
 
 /// A spell the character has, from one owner.
@@ -200,9 +204,11 @@ impl<'a> Spells<'a> {
                 s.by_caster.push(Vec::new());
             }
         }
-        s.load_saved(calc);
+        // spells known without choosing them are there before the
+        // saved ones are read
         s.auto_known(calc);
         s.granted(calc);
+        s.load_saved(calc);
         for v in &mut s.by_caster {
             v.sort_by(compare);
         }
@@ -271,6 +277,8 @@ impl<'a> Spells<'a> {
                             times,
                             unit: unit.clone(),
                             fixed_dc: dc,
+                            feats: Vec::new(),
+                            pages: 0,
                         }],
                     };
                     // the same spell granted the same way is one entry
@@ -369,31 +377,80 @@ impl<'a> Spells<'a> {
                 Owner::Domain(d, _) => self.levels_on('D', &d.key, spell),
                 _ => self.class_levels(calc, cls, spell),
             };
+            // metamagic feats it was prepared with (unknown ones are
+            // dropped), which raise the level it is saved at
+            let feats: Vec<String> = l
+                .get("FEATLIST")
+                .map(|e| {
+                    e.children()
+                        .iter()
+                        .filter_map(|c| {
+                            calc.ds
+                                .get_in(FileKind::Ability, "FEAT", &c.value_text())
+                                .map(|o| o.key.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let added = metamagic_levels(calc, &feats);
+            let pages: i64 = l
+                .text("SPELLNUMPAGES")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             let levels = if levels.is_empty() {
-                vec![saved_level]
+                vec![saved_level - added]
             } else {
                 levels
             };
+            self.add_book(&book);
+            let info = |level: i64| SpellInfo {
+                book: book.clone(),
+                level,
+                times,
+                unit: "Day".into(),
+                fixed_dc: None,
+                feats: Vec::new(),
+                pages: 0,
+            };
             for lvl in levels {
-                if saved_level > 0 && saved_level != lvl {
+                if saved_level > 0 && saved_level != lvl + added {
                     continue;
                 }
                 if book == KNOWN_BOOK && auto && self.auto_knows(calc, cls, spell, lvl) {
                     continue;
                 }
-                self.add_info(
-                    ci,
-                    spell,
-                    owner.clone(),
-                    SpellInfo {
-                        book: book.clone(),
-                        level: lvl,
-                        times,
-                        unit: "Day".into(),
-                        fixed_dc: None,
-                    },
-                );
-                self.add_book(&book);
+                // a spell the class does not have yet starts with a
+                // placement at its own level
+                let has = |s: &Self| {
+                    s.by_caster[ci].iter().any(|c| {
+                        std::ptr::eq(c.spell, spell) && c.owner == owner && c.fixed_cl.is_none()
+                    })
+                };
+                if !has(self) {
+                    self.add_info(ci, spell, owner.clone(), info(lvl));
+                }
+                if !matches!(owner, Owner::Class(_)) && book == KNOWN_BOOK {
+                    continue;
+                }
+                let Some(cs) = self.by_caster[ci].iter_mut().find(|c| {
+                    std::ptr::eq(c.spell, spell) && c.owner == owner && c.fixed_cl.is_none()
+                }) else {
+                    continue;
+                };
+                // the same book and level again (ignoring feats) keeps
+                // the first line's times, unless feats make it another
+                match cs
+                    .infos
+                    .iter_mut()
+                    .find(|i| i.book == book && i.level == saved_level)
+                {
+                    Some(i) if feats.is_empty() => i.pages = pages,
+                    _ => cs.infos.push(SpellInfo {
+                        feats: feats.clone(),
+                        pages,
+                        ..info(saved_level)
+                    }),
+                }
             }
         }
     }
@@ -522,6 +579,8 @@ impl<'a> Spells<'a> {
                                         times: 1,
                                         unit: "Day".into(),
                                         fixed_dc: None,
+                                        feats: Vec::new(),
+                                        pages: 0,
                                     },
                                 );
                             }
@@ -566,6 +625,8 @@ impl<'a> Spells<'a> {
                                     times: 1,
                                     unit: "Day".into(),
                                     fixed_dc: None,
+                                    feats: Vec::new(),
+                                    pages: 0,
                                 },
                             );
                         }
@@ -658,6 +719,8 @@ impl<'a> Spells<'a> {
                                     times: 1,
                                     unit: "Day".into(),
                                     fixed_dc: None,
+                                    feats: Vec::new(),
+                                    pages: 0,
                                 },
                             );
                         }
@@ -706,6 +769,8 @@ impl<'a> Spells<'a> {
                                 times,
                                 unit: "Day".into(),
                                 fixed_dc: None,
+                                feats: Vec::new(),
+                                pages: 0,
                             },
                         );
                     }
@@ -1105,6 +1170,48 @@ pub fn caster_level(calc: &Calc, sp: &Spells, cs: &CharSpell) -> i64 {
     }
 }
 
+/// A metamagic feat by key.
+pub fn metamagic_feat<'a>(calc: &Calc<'a>, key: &str) -> Option<&'a Object> {
+    calc.ds.get_in(FileKind::Ability, "FEAT", key)
+}
+
+/// Spell levels metamagic feats add (their ADDSPELLLEVEL).
+pub fn metamagic_levels(calc: &Calc, feats: &[String]) -> i64 {
+    feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .filter_map(|f| f.get("ADDSPELLLEVEL"))
+        .filter_map(|v| v.trim().parse::<i64>().ok())
+        .sum()
+}
+
+/// A feat's own bonuses to a category and target (`BONUS:DC|FEATBONUS|1`).
+fn feat_bonus(calc: &Calc, feat: &Object, category: &str, target: &str) -> f64 {
+    feat.values("BONUS")
+        .filter_map(|v| {
+            let mut p = v.split('|');
+            let (c, t, f) = (p.next()?, p.next()?, p.next()?);
+            (c.eq_ignore_ascii_case(category)
+                && t.split(',').any(|x| x.eq_ignore_ascii_case(target)))
+            .then(|| calc.eval_formula(f))
+        })
+        .sum()
+}
+
+/// The name a prepared spell shows with its metamagic feats:
+/// ` [Feat, Feat] ` after the spell's name.
+pub fn metamagic_suffix(calc: &Calc, info: &SpellInfo) -> String {
+    if info.feats.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = info
+        .feats
+        .iter()
+        .map(|k| metamagic_feat(calc, k).map_or_else(|| k.clone(), |f| f.name.clone()))
+        .collect();
+    format!(" [{}] ", names.join(", "))
+}
+
 /// Save DC for a spell.
 pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
     let spell = cs.spell;
@@ -1132,12 +1239,21 @@ pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
         .and_then(|g| g.misc("SPELLBASEDC"))
         .unwrap_or("10+SPELLLEVEL+BASESPELLSTAT")
         .to_string();
-    let level = info.level as f64;
-    let mut dc = calc.eval_with(&formula, &|n| match n.to_ascii_uppercase().as_str() {
-        "SPELLLEVEL" => Some(level),
-        "BASESPELLSTAT" => Some(stat_mod),
-        _ => None,
-    });
+    // metamagic does not change the spell's own level, but a feat may
+    // add to the DC
+    let level = (info.level - metamagic_levels(calc, &info.feats)) as f64;
+    let meta_dc: f64 = info
+        .feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .map(|f| feat_bonus(calc, f, "DC", "FEATBONUS"))
+        .sum();
+    let mut dc = meta_dc
+        + calc.eval_with(&formula, &|n| match n.to_ascii_uppercase().as_str() {
+            "SPELLLEVEL" => Some(level),
+            "BASESPELLSTAT" => Some(stat_mod),
+            _ => None,
+        });
     dc += b.total("DC", "ALLSPELLS");
     if cls.is_none() || cls.is_some_and(|c| c.has("USESPELLSPELLSTAT")) {
         if let Some(st) = spell.get("STAT") {

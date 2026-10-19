@@ -235,7 +235,8 @@ fn domain_spell_levels_need_a_granting_class() {
     assert_eq!(spark(&s), "Cogs1, Tnk0");
 }
 
-fn new_sheet(cmds: &[&str]) -> HashMap<String, String> {
+/// A new character's session after some commands.
+fn new_session(cmds: &[&str]) -> pcgtools::repl::Session {
     let dirs = DataDirs {
         data: Some(common::fixture("mini/data")),
         system: Some(common::fixture("mini/system")),
@@ -245,7 +246,15 @@ fn new_sheet(cmds: &[&str]) -> HashMap<String, String> {
     for c in cmds {
         s.exec(c).unwrap();
     }
+    s
+}
+
+fn session_sheet(s: &pcgtools::repl::Session) -> HashMap<String, String> {
     sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect()
+}
+
+fn new_sheet(cmds: &[&str]) -> HashMap<String, String> {
+    session_sheet(&new_session(cmds))
 }
 
 #[test]
@@ -591,4 +600,68 @@ fn region_from_templates() {
     // the last template naming a region gives it
     let m = new_sheet(&["template add \"Hill Born\"", "template add Roamer"]);
     assert_eq!(at(&m, "basics[Nova]/region[0]"), "Far Hills");
+}
+
+/// Prepared spells of the nth book's first class at a level, sorted:
+/// (name, times, dc).
+fn prepared(
+    m: &HashMap<String, String>,
+    book: usize,
+    level: usize,
+) -> Vec<(String, String, String)> {
+    let prefix = format!(
+        "character/spells[0]/memorized_spells[0]/spellbook[{}]/class[0]/level[{}]/spell[",
+        book, level
+    );
+    let mut out: Vec<(String, String, String)> = m
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix) && k.ends_with("]/name[0]"))
+        .map(|(k, v)| {
+            let base = k.strip_suffix("/name[0]").unwrap();
+            let get = |f: &str| {
+                m.get(&format!("{}/{}[0]", base, f))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            (v.clone(), get("times_memorized"), get("dc"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn row(name: &str, times: &str, dc: &str) -> (String, String, String) {
+    (name.to_string(), times.to_string(), dc.to_string())
+}
+
+#[test]
+fn spells_prepared_with_metamagic() {
+    let mut s = new_session(&[
+        "set stat MGT 14",
+        "class add Sage",
+        "class add Sage",
+        "spell add Sage Ember",
+        "ability add \"Wide Spell\" --force",
+        "ability add \"Sharp Spell\" --force",
+    ]);
+    // the level saved is that of the slot the feats raise it to
+    let lines = pcgtools::pcg::PcgFile::parse(
+        "SPELLBOOK:Prepared Spells|TYPE:2\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Ember|TIMES:3|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Ember|TIMES:2|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:2|FEATLIST:[FEAT:Wide Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:3|FEATLIST:[FEAT:Wide Spell|FEAT:Sharp Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n",
+    )
+    .lines;
+    s.ch.pcg.lines.extend(lines);
+    let m = session_sheet(&s);
+    // a second line for the same book and level is not counted
+    assert_eq!(prepared(&m, 0, 1), [row("Ember", "1", "13")]);
+    // names list the feats; the DC is from the spell's own level, plus
+    // the feats' DC bonuses
+    assert_eq!(prepared(&m, 0, 2), [row("Ember [Wide Spell]", "2", "13")]);
+    assert_eq!(
+        prepared(&m, 0, 3),
+        [row("Ember [Wide Spell, Sharp Spell]", "1", "14")]
+    );
 }

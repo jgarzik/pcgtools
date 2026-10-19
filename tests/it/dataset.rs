@@ -73,7 +73,7 @@ fn objects_and_operations() {
     // class: merged CLASS lines, level lines, subclass, .MOD with level line
     let t = ds.get(FileKind::Class, "Tinker").unwrap();
     assert_eq!(t.get("HD"), Some("8"));
-    assert_eq!(t.get("FACT"), Some("Abb|Tnk"));
+    assert!(t.values("FACT").any(|v| v == "Abb|Tnk"));
     let levels: Vec<&str> = t.sublines.iter().map(|s| s.value.as_str()).collect();
     assert_eq!(levels, vec!["1:REPEATLEVEL:1", "1", "3", "5"]);
     assert_eq!(t.children.len(), 1);

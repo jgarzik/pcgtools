@@ -163,6 +163,15 @@ pub struct Character {
     pub pcg: PcgFile,
 }
 
+/// A number as saved: no trailing `.0` for whole values.
+fn trim_float(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{}", v)
+    }
+}
+
 fn num<T: std::str::FromStr>(e: Option<String>) -> Option<T> {
     e.and_then(|s| s.trim().parse().ok())
 }
@@ -570,7 +579,7 @@ impl Character {
                 Elem::text("CLASSABILITIESLEVEL", &format!("{}={}", class, level)),
                 Elem::raw("HITPOINTS", &hp.to_string()),
                 Elem::raw("SKILLSGAINED", &skills_gained.to_string()),
-                Elem::raw("SKILLSREMAINING", "0"),
+                Elem::raw("SKILLSREMAINING", &skills_gained.to_string()),
             ]),
         );
         level
@@ -804,6 +813,223 @@ impl Character {
         );
     }
 
+    /// Skill points left unspent from a class's levels.
+    pub fn skill_points_left(&self, class: &str) -> f64 {
+        self.class_level_lines(class)
+            .iter()
+            .map(|&i| num::<f64>(self.pcg.lines[i].text("SKILLSREMAINING")).unwrap_or(0.0))
+            .sum()
+    }
+
+    /// Spend (or, if negative, refund) skill points of a class: taken
+    /// from its latest levels first, refunded to its latest level.
+    pub fn spend_skill_points(&mut self, class: &str, amount: f64) {
+        let lines = self.class_level_lines(class);
+        let mut left = amount;
+        for &i in lines.iter().rev() {
+            if left == 0.0 {
+                break;
+            }
+            let have = num::<f64>(self.pcg.lines[i].text("SKILLSREMAINING")).unwrap_or(0.0);
+            let take = if left < 0.0 { left } else { left.min(have) };
+            if take == 0.0 {
+                continue;
+            }
+            self.set_elem(i, "SKILLSREMAINING", &trim_float(have - take));
+            left -= take;
+        }
+        // anything still owed comes from the latest level
+        if left != 0.0 {
+            if let Some(&i) = lines.last() {
+                let have = num::<f64>(self.pcg.lines[i].text("SKILLSREMAINING")).unwrap_or(0.0);
+                self.set_elem(i, "SKILLSREMAINING", &trim_float(have - left));
+            }
+        }
+    }
+
+    fn class_level_lines(&self, class: &str) -> Vec<usize> {
+        self.pcg
+            .indices("CLASSABILITIESLEVEL")
+            .into_iter()
+            .filter(|&i| {
+                self.pcg.lines[i]
+                    .head()
+                    .map(|h| h.value_text())
+                    .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
+                    .is_some_and(|c| c.eq_ignore_ascii_case(class))
+            })
+            .collect()
+    }
+
+    /// Set (replace) one element of a line.
+    fn set_elem(&mut self, i: usize, tag: &str, value: &str) {
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        match elems.iter_mut().find(|e| e.tag == tag) {
+            Some(e) => *e = Elem::raw(tag, value),
+            None => elems.push(Elem::raw(tag, value)),
+        }
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Choose a class's subclass.
+    pub fn set_subclass(&mut self, class: &str, subclass: &str) -> bool {
+        let Some(i) = self.pcg.indices("CLASS").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(class))
+        }) else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let sub = Elem::text("SUBCLASS", subclass);
+        match elems.iter().position(|e| e.tag == "SUBCLASS") {
+            Some(p) => elems[p] = sub,
+            None => elems.insert(1.min(elems.len()), sub),
+        }
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
+    /// Spells saved for a class: (spell, class, book, level, times).
+    pub fn spells(&self) -> Vec<(String, String, String, i64, i64)> {
+        self.pcg
+            .lines_tagged("SPELLNAME")
+            .filter_map(|l| {
+                Some((
+                    l.head()?.value_text(),
+                    l.text("CLASS")?,
+                    l.text("BOOK").unwrap_or_else(|| "Known Spells".into()),
+                    num(l.text("SPELLLEVEL")).unwrap_or(0),
+                    num(l.text("TIMES")).unwrap_or(1),
+                ))
+            })
+            .collect()
+    }
+
+    /// Add a spell to a class's book at a level.
+    pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
+        if !self
+            .pcg
+            .lines_tagged("SPELLBOOK")
+            .any(|l| l.head().is_some_and(|h| h.value_text() == book))
+            && book != "Known Spells"
+        {
+            self.insert_ordered(
+                "SPELLBOOK",
+                PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "1")]),
+            );
+        }
+        self.insert_ordered(
+            "SPELLNAME",
+            PcgLine::new(vec![
+                Elem::text("SPELLNAME", spell),
+                Elem::raw("TIMES", &times.to_string()),
+                Elem::text("CLASS", class),
+                Elem::text("BOOK", book),
+                Elem::raw("SPELLLEVEL", &level.to_string()),
+                Elem::list(
+                    "SOURCE",
+                    vec![Elem::raw("TYPE", "CLASS"), Elem::text("NAME", class)],
+                ),
+            ]),
+        );
+    }
+
+    /// Remove a spell from a class's book.  Returns whether one was.
+    pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
+        let before = self.pcg.lines.len();
+        self.pcg.lines.retain(|l| {
+            !(l.tag() == Some("SPELLNAME")
+                && l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(spell))
+                && l.text("CLASS")
+                    .is_some_and(|c| c.eq_ignore_ascii_case(class))
+                && book.is_none_or(|b| l.text("BOOK").is_some_and(|x| x.eq_ignore_ascii_case(b))))
+        });
+        before != self.pcg.lines.len()
+    }
+
+    /// Followers: (name, type, race, file).
+    pub fn followers(&self) -> Vec<(String, String, String, String)> {
+        self.pcg
+            .lines_tagged("FOLLOWER")
+            .filter_map(|l| {
+                Some((
+                    l.head()?.value_text(),
+                    l.text("TYPE").unwrap_or_default(),
+                    l.text("RACE").unwrap_or_default(),
+                    l.text("FILE").unwrap_or_default(),
+                ))
+            })
+            .collect()
+    }
+
+    pub fn add_follower(&mut self, name: &str, kind: &str, race: &str, file: &str) {
+        self.insert_ordered(
+            "FOLLOWER",
+            PcgLine::new(vec![
+                Elem::text("FOLLOWER", name),
+                Elem::text("TYPE", kind),
+                Elem::text("RACE", race),
+                Elem::raw("HD", "0"),
+                Elem::text("FILE", file),
+            ]),
+        );
+    }
+
+    pub fn remove_follower(&mut self, name: &str) -> bool {
+        let before = self.pcg.lines.len();
+        self.pcg.lines.retain(|l| {
+            !(l.tag() == Some("FOLLOWER")
+                && l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(name)))
+        });
+        before != self.pcg.lines.len()
+    }
+
+    /// An item's saved customization: (base item, DATA text).
+    pub fn customization(&self, name: &str) -> Option<(String, String)> {
+        let l = self
+            .pcg
+            .lines_tagged("EQUIPNAME")
+            .find(|l| l.head().is_some_and(|h| h.value_text() == name))?;
+        let c = l.get("CUSTOMIZATION")?;
+        let base = c
+            .children()
+            .iter()
+            .find(|e| e.tag == "BASEITEM")?
+            .value_text();
+        let data = c
+            .children()
+            .iter()
+            .find(|e| e.tag == "DATA")
+            .map(|e| e.value_text())
+            .unwrap_or_default();
+        Some((base, data))
+    }
+
+    /// Set an item's customization (base item and DATA text).
+    pub fn set_customization(&mut self, name: &str, base: &str, data: &str) -> bool {
+        let Some(i) = self.pcg.indices("EQUIPNAME").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text() == name)
+        }) else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let cust = Elem::list(
+            "CUSTOMIZATION",
+            vec![Elem::text("BASEITEM", base), Elem::text("DATA", data)],
+        );
+        match elems.iter().position(|e| e.tag == "CUSTOMIZATION") {
+            Some(p) => elems[p] = cust,
+            None => elems.push(cust),
+        }
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
     /// Remove an item from the calculation equipment set.
     pub fn unequip(&mut self, name: &str) -> bool {
         let before = self.pcg.lines.len();
@@ -846,6 +1072,82 @@ DOMAIN:Light|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]\n";
 
     fn ch() -> Character {
         Character::from_pcg(PcgFile::parse(PCG))
+    }
+
+    #[test]
+    fn skill_point_bookkeeping() {
+        let mut c = ch();
+        assert_eq!(c.skill_points_left("Tinker"), 0.0);
+        let lvl = c.add_level("Tinker", 5, 4.0);
+        assert_eq!(lvl, 3);
+        assert_eq!(c.skill_points_left("Tinker"), 4.0);
+        c.spend_skill_points("Tinker", 3.0);
+        assert_eq!(c.skill_points_left("Tinker"), 1.0);
+        c.spend_skill_points("Tinker", -2.0);
+        assert_eq!(c.skill_points_left("Tinker"), 3.0);
+        // overspending leaves a debt on the latest level
+        c.spend_skill_points("Tinker", 5.0);
+        assert_eq!(c.skill_points_left("Tinker"), -2.0);
+        assert_eq!(c.skill_points_left("Nobody"), 0.0);
+    }
+
+    #[test]
+    fn subclasses() {
+        let mut c = ch();
+        assert!(c.set_subclass("Tinker", "Gearwright"));
+        let text = |c: &Character| String::from_utf8_lossy(&c.pcg.encode()).into_owned();
+        assert!(text(&c).contains("CLASS:Tinker|SUBCLASS:Gearwright|LEVEL:2"));
+        assert!(c.set_subclass("tinker", "Clocksmith"));
+        assert!(text(&c).contains("SUBCLASS:Clocksmith"));
+        assert!(!c.set_subclass("Nobody", "X"));
+    }
+
+    #[test]
+    fn spells_and_books() {
+        let mut c = ch();
+        c.add_spell("Spark", "Tinker", "Gadgets", 1, 2);
+        c.add_spell("Glow", "Tinker", "Known Spells", 0, 1);
+        let sp = c.spells();
+        assert!(sp.contains(&("Spark".into(), "Tinker".into(), "Gadgets".into(), 1, 2)));
+        assert!(c
+            .pcg
+            .lines_tagged("SPELLBOOK")
+            .any(|l| l.head().unwrap().value_text() == "Gadgets"));
+        assert!(c.remove_spell("spark", "Tinker", Some("Gadgets")));
+        assert!(!c.remove_spell("Spark", "Tinker", None));
+        assert_eq!(c.spells().len(), 1);
+    }
+
+    #[test]
+    fn followers_list() {
+        let mut c = ch();
+        c.add_follower("Whiskers", "Familiar", "Cat", "whiskers.pcg");
+        assert_eq!(
+            c.followers(),
+            vec![(
+                "Whiskers".into(),
+                "Familiar".into(),
+                "Cat".into(),
+                "whiskers.pcg".into()
+            )]
+        );
+        assert!(c.remove_follower("whiskers"));
+        assert!(c.followers().is_empty());
+    }
+
+    #[test]
+    fn equipment_customization() {
+        let mut c = ch();
+        assert_eq!(
+            c.customization("Shiny Sword"),
+            Some(("Sword".into(), "EQMOD=SHINY".into()))
+        );
+        assert!(c.set_customization("Rope", "Rope", "NAME=Rope$SIZE=S"));
+        assert_eq!(
+            c.customization("Rope"),
+            Some(("Rope".into(), "NAME=Rope$SIZE=S".into()))
+        );
+        assert!(!c.set_customization("Nothing", "x", "y"));
     }
 
     #[test]

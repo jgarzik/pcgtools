@@ -60,8 +60,9 @@ Commands (names may be quoted; most accept --force to skip checks):
   race KEY                     set race
   deity KEY | deity none       set or clear deity
   domain add KEY               add a domain
-  class add KEY [HP]           gain a level (HP defaults to the hit die)
+  class add KEY [HP] [--subclass SUB]   gain a level (HP defaults to the hit die)
   class rm                     remove the last level gained
+  class subclass KEY SUB       choose a class's subclass
   ability add [CATEGORY|]KEY [CHOICE...]   add an ability (feat by default)
   ability rm [CATEGORY|]KEY    remove an ability
   skill KEY RANKS [CLASS]      set ranks bought in a skill
@@ -71,6 +72,13 @@ Commands (names may be quoted; most accept --force to skip checks):
   equip rm NAME                discard equipment
   equip wear NAME [LOCATION]   equip an item (location defaults by type)
   equip unwear NAME            stop using an item
+  equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
+                               add or remove an equipment modifier, or resize
+  kit apply KEY                apply a starting kit
+  spell add CLASS SPELL [LEVEL] [BOOK]   add a spell (book: Known Spells)
+  spell rm CLASS SPELL [BOOK]  remove a spell
+  follower add NAME TYPE RACE [FILE]     add a follower or companion
+  follower rm NAME | follower ls
   undo                         undo the last change
   save [PATH]                  write the character
   help                         this text
@@ -431,16 +439,29 @@ impl Session {
                     let o = self.find(FileKind::Class, arg(2)?)?;
                     let key = o.key.clone();
                     let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(8);
-                    let hp: i64 = match w.get(3) {
+                    let hp: i64 = match w.get(3).filter(|v| !v.starts_with("--")) {
                         Some(v) => v
                             .parse()
                             .map_err(|_| Error::Other(format!("bad hit points '{}'", v)))?,
                         None => hd,
                     };
-                    let skills: f64 = o
-                        .get("STARTSKILLPTS")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(0.0);
+                    // skill points this level is worth, as the rules count
+                    // them now
+                    let skills: f64 = {
+                        let mut c = self.calc();
+                        c.run();
+                        let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
+                        c.skill_points_for_level(o, self.ch.total_level() + 1)
+                    };
+                    let subclass = w
+                        .iter()
+                        .position(|x| *x == "--subclass")
+                        .and_then(|i| w.get(i + 1).map(|s| s.to_string()));
+                    if let Some(sub) = &subclass {
+                        if !o.children.iter().any(|c| c.key.eq_ignore_ascii_case(sub)) {
+                            return Err(Error::Other(format!("{} has no subclass '{}'", key, sub)));
+                        }
+                    }
                     let warn = if self
                         .ch
                         .classes()
@@ -453,7 +474,27 @@ impl Session {
                     };
                     self.checkpoint();
                     let lvl = self.ch.add_level(&key, hp, skills);
+                    if let Some(sub) = &subclass {
+                        self.ch.set_subclass(&key, sub);
+                    }
                     changed(self, format!("{}{} is now level {}", warn, key, lvl))
+                }
+                "subclass" => {
+                    let o = self.find(FileKind::Class, arg(2)?)?;
+                    let key = o.key.clone();
+                    let sub = arg(3)?;
+                    let Some(s) = o.children.iter().find(|c| {
+                        c.key.eq_ignore_ascii_case(sub) || c.name.eq_ignore_ascii_case(sub)
+                    }) else {
+                        return Err(Error::Other(format!("{} has no subclass '{}'", key, sub)));
+                    };
+                    let sub = s.key.clone();
+                    self.checkpoint();
+                    if !self.ch.set_subclass(&key, &sub) {
+                        self.undo.pop();
+                        return Err(Error::Other(format!("the character has no {} levels", key)));
+                    }
+                    changed(self, format!("{} subclass is {}", key, sub))
                 }
                 "rm" | "remove" => {
                     self.checkpoint();
@@ -488,6 +529,8 @@ impl Session {
                         let warn = self.check_prereqs(o, force)?;
                         let choices: Vec<String> =
                             w[rest + 1..].iter().map(|s| s.to_string()).collect();
+                        self.check_choices(o, &choices, force)?;
+                        self.check_pool(&cat, o, force)?;
                         self.checkpoint();
                         self.ch.add_ability(&cat, &c, &k, &choices);
                         changed(self, format!("{}added {} ({})", warn, k, c))
@@ -537,8 +580,47 @@ impl Session {
                         )));
                     }
                 }
+                // what the change costs from the class's skill points
+                let per_rank = {
+                    let mut c = self.calc();
+                    c.run();
+                    let cost = |tag: &str, d: f64| {
+                        self.ctx
+                            .gamemode
+                            .as_ref()
+                            .and_then(|g| g.misc(tag))
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(d)
+                    };
+                    if c.is_class_skill_for(&key, &class) {
+                        cost("SKILLCOST_CLASS", 1.0)
+                    } else {
+                        cost("SKILLCOST_CROSSCLASS", 2.0)
+                    }
+                };
+                let had: f64 = self
+                    .ch
+                    .skills()
+                    .iter()
+                    .find(|e| e.name.eq_ignore_ascii_case(&key))
+                    .and_then(|e| {
+                        e.ranks
+                            .iter()
+                            .find(|(c, _)| c.eq_ignore_ascii_case(&class))
+                            .map(|(_, r)| *r)
+                    })
+                    .unwrap_or(0.0);
+                let spend = (ranks - had) * per_rank;
+                let left = self.ch.skill_points_left(&class);
+                if spend > left && !force {
+                    return Err(Error::Other(format!(
+                        "{} skill points needed, {} left for {} (use --force)",
+                        spend, left, class
+                    )));
+                }
                 self.checkpoint();
                 self.ch.set_skill_ranks(&key, &class, ranks, class_skill);
+                self.ch.spend_skill_points(&class, spend);
                 changed(self, format!("{} ranks in {}", ranks, key))
             }
             "lang" | "language" if w.get(1) == Some(&"add") => {
@@ -556,7 +638,101 @@ impl Session {
                 self.ch.add_template(&key);
                 changed(self, format!("{}applied template {}", warn, key))
             }
+            "equip" if w.get(1) == Some(&"customize") => self.cmd_customize(&w, changed),
             "equip" => self.cmd_equip(&w, force, changed),
+            "kit" if w.get(1) == Some(&"apply") => {
+                let o = self.find(FileKind::Kit, arg(2)?)?.clone();
+                self.checkpoint();
+                let msg = self.apply_kit(&o)?;
+                changed(self, msg)
+            }
+            "spell" => match arg(1)? {
+                "add" => {
+                    let cls = self.find(FileKind::Class, arg(2)?)?.key.clone();
+                    let sp = self.find(FileKind::Spell, arg(3)?)?;
+                    let key = sp.key.clone();
+                    let level: i64 = match w.get(4) {
+                        Some(v) => v
+                            .parse()
+                            .map_err(|_| Error::Other(format!("bad spell level '{}'", v)))?,
+                        None => {
+                            let c = self.calc();
+                            let sps = crate::rules::spells::Spells::new(&c);
+                            let cls_obj = self.ctx.dataset.get(FileKind::Class, &cls).unwrap();
+                            sps.levels_on('C', &cls_obj.key, sp)
+                                .first()
+                                .copied()
+                                .ok_or_else(|| {
+                                    Error::Other(format!(
+                                        "{} is not on the {} list; give a level",
+                                        key, cls
+                                    ))
+                                })?
+                        }
+                    };
+                    let book = w
+                        .get(5)
+                        .copied()
+                        .unwrap_or(crate::rules::spells::KNOWN_BOOK);
+                    if !self
+                        .ch
+                        .classes()
+                        .iter()
+                        .any(|c| c.name.eq_ignore_ascii_case(&cls))
+                    {
+                        return Err(Error::Other(format!("the character has no {} levels", cls)));
+                    }
+                    self.checkpoint();
+                    self.ch.add_spell(&key, &cls, book, level, 1);
+                    changed(self, format!("added {} (level {}) to {}", key, level, book))
+                }
+                "rm" | "remove" => {
+                    let cls = self.find(FileKind::Class, arg(2)?)?.key.clone();
+                    let spell = arg(3)?.to_string();
+                    self.checkpoint();
+                    if !self.ch.remove_spell(&spell, &cls, w.get(4).copied()) {
+                        self.undo.pop();
+                        return Err(Error::Other(format!("{} has no spell '{}'", cls, spell)));
+                    }
+                    changed(self, format!("removed {}", spell))
+                }
+                other => Err(Error::Other(format!("unknown spell command '{}'", other))),
+            },
+            "follower" => match arg(1)? {
+                "add" => {
+                    let (name, kind) = (arg(2)?.to_string(), arg(3)?.to_string());
+                    let race = self.find(FileKind::Race, arg(4)?)?.key.clone();
+                    let file = w
+                        .get(5)
+                        .map(|f| f.to_string())
+                        .unwrap_or_else(|| format!("{}.pcg", name));
+                    self.checkpoint();
+                    self.ch.add_follower(&name, &kind, &race, &file);
+                    changed(self, format!("added {} {} ({})", kind, name, race))
+                }
+                "rm" | "remove" => {
+                    let name = arg(2)?.to_string();
+                    self.checkpoint();
+                    if !self.ch.remove_follower(&name) {
+                        self.undo.pop();
+                        return Err(Error::Other(format!("no follower '{}'", name)));
+                    }
+                    changed(self, format!("removed {}", name))
+                }
+                "ls" | "list" => {
+                    let lines: Vec<String> = self
+                        .ch
+                        .followers()
+                        .iter()
+                        .map(|(n, k, r, f)| format!("{}\t{}\t{}\t{}", n, k, r, f))
+                        .collect();
+                    Ok(Outcome::Text(lines.join("\n")))
+                }
+                other => Err(Error::Other(format!(
+                    "unknown follower command '{}'",
+                    other
+                ))),
+            },
             other => Err(Error::Other(format!(
                 "unknown command '{}' (try 'help')",
                 other
@@ -682,6 +858,235 @@ impl Session {
         }
     }
 
+    /// Check choices against what the ability's CHOOSE offers.
+    fn check_choices(&self, o: &Object, choices: &[String], force: bool) -> Result<()> {
+        let Some(choose) = o.get("CHOOSE") else {
+            return Ok(());
+        };
+        if choose.starts_with("NOCHOICE") || force {
+            return Ok(());
+        }
+        let mut c = self.calc();
+        c.run();
+        let o = self.ctx.dataset.get(o.kind, &o.key).unwrap_or(o);
+        let cands = crate::rules::pools::candidates(&c, o);
+        if choices.is_empty() {
+            let hint = match &cands {
+                Some(v) if !v.is_empty() => {
+                    let shown: Vec<&str> = v.iter().take(20).map(String::as_str).collect();
+                    format!("; choose from: {}", shown.join(", "))
+                }
+                _ => String::new(),
+            };
+            return Err(Error::Other(format!(
+                "{} needs a choice{} (or use --force)",
+                o.key, hint
+            )));
+        }
+        if let Some(v) = cands {
+            for ch in choices {
+                if !v.iter().any(|x| x.eq_ignore_ascii_case(ch)) {
+                    return Err(Error::Other(format!(
+                        "'{}' is not a choice for {} (use --force)",
+                        ch, o.key
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check there are pool points for a chosen ability.
+    fn check_pool(&self, pool: &str, o: &Object, force: bool) -> Result<()> {
+        if force {
+            return Ok(());
+        }
+        let mut c = self.calc();
+        c.run();
+        let pools = crate::rules::pools::pools(&c);
+        let Some(p) = pools.iter().find(|p| p.category.eq_ignore_ascii_case(pool)) else {
+            return Ok(());
+        };
+        let cost = crate::rules::pools::ability_cost(o);
+        if p.total > 0.0 && p.spent + cost > p.total {
+            return Err(Error::Other(format!(
+                "no {} points left ({} of {} spent; use --force)",
+                p.category, p.spent, p.total
+            )));
+        }
+        Ok(())
+    }
+
+    /// Apply a starting kit's lines: gear, stats, abilities, skills,
+    /// languages, templates, deity, alignment and class levels.
+    fn apply_kit(&mut self, kit: &Object) -> Result<String> {
+        let mut done = Vec::new();
+        for sl in &kit.sublines {
+            let val = sl.value.as_str();
+            let tok = |t: &str| {
+                sl.tokens
+                    .iter()
+                    .find(|x| x.tag == t)
+                    .map(|x| x.value.clone())
+            };
+            match sl.tag.as_str() {
+                "GEAR" => {
+                    let qty: f64 = tok("QTY").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                    let key = self.find(FileKind::Equipment, val)?.key.clone();
+                    self.ch.add_equipment(&key, qty);
+                    done.push(format!("{} x{}", key, qty));
+                }
+                "STAT" => {
+                    for part in val.split('|') {
+                        if let Some((a, v)) = part.split_once('=') {
+                            if let Ok(n) = v.trim().parse::<i64>() {
+                                self.ch.set_stat(a, n);
+                                done.push(format!("{} {}", a, n));
+                            }
+                        }
+                    }
+                }
+                "ABILITY" | "FEAT" => {
+                    let (cat, list) = match sl.tag.as_str() {
+                        "FEAT" => ("FEAT".to_string(), val.to_string()),
+                        _ => {
+                            let rest = val.strip_prefix("CATEGORY=").unwrap_or(val);
+                            match rest.split_once('|') {
+                                Some((c, l)) => (c.to_string(), l.to_string()),
+                                None => ("FEAT".to_string(), rest.to_string()),
+                            }
+                        }
+                    };
+                    for k in list.split('|') {
+                        let o = self.find_in(FileKind::Ability, Some(&cat), k)?;
+                        let (key, c) = (o.key.clone(), o.category.clone().unwrap_or(cat.clone()));
+                        self.ch.add_ability(&cat, &c, &key, &[]);
+                        done.push(key);
+                    }
+                }
+                "SKILL" => {
+                    let ranks: f64 = tok("RANK").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                    if let Some(class) = self.ch.levels().last().map(|l| l.class.clone()) {
+                        for k in val.split('|') {
+                            let key = self.find(FileKind::Skill, k)?.key.clone();
+                            self.ch.set_skill_ranks(&key, &class, ranks, true);
+                            done.push(format!("{} {}", key, ranks));
+                        }
+                    }
+                }
+                "LANGUAGE" | "LANGAUTO" => {
+                    for k in val.split('|') {
+                        let key = self.find(FileKind::Language, k)?.key.clone();
+                        self.ch.add_language(&key);
+                        done.push(key);
+                    }
+                }
+                "TEMPLATE" => {
+                    let key = self.find(FileKind::Template, val)?.key.clone();
+                    self.ch.add_template(&key);
+                    done.push(key);
+                }
+                "DEITY" => {
+                    let key = self.find(FileKind::Deity, val)?.key.clone();
+                    self.ch.set_deity(Some(&key));
+                    done.push(key);
+                }
+                "ALIGN" => {
+                    self.ch.set_alignment(val);
+                    done.push(val.to_string());
+                }
+                "RACE" => {
+                    let key = self.find(FileKind::Race, val)?.key.clone();
+                    self.ch.set_race(&key);
+                    done.push(key);
+                }
+                "CLASS" => {
+                    let o = self.find(FileKind::Class, val)?;
+                    let key = o.key.clone();
+                    let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(8);
+                    let levels: u32 = tok("LEVEL").and_then(|v| v.parse().ok()).unwrap_or(1);
+                    for _ in 0..levels {
+                        self.ch.add_level(&key, hd, 0.0);
+                    }
+                    done.push(format!("{} {}", key, levels));
+                }
+                _ => {}
+            }
+        }
+        Ok(format!("applied kit {}: {}", kit.key, done.join(", ")))
+    }
+
+    /// `equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE`
+    fn cmd_customize(
+        &mut self,
+        w: &[&str],
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let name = w
+            .get(2)
+            .ok_or_else(|| Error::Other("missing item name".into()))?
+            .to_string();
+        let change = w
+            .get(3)
+            .ok_or_else(|| Error::Other("missing change (+MOD, -MOD or size SIZE)".into()))?;
+        if !self.ch.equipment().iter().any(|e| e.name == name) {
+            return Err(Error::Other(format!("the character has no '{}'", name)));
+        }
+        let (base, data) = self.ch.customization(&name).unwrap_or_else(|| {
+            let base = self
+                .ctx
+                .dataset
+                .get(FileKind::Equipment, &name)
+                .map(|o| o.key.clone())
+                .unwrap_or(name.clone());
+            (base, format!("NAME={}", name))
+        });
+        let mut parts: Vec<String> = data.split('$').map(str::to_string).collect();
+        let mods_at = parts.iter().position(|p| p.starts_with("EQMOD="));
+        let mut mods: Vec<String> = mods_at
+            .map(|i| {
+                parts[i]["EQMOD=".len()..]
+                    .split('.')
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let msg = if let Some(m) = change.strip_prefix('+') {
+            let key = m.split('|').next().unwrap_or(m);
+            let eqmod = self.find(FileKind::EquipMod, key)?;
+            let entry = match m.split_once('|') {
+                Some((_, c)) => format!("{}|{}", eqmod.key, c),
+                None => eqmod.key.clone(),
+            };
+            mods.push(entry);
+            format!("added {} to {}", eqmod.key, name)
+        } else if let Some(m) = change.strip_prefix('-') {
+            let before = mods.len();
+            mods.retain(|x| !x.split('|').next().unwrap_or(x).eq_ignore_ascii_case(m));
+            if mods.len() == before {
+                return Err(Error::Other(format!("{} has no modifier '{}'", name, m)));
+            }
+            format!("removed {} from {}", m, name)
+        } else if *change == "size" {
+            let size = w
+                .get(4)
+                .ok_or_else(|| Error::Other("missing size".into()))?;
+            let key = self.find(FileKind::Size, size)?.key.clone();
+            parts.retain(|p| !p.starts_with("SIZE="));
+            parts.push(format!("SIZE={}", key));
+            format!("{} is now size {}", name, key)
+        } else {
+            return Err(Error::Other(format!("unknown change '{}'", change)));
+        };
+        parts.retain(|p| !p.starts_with("EQMOD="));
+        if !mods.is_empty() {
+            parts.push(format!("EQMOD={}", mods.join(".")));
+        }
+        self.checkpoint();
+        self.ch.set_customization(&name, &base, &parts.join("$"));
+        changed(self, msg)
+    }
+
     fn info(&self) -> String {
         let c = &self.ch;
         let classes: Vec<String> = c
@@ -701,8 +1106,20 @@ impl Session {
             .map(|a| a.key.clone())
             .collect();
         let items: Vec<String> = c.equipment().iter().map(|e| e.name.clone()).collect();
+        let mut calc = self.calc();
+        calc.run();
+        let mut points: Vec<String> = crate::rules::pools::pools(&calc)
+            .iter()
+            .map(|p| format!("{} {}/{}", p.category, p.spent, p.total))
+            .collect();
+        for x in c.classes() {
+            let left = c.skill_points_left(&x.name);
+            if left != 0.0 {
+                points.push(format!("{} skill points {}", x.name, left));
+            }
+        }
         format!(
-            "{}\n  game mode:  {}\n  campaigns:  {}\n  race:       {}\n  alignment:  {}\n  classes:    {}\n  stats:      {}\n  abilities:  {}\n  equipment:  {}\n  {}",
+            "{}\n  game mode:  {}\n  campaigns:  {}\n  race:       {}\n  alignment:  {}\n  classes:    {}\n  stats:      {}\n  abilities:  {}\n  equipment:  {}\n  pools:      {}\n  {}",
             c.name().unwrap_or_default(),
             c.gamemode().unwrap_or_default(),
             c.campaigns().join("; "),
@@ -712,6 +1129,7 @@ impl Session {
             stats.join(", "),
             abilities.join(", "),
             items.join(", "),
+            points.join(", "),
             self.summary()
         )
     }

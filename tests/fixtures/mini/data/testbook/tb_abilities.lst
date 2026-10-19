@@ -1,5 +1,6 @@
 SOURCELONG:Test Book	SOURCESHORT:TB
 # feats
+Skill Knack	CATEGORY:FEAT	TYPE:General	MULT:YES	CHOOSE:SKILL|Climbing|Tinkering
 Steady Hands	CATEGORY:FEAT	TYPE:General.Combat	BONUS:COMBAT|TOHIT|1	SOURCEPAGE:p.10
 Quick Step	CATEGORY:FEAT	KEY:QuickStep	TYPE:General	PREABILITY:1,CATEGORY=FEAT,Steady Hands
 CATEGORY=FEAT|Steady Hands.MOD	DESC:Hands do not shake.

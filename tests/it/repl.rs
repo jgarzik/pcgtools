@@ -46,7 +46,7 @@ fn info_and_queries() {
     // copies are made after the definitions of their kind
     assert_eq!(
         ok(&mut s, "ls feat"),
-        "Steady Hands (FEAT)\nQuickStep (FEAT)\nKeen Nose (FEAT)\nQuicker Step (FEAT)"
+        "Skill Knack (FEAT)\nSteady Hands (FEAT)\nQuickStep (FEAT)\nKeen Nose (FEAT)\nQuicker Step (FEAT)"
     );
     assert_eq!(
         ok(&mut s, "ls equipment \"*spoon\" TYPE=Kitchen"),
@@ -198,4 +198,107 @@ fn vars_command() {
     assert_eq!(out, "PC.MOVEMENT:Walk\n  Speed = 40");
     let mut t = session();
     assert_eq!(ok(&mut t, "vars PC.MOVEMENT"), "no declared variables");
+}
+
+#[test]
+fn skill_points_are_spent_and_checked() {
+    let mut s = session();
+    // the saved levels have no points left
+    assert!(err(&mut s, "skill Climbing 1").contains("skill points needed"));
+    // a new level brings the class's points
+    ok(&mut s, "class add Tinker 5");
+    assert_eq!(s.ch.skill_points_left("Tinker"), 4.0);
+    assert!(ok(&mut s, "info").contains("Tinker skill points 4"));
+    // a class skill costs one point a rank
+    ok(&mut s, "skill Tinkering 4");
+    assert_eq!(s.ch.skill_points_left("Tinker"), 2.0);
+    // lowering ranks refunds points
+    ok(&mut s, "skill Tinkering 3");
+    assert_eq!(s.ch.skill_points_left("Tinker"), 3.0);
+    // too many for what is left
+    assert!(err(&mut s, "skill Climbing 3").contains("needed"));
+    ok(&mut s, "skill Climbing 3 --force");
+}
+
+#[test]
+fn ability_pools_and_choices() {
+    let mut s = session();
+    // FEAT pool: class level + 1 = 3; two chosen already
+    let info = ok(&mut s, "info");
+    assert!(info.contains("Feat 2/3"), "{}", info);
+    // choices must be what CHOOSE offers
+    assert!(err(&mut s, "feat add \"Skill Knack\"")
+        .contains("needs a choice; choose from: Climbing, Tinkering"));
+    assert!(err(&mut s, "feat add \"Skill Knack\" Swimming").contains("is not a choice"));
+    ok(&mut s, "feat add \"Skill Knack\" Climbing");
+    assert!(ok(&mut s, "info").contains("Feat 3/3"));
+    // the pool is spent
+    assert!(err(&mut s, "feat add \"Quick Step\"").contains("no Feat points left"));
+    ok(&mut s, "feat add \"Quick Step\" --force");
+}
+
+#[test]
+fn subclass_spells_followers_and_kits() {
+    let mut s = session();
+    assert!(err(&mut s, "class subclass Tinker Nope").contains("no subclass"));
+    ok(&mut s, "class subclass Tinker Gearwright");
+    let text = String::from_utf8(s.ch.pcg.encode()).unwrap();
+    assert!(
+        text.contains("CLASS:Tinker|SUBCLASS:Gearwright"),
+        "{}",
+        text
+    );
+    ok(&mut s, "class add Tinker --subclass Gearwright");
+    assert_eq!(s.ch.total_level(), 3);
+
+    // spells: level from the class list, or given
+    assert!(ok(&mut s, "spell add Tinker Spark").contains("level 0"));
+    ok(&mut s, "spell add Tinker Glow 1 Gadgets");
+    assert_eq!(s.ch.spells().len(), 2);
+    assert!(err(&mut s, "spell rm Tinker Fireball").contains("has no spell"));
+    ok(&mut s, "spell rm Tinker Spark");
+    assert_eq!(s.ch.spells().len(), 1);
+
+    // followers
+    ok(&mut s, "follower add Whiskers Familiar Gearling");
+    assert_eq!(
+        ok(&mut s, "follower ls"),
+        "Whiskers\tFamiliar\tGearling\tWhiskers.pcg"
+    );
+    ok(&mut s, "follower rm Whiskers");
+    assert!(err(&mut s, "follower rm Whiskers").contains("no follower"));
+
+    // kits add their gear (Tess already carries two spoons) and stats
+    ok(&mut s, "kit apply \"Cook Kit\"");
+    assert_eq!(s.ch.stat("MGT"), Some(12));
+    let gear: Vec<_> =
+        s.ch.equipment()
+            .iter()
+            .map(|e| (e.name.clone(), e.quantity))
+            .collect();
+    assert!(
+        gear.contains(&("Wooden Spoon".to_string(), 4.0)),
+        "{:?}",
+        gear
+    );
+}
+
+#[test]
+fn equipment_customization() {
+    let mut s = session();
+    ok(&mut s, "equip add \"Wooden Spoon\"");
+    ok(&mut s, "equip customize \"Wooden Spoon\" +SHARP");
+    ok(&mut s, "equip customize \"Wooden Spoon\" +ENGRAVED|Tess");
+    ok(&mut s, "equip customize \"Wooden Spoon\" size S");
+    let (base, data) = s.ch.customization("Wooden Spoon").unwrap();
+    assert_eq!(base, "Wooden Spoon");
+    assert_eq!(data, "NAME=Wooden Spoon$SIZE=S$EQMOD=SHARP.ENGRAVED|Tess");
+    ok(&mut s, "equip customize \"Wooden Spoon\" -SHARP");
+    assert_eq!(
+        s.ch.customization("Wooden Spoon").unwrap().1,
+        "NAME=Wooden Spoon$SIZE=S$EQMOD=ENGRAVED|Tess"
+    );
+    assert!(err(&mut s, "equip customize \"Wooden Spoon\" -SHARP").contains("no modifier"));
+    assert!(err(&mut s, "equip customize Lantern +SHARP").contains("has no 'Lantern'"));
+    assert!(err(&mut s, "equip customize \"Wooden Spoon\" +NOPE").contains("no EQUIPMOD named"));
 }

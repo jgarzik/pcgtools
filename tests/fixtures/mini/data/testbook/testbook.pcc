@@ -20,6 +20,7 @@ SPELL:tb_spells_mod.lst|PRECAMPAIGN:1,TB
 SPELL:tb_spells_never.lst|PRECAMPAIGN:1,Missing Book
 CLASS:tb_classes.lst
 EQUIPMENT:tb_equip.lst|(EXCLUDE:Cursed Spoon)
+EQUIPMOD:tb_eqmods.lst
 KIT:tb_kits.lst
 DATATABLE:tb_tables.lst
 PCC:@/common/common.pcc

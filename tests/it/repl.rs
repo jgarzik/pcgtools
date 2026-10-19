@@ -910,6 +910,23 @@ fn preparing_spells() {
 }
 
 #[test]
+fn prepared_spell_lines_keep_power_point_costs() {
+    let mut s = sage();
+    let lines = pcgtools::pcg::PcgFile::parse(
+        "SPELLBOOK:Prepared Spells|TYPE:2\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SPELLPPCOST:3|SOURCE:[TYPE:CLASS|NAME:Sage]\n",
+    )
+    .lines;
+    s.ch.pcg.lines.extend(lines);
+    ok(&mut s, "spell prep Sage Ember");
+    let want = "SPELLNAME:Ember|TIMES:2|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SPELLPPCOST:3|SOURCE:[TYPE:CLASS|NAME:Sage]\n";
+    assert!(pcg_text(&s).contains(want), "{}", pcg_text(&s));
+    ok(&mut s, "spell unprep Sage Ember");
+    assert!(pcg_text(&s)
+        .contains("|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SPELLPPCOST:3|"));
+}
+
+#[test]
 fn scribing_spells() {
     let mut s = sage();
     let e = err(&mut s, "spell scribe Sage Ember Notebook");

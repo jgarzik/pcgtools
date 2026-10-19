@@ -81,7 +81,7 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
             }
             acc
         });
-    let calc_set = pcg.value("CALCEQUIPSET").unwrap_or_else(|| "0.1".into());
+    let calc_set = s.ch.calc_equip_set();
     let prefix = format!("{}.", calc_set);
     let mut sets: Vec<(String, String, Option<String>, f64)> = pcg
         .lines_tagged("EQUIPSET")
@@ -459,10 +459,7 @@ pub fn equipment(s: &SheetCtx) -> Element {
             .with(Element::leaf("capacity", pattern(max, "#.##"))),
     );
     let mut sets = Element::new("equipmentsets");
-    let calc_set =
-        s.ch.pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
+    let calc_set = s.ch.calc_equip_set();
     let set_name =
         s.ch.pcg
             .lines_tagged("EQUIPSET")

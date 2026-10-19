@@ -177,6 +177,15 @@ pub struct SpellCopy {
     pub pages: i64,
 }
 
+/// The equipment set PCGen gives a character that has none.
+pub const DEFAULT_SET_ID: &str = "0.1";
+pub const DEFAULT_SET_NAME: &str = "Default Set";
+
+/// Whether an EQUIPSET id is a set (`0.N`) rather than an item in one.
+fn is_set_root(id: &str) -> bool {
+    id.strip_prefix("0.").is_some_and(|r| !r.contains('.'))
+}
+
 /// Feat keys of a SPELLNAME line's FEATLIST.
 fn line_feats(l: &PcgLine) -> Vec<String> {
     l.get("FEATLIST")
@@ -523,18 +532,44 @@ impl Character {
             .collect()
     }
 
-    /// The equipment set used for calculations (CALCEQUIPSET), as
-    /// (location, item, quantity) for items placed in it.
-    pub fn equipped(&self) -> Vec<EquipSetEntry> {
-        let calc = self
-            .pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
-        let prefix = format!("{}.", calc);
+    /// Equipment sets (the top-level EQUIPSET lines, `0.N`) as (id,
+    /// name), in file order.
+    pub fn equip_set_roots(&self) -> Vec<(String, String)> {
+        self.equipsets()
+            .into_iter()
+            .filter(|e| is_set_root(&e.id))
+            .map(|e| (e.id, e.location))
+            .collect()
+    }
+
+    /// The id of the equipment set used for calculations: the one
+    /// CALCEQUIPSET names if there is such a set, else (as PCGen does)
+    /// the first set in the file.
+    pub fn calc_equip_set(&self) -> String {
+        let stored = self.pcg.value("CALCEQUIPSET");
+        let sets = self.equipsets();
+        if sets.iter().any(|e| Some(&e.id) == stored.as_ref()) {
+            return stored.unwrap_or_default();
+        }
+        sets.into_iter()
+            .find(|e| is_set_root(&e.id))
+            .map(|e| e.id)
+            .or(stored)
+            .unwrap_or_else(|| DEFAULT_SET_ID.into())
+    }
+
+    /// Items placed in an equipment set (and what they hold).
+    pub fn set_items(&self, set: &str) -> Vec<EquipSetEntry> {
+        let prefix = format!("{}.", set);
         self.equipsets()
             .into_iter()
             .filter(|e| e.item.is_some() && e.id.starts_with(&prefix))
             .collect()
+    }
+
+    /// Items placed in the equipment set used for calculations.
+    pub fn equipped(&self) -> Vec<EquipSetEntry> {
+        self.set_items(&self.calc_equip_set())
     }
 
     // ---- editing ----
@@ -1131,9 +1166,173 @@ impl Character {
         let before = self.pcg.lines.len();
         self.pcg.lines.retain(|l| {
             !(l.tag() == Some("EQUIPNAME") && l.head().is_some_and(|h| h.value_text() == name))
-                && !(l.tag() == Some("EQUIPSET") && l.text("VALUE").as_deref() == Some(name))
         });
+        self.remove_set_lines(|_, value| value == Some(name));
         before != self.pcg.lines.len()
+    }
+
+    /// Remove the EQUIPSET lines `pick` chooses by (id, item), with
+    /// everything under them.
+    fn remove_set_lines(&mut self, pick: impl Fn(&str, Option<&str>) -> bool) -> bool {
+        let gone: Vec<String> = self
+            .equipsets()
+            .into_iter()
+            .filter(|e| pick(&e.id, e.item.as_deref()))
+            .map(|e| e.id)
+            .collect();
+        if gone.is_empty() {
+            return false;
+        }
+        self.pcg.lines.retain(|l| {
+            if l.tag() != Some("EQUIPSET") {
+                return true;
+            }
+            let id = l.text("ID").unwrap_or_default();
+            !gone.iter().any(|g| {
+                id == *g
+                    || id
+                        .strip_prefix(g.as_str())
+                        .is_some_and(|r| r.starts_with('.'))
+            })
+        });
+        true
+    }
+
+    /// Keep the EQUIPSET lines in the order PCGen writes them (by id,
+    /// as text) and CALCEQUIPSET naming a set that exists.
+    fn sync_equip_sets(&mut self) {
+        let idx = self.pcg.indices("EQUIPSET");
+        let mut lines: Vec<PcgLine> = idx.iter().map(|&i| self.pcg.lines[i].clone()).collect();
+        lines.sort_by_key(|l| l.text("ID").unwrap_or_default().to_lowercase());
+        for (i, l) in idx.into_iter().zip(lines) {
+            self.pcg.lines[i] = l;
+        }
+        if !self.equip_set_roots().is_empty() {
+            let calc = self.calc_equip_set();
+            self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", &calc)]);
+        }
+    }
+
+    /// A free top-level set id, after the highest in use.
+    fn next_set_id(&self) -> String {
+        let n = self
+            .equip_set_roots()
+            .iter()
+            .filter_map(|(id, _)| id.strip_prefix("0.")?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("0.{}", n.saturating_add(1))
+    }
+
+    /// The set used for calculations, first making PCGen's default
+    /// set if there is none.
+    pub fn ensure_equip_set(&mut self) -> String {
+        if self.equip_set_roots().is_empty() {
+            self.insert_ordered(
+                "EQUIPSET",
+                PcgLine::new(vec![
+                    Elem::text("EQUIPSET", DEFAULT_SET_NAME),
+                    Elem::raw("ID", DEFAULT_SET_ID),
+                    Elem::raw("USETEMPMODS", "Y"),
+                ]),
+            );
+            self.put(
+                "CALCEQUIPSET",
+                vec![Elem::raw("CALCEQUIPSET", DEFAULT_SET_ID)],
+            );
+            self.sync_equip_sets();
+        }
+        self.calc_equip_set()
+    }
+
+    /// Add an empty equipment set; returns its id.
+    pub fn add_equip_set(&mut self, name: &str) -> String {
+        self.ensure_equip_set();
+        let id = self.next_set_id();
+        self.insert_ordered(
+            "EQUIPSET",
+            PcgLine::new(vec![
+                Elem::text("EQUIPSET", name),
+                Elem::raw("ID", &id),
+                Elem::raw("USETEMPMODS", "Y"),
+            ]),
+        );
+        self.sync_equip_sets();
+        id
+    }
+
+    /// Add a set holding what set `from` holds, in the same places;
+    /// returns its id.
+    pub fn copy_equip_set(&mut self, from: &str, name: &str) -> String {
+        let id = self.next_set_id();
+        let prefix = format!("{}.", from);
+        let copies: Vec<PcgLine> = self
+            .pcg
+            .lines_tagged("EQUIPSET")
+            .filter_map(|l| {
+                let old = l.text("ID")?;
+                let new = if old == from {
+                    id.clone()
+                } else {
+                    format!("{}.{}", id, old.strip_prefix(&prefix)?)
+                };
+                let mut elems = l.elems.clone().unwrap_or_default();
+                for e in &mut elems {
+                    if e.tag == "ID" {
+                        *e = Elem::raw("ID", &new);
+                    }
+                }
+                if old == from {
+                    elems[0] = Elem::text("EQUIPSET", name);
+                }
+                Some(PcgLine::new(elems))
+            })
+            .collect();
+        for l in copies {
+            self.insert_ordered("EQUIPSET", l);
+        }
+        self.sync_equip_sets();
+        id
+    }
+
+    /// Rename an equipment set.
+    pub fn rename_equip_set(&mut self, set: &str, name: &str) -> bool {
+        let Some(i) = self
+            .pcg
+            .indices("EQUIPSET")
+            .into_iter()
+            .find(|&i| self.pcg.lines[i].text("ID").as_deref() == Some(set))
+        else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems[0] = Elem::text("EQUIPSET", name);
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
+    /// Remove an equipment set and everything in it.  If it was the
+    /// set used for calculations, the first remaining set is.
+    pub fn remove_equip_set(&mut self, set: &str) -> bool {
+        let done = self.remove_set_lines(|id, _| id == set);
+        self.sync_equip_sets();
+        done
+    }
+
+    /// Use an equipment set for calculations.  As in PCGen, the set's
+    /// own temporary-bonus setting becomes the character's.
+    pub fn use_equip_set(&mut self, set: &str) {
+        let temp = self
+            .pcg
+            .lines_tagged("EQUIPSET")
+            .find(|l| l.text("ID").as_deref() == Some(set))
+            .and_then(|l| l.text("USETEMPMODS"))
+            .is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+        self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", set)]);
+        self.put(
+            "USETEMPMODS",
+            vec![Elem::raw("USETEMPMODS", if temp { "Y" } else { "N" })],
+        );
     }
 
     /// Give up some of an item: all of it (with its places in
@@ -1158,21 +1357,13 @@ impl Character {
 
     /// Place an item at a location in the calculation equipment set.
     pub fn equip(&mut self, name: &str, location: &str, qty: f64) {
-        let calc = self
-            .pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
-        if self.equipsets().iter().all(|e| e.id != calc) {
-            self.insert_ordered(
-                "EQUIPSET",
-                PcgLine::new(vec![
-                    Elem::text("EQUIPSET", "Default Set"),
-                    Elem::raw("ID", &calc),
-                ]),
-            );
-            self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", &calc)]);
-        }
-        let prefix = format!("{}.", calc);
+        let set = self.ensure_equip_set();
+        self.equip_in(&set, name, location, qty);
+    }
+
+    /// Place an item at a location in an equipment set.
+    pub fn equip_in(&mut self, set: &str, name: &str, location: &str, qty: f64) {
+        let prefix = format!("{}.", set);
         let next = self
             .equipsets()
             .iter()
@@ -1185,16 +1376,19 @@ impl Character {
             })
             .max()
             .unwrap_or(0)
-            + 1;
+            .saturating_add(1);
         self.insert_ordered(
             "EQUIPSET",
             PcgLine::new(vec![
                 Elem::text("EQUIPSET", location),
-                Elem::raw("ID", &format!("{}{}", prefix, next)),
+                // numbered as PCGen numbers them: 01, 02, ...
+                Elem::raw("ID", &format!("{}{:02}", prefix, next)),
                 Elem::text("VALUE", name),
                 Elem::raw("QUANTITY", &format!("{:.1}", qty)),
+                Elem::raw("USETEMPMODS", "Y"),
             ]),
         );
+        self.sync_equip_sets();
     }
 
     /// Skill points left unspent from a class's levels.
@@ -1578,13 +1772,17 @@ impl Character {
         true
     }
 
-    /// Remove an item from the calculation equipment set.
+    /// Remove an item (and what it holds) from the calculation
+    /// equipment set.
     pub fn unequip(&mut self, name: &str) -> bool {
-        let before = self.pcg.lines.len();
-        self.pcg
-            .lines
-            .retain(|l| !(l.tag() == Some("EQUIPSET") && l.text("VALUE").as_deref() == Some(name)));
-        before != self.pcg.lines.len()
+        let set = self.calc_equip_set();
+        self.unequip_in(&set, name)
+    }
+
+    /// Remove an item (and what it holds) from an equipment set.
+    pub fn unequip_in(&mut self, set: &str, name: &str) -> bool {
+        let prefix = format!("{}.", set);
+        self.remove_set_lines(|id, value| id.starts_with(&prefix) && value == Some(name))
     }
 }
 

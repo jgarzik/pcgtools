@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
 use crate::pcc::resolve::DataDirs;
-use crate::pcg::character::{money_text, Character, SpellCopy};
+use crate::pcg::character::{money_text, Character, SpellCopy, DEFAULT_SET_ID, DEFAULT_SET_NAME};
 use crate::query::Query;
 use crate::rules::calc::{Calc, Sheet};
 use crate::rules::equip::EqItem;
@@ -94,10 +94,16 @@ Commands (names may be quoted; most accept --force to skip checks):
   equip rm NAME                discard equipment
   equip buy NAME [QTY]         acquire equipment, paying for it
   equip sell NAME [QTY|all]    give up equipment for half its price
-  equip wear NAME [LOCATION]   equip an item (location defaults by type)
-  equip unwear NAME            stop using an item
+  equip wear NAME [LOCATION] [--set SET]
+                               equip an item (location defaults by type) in
+                               a set (by default the one used)
+  equip unwear NAME [--set SET]   stop using an item
   equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
                                add or remove an equipment modifier, or resize
+  eqset ls | eqset show [SET]  equipment sets (* the one used); a set's items
+  eqset use SET                use a set (by name or id) for calculations
+  eqset add NAME | eqset copy SET NAME   add an empty or copied set, and use it
+  eqset rename SET NAME | eqset rm SET   rename or remove a set
   kit apply KEY                apply a starting kit
   spell add CLASS SPELL [LEVEL] [BOOK]   add a spell (book: Known Spells)
   spell rm CLASS SPELL [BOOK]  remove a spell (one copy)
@@ -821,6 +827,7 @@ impl Session {
             }
             "equip" if w.get(1) == Some(&"customize") => self.cmd_customize(&w, changed),
             "equip" => self.cmd_equip(&w, force, changed),
+            "eqset" => self.cmd_eqset(&w, changed),
             "kit" if w.get(1) == Some(&"apply") => {
                 let o = self.find(FileKind::Kit, arg(2)?)?.clone();
                 self.checkpoint();
@@ -1469,7 +1476,33 @@ impl Session {
         force: bool,
         changed: impl Fn(&Session, String) -> Result<Outcome>,
     ) -> Result<Outcome> {
+        // the equipment set worn or unworn in (by default the one used)
+        let mut set: Option<&str> = None;
+        let mut pos: Vec<&str> = Vec::new();
+        let mut it = w.iter().copied();
+        while let Some(x) = it.next() {
+            match x {
+                "--set" => {
+                    set = Some(
+                        it.next()
+                            .ok_or_else(|| Error::Other("--set needs a set".into()))?,
+                    )
+                }
+                o if o.starts_with("--") => {
+                    return Err(Error::Other(format!("unknown option {}", o)));
+                }
+                _ => pos.push(x),
+            }
+        }
+        let w = pos.as_slice();
         let sub = w.get(1).copied().unwrap_or("");
+        if set.is_some() && !matches!(sub, "wear" | "unwear") {
+            return Err(Error::Other(format!("equip {} takes no --set", sub)));
+        }
+        let set_id = match set {
+            Some(s) => Some(self.find_equip_set(s)?.0),
+            None => None,
+        };
         let name = w
             .get(2)
             .copied()
@@ -1581,19 +1614,185 @@ impl Session {
                     Some(o) => self.check_prereqs(o, force)?,
                     None => String::new(),
                 };
+                // as in PCGen, a set holds no more of an item than the
+                // character has
+                let placed: f64 = self
+                    .ch
+                    .set_items(&set_id.clone().unwrap_or_else(|| self.ch.calc_equip_set()))
+                    .iter()
+                    .filter(|e| e.item.as_deref() == Some(owned.name.as_str()))
+                    .map(|e| e.quantity.unwrap_or(1.0))
+                    .sum();
+                if placed + 1.0 > owned.quantity && !force {
+                    return Err(Error::Other(format!(
+                        "{} of {} {} are already in the set (use --force)",
+                        placed, owned.quantity, owned.name
+                    )));
+                }
                 self.checkpoint();
-                self.ch.equip(&owned.name, &loc, 1.0);
+                let calc = self.ch.ensure_equip_set();
+                let set = set_id.unwrap_or(calc);
+                self.ch.equip_in(&set, &owned.name, &loc, 1.0);
                 changed(self, format!("{}equipped {} ({})", warn, owned.name, loc))
             }
             "unwear" => {
+                let set = set_id.unwrap_or_else(|| self.ch.calc_equip_set());
                 self.checkpoint();
-                if !self.ch.unequip(name) {
+                if !self.ch.unequip_in(&set, name) {
                     self.undo.pop();
                     return Err(Error::Other(format!("'{}' is not equipped", name)));
                 }
                 changed(self, format!("unequipped {}", name))
             }
             other => Err(Error::Other(format!("unknown equip command '{}'", other))),
+        }
+    }
+
+    /// The character's equipment sets as (id, name); PCGen's default
+    /// set if it has none.
+    fn equip_sets(&self) -> Vec<(String, String)> {
+        let roots = self.ch.equip_set_roots();
+        if roots.is_empty() {
+            return vec![(DEFAULT_SET_ID.into(), DEFAULT_SET_NAME.into())];
+        }
+        roots
+    }
+
+    /// An equipment set, by name (in any case) or id.
+    fn find_equip_set(&self, name: &str) -> Result<(String, String)> {
+        let sets = self.equip_sets();
+        sets.iter()
+            .find(|(_, n)| n.eq_ignore_ascii_case(name))
+            .or_else(|| sets.iter().find(|(id, _)| id == name))
+            .cloned()
+            .ok_or_else(|| Error::Other(format!("no equipment set named '{}'", name)))
+    }
+
+    /// Refuse a set name another set has, or one PCGen could not
+    /// read back.
+    fn check_set_name(&self, name: &str) -> Result<()> {
+        if name.trim().is_empty() || name.contains(['|', '\t', '\n', '\r']) {
+            return Err(Error::Other(format!("bad equipment set name '{}'", name)));
+        }
+        if self
+            .equip_sets()
+            .iter()
+            .any(|(_, n)| n.eq_ignore_ascii_case(name))
+        {
+            return Err(Error::Other(format!(
+                "there is already an equipment set named {}",
+                name
+            )));
+        }
+        Ok(())
+    }
+
+    /// `eqset ...`: equipment sets.
+    fn cmd_eqset(
+        &mut self,
+        w: &[&str],
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let arg = |i: usize| {
+            w.get(i)
+                .copied()
+                .ok_or_else(|| Error::Other("missing argument (try 'help')".into()))
+        };
+        match arg(1)? {
+            "ls" => {
+                let calc = self.ch.calc_equip_set();
+                let out: Vec<String> = self
+                    .equip_sets()
+                    .into_iter()
+                    .map(|(id, name)| {
+                        let n = self.ch.set_items(&id).len();
+                        format!(
+                            "{} {}\t{}\t{} item{}",
+                            if id == calc { "*" } else { " " },
+                            id,
+                            name,
+                            n,
+                            if n == 1 { "" } else { "s" }
+                        )
+                    })
+                    .collect();
+                Ok(Outcome::Text(out.join("\n")))
+            }
+            "show" => {
+                let set = match w.get(2) {
+                    Some(s) => self.find_equip_set(s)?.0,
+                    None => self.ch.calc_equip_set(),
+                };
+                let mut items = self.ch.set_items(&set);
+                items.sort_by_key(|e| e.id.to_lowercase());
+                let out: Vec<String> = items
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}\t{}\t{} x{}",
+                            e.id,
+                            e.location,
+                            e.item.as_deref().unwrap_or(""),
+                            e.quantity.unwrap_or(1.0)
+                        )
+                    })
+                    .collect();
+                Ok(Outcome::Text(if out.is_empty() {
+                    "the set is empty".into()
+                } else {
+                    out.join("\n")
+                }))
+            }
+            "add" => {
+                let name = arg(2)?;
+                self.check_set_name(name)?;
+                self.checkpoint();
+                // a new set is the one used, as in PCGen
+                let id = self.ch.add_equip_set(name);
+                self.ch.use_equip_set(&id);
+                changed(self, format!("added equipment set {} ({})", name, id))
+            }
+            "copy" => {
+                let (from, from_name) = self.find_equip_set(arg(2)?)?;
+                let name = arg(3)?;
+                self.check_set_name(name)?;
+                self.checkpoint();
+                self.ch.ensure_equip_set();
+                let id = self.ch.copy_equip_set(&from, name);
+                self.ch.use_equip_set(&id);
+                changed(
+                    self,
+                    format!("copied equipment set {} to {} ({})", from_name, name, id),
+                )
+            }
+            "rename" => {
+                let (id, old) = self.find_equip_set(arg(2)?)?;
+                let name = arg(3)?;
+                if !old.eq_ignore_ascii_case(name) {
+                    self.check_set_name(name)?;
+                }
+                self.checkpoint();
+                self.ch.ensure_equip_set();
+                self.ch.rename_equip_set(&id, name);
+                changed(self, format!("renamed equipment set {} to {}", old, name))
+            }
+            "rm" | "remove" => {
+                let (id, name) = self.find_equip_set(arg(2)?)?;
+                if self.equip_sets().len() < 2 {
+                    return Err(Error::Other(format!("{} is the last equipment set", name)));
+                }
+                self.checkpoint();
+                self.ch.remove_equip_set(&id);
+                changed(self, format!("removed equipment set {}", name))
+            }
+            "use" => {
+                let (id, name) = self.find_equip_set(arg(2)?)?;
+                self.checkpoint();
+                self.ch.ensure_equip_set();
+                self.ch.use_equip_set(&id);
+                changed(self, format!("using equipment set {}", name))
+            }
+            other => Err(Error::Other(format!("unknown eqset command '{}'", other))),
         }
     }
 

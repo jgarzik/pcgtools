@@ -144,9 +144,12 @@ Commands (`help` in the editor lists them):
     feat add KEY [CHOICE...] | feat rm KEY
     skill KEY RANKS [CLASS]
     lang add KEY | template add KEY | kit apply KEY
-    equip add NAME [QTY] | equip rm NAME | equip wear NAME [LOCATION] | equip unwear NAME
+    equip add NAME [QTY] | equip rm NAME
+    equip wear NAME [LOCATION] [--set SET] | equip unwear NAME [--set SET]
     equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
     equip buy NAME [QTY] | equip sell NAME [QTY|all]
+    eqset ls | eqset show [SET] | eqset use SET
+    eqset add NAME | eqset copy SET NAME | eqset rename SET NAME | eqset rm SET
     spell add CLASS SPELL [LEVEL] [BOOK] | spell rm CLASS SPELL [BOOK]
     spell prep CLASS SPELL [LIST] [--meta FEAT[,FEAT]] [--level N] [--domain D]
     spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]

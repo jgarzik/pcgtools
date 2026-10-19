@@ -2,6 +2,8 @@
 
 use crate::common;
 use pcgtools::pcc::resolve::DataDirs;
+use pcgtools::pcg::character::Character;
+use pcgtools::pcg::PcgFile;
 use pcgtools::repl::{Outcome, Session};
 use pcgtools::rules::calc::Calc;
 
@@ -1022,4 +1024,107 @@ fn a_known_spell_is_not_learned_twice() {
         .filter(|l| l.starts_with("SPELLNAME:Spark|"))
         .count();
     assert_eq!(known, 1);
+}
+
+fn equipment_sets() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "equip add \"Tin Shield\"");
+    ok(&mut s, "equip add \"Wooden Spoon\" 2");
+    // with no sets there is PCGen's default one
+    assert_eq!(ok(&mut s, "eqset ls"), "* 0.1\tDefault Set\t0 items");
+    ok(&mut s, "equip wear \"Wooden Spoon\" Carried");
+    // a new set is empty and becomes the one used, as in PCGen
+    ok(&mut s, "eqset add Travel");
+    assert_eq!(lines(&s, "CALCEQUIPSET"), ["CALCEQUIPSET:0.2"]);
+    ok(&mut s, "equip wear \"Tin Shield\" Arm");
+    ok(
+        &mut s,
+        "equip wear \"Wooden Spoon\" Carried --set \"default set\"",
+    );
+    // a set holds no more of an item than the character has
+    let e = err(&mut s, "equip wear \"Wooden Spoon\" Carried --set 0.1");
+    assert!(e.contains("2 of 2"), "{}", e);
+    let e = err(&mut s, "equip wear \"Tin Shield\" --set Nowhere");
+    assert!(e.contains("no equipment set"), "{}", e);
+    assert_eq!(
+        lines(&s, "EQUIPSET:"),
+        [
+            "EQUIPSET:Default Set|ID:0.1|USETEMPMODS:Y",
+            "EQUIPSET:Carried|ID:0.1.01|VALUE:Wooden Spoon|QUANTITY:1.0|USETEMPMODS:Y",
+            "EQUIPSET:Carried|ID:0.1.02|VALUE:Wooden Spoon|QUANTITY:1.0|USETEMPMODS:Y",
+            "EQUIPSET:Travel|ID:0.2|USETEMPMODS:Y",
+            "EQUIPSET:Arm|ID:0.2.01|VALUE:Tin Shield|QUANTITY:1.0|USETEMPMODS:Y",
+        ]
+    );
+    // only the set used counts
+    assert_eq!(s.ch.equipped().len(), 1);
+    assert_eq!(
+        ok(&mut s, "eqset ls"),
+        "  0.1\tDefault Set\t2 items\n* 0.2\tTravel\t1 item"
+    );
+    assert_eq!(
+        ok(&mut s, "eqset show \"Default Set\""),
+        "0.1.01\tCarried\tWooden Spoon x1\n0.1.02\tCarried\tWooden Spoon x1"
+    );
+    // a copy has the same items under a new root
+    ok(&mut s, "eqset copy Travel Battle");
+    assert_eq!(lines(&s, "CALCEQUIPSET"), ["CALCEQUIPSET:0.3"]);
+    assert_eq!(
+        lines(&s, "EQUIPSET:")[5..],
+        [
+            "EQUIPSET:Battle|ID:0.3|USETEMPMODS:Y",
+            "EQUIPSET:Arm|ID:0.3.01|VALUE:Tin Shield|QUANTITY:1.0|USETEMPMODS:Y",
+        ]
+    );
+    assert!(err(&mut s, "eqset rename Battle travel").contains("already"));
+    assert!(err(&mut s, "eqset add TRAVEL").contains("already"));
+    ok(&mut s, "eqset rename Battle War");
+    assert_eq!(lines(&s, "EQUIPSET:War|ID:0.3|").len(), 1);
+    // taking an item off one set leaves it in the others
+    ok(&mut s, "equip unwear \"Tin Shield\" --set Travel");
+    assert_eq!(lines(&s, "EQUIPSET:Arm|").len(), 1);
+    assert_eq!(s.ch.equipped().len(), 1);
+    ok(&mut s, "eqset use \"Default Set\"");
+    assert_eq!(lines(&s, "CALCEQUIPSET"), ["CALCEQUIPSET:0.1"]);
+    assert_eq!(lines(&s, "USETEMPMODS"), ["USETEMPMODS:Y"]);
+    assert_eq!(s.ch.equipped().len(), 2);
+    // removing a set leaves the others numbered as they were
+    ok(&mut s, "eqset rm Travel");
+    let roots: Vec<String> = lines(&s, "EQUIPSET:")
+        .into_iter()
+        .filter(|l| !l.contains("VALUE:"))
+        .collect();
+    assert_eq!(
+        roots,
+        [
+            "EQUIPSET:Default Set|ID:0.1|USETEMPMODS:Y",
+            "EQUIPSET:War|ID:0.3|USETEMPMODS:Y",
+        ]
+    );
+    // removing the set used falls back to the first one
+    ok(&mut s, "eqset use War");
+    ok(&mut s, "eqset rm War");
+    assert_eq!(lines(&s, "CALCEQUIPSET"), ["CALCEQUIPSET:0.1"]);
+    assert!(err(&mut s, "eqset rm \"Default Set\"").contains("last"));
+    ok(&mut s, "undo");
+    assert_eq!(lines(&s, "EQUIPSET:War").len(), 1);
+}
+
+#[test]
+fn calculation_set_falls_back_to_the_first_set() {
+    // PCGen uses the first set when CALCEQUIPSET names none
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "equip add \"Tin Shield\"");
+    ok(&mut s, "eqset add Travel");
+    ok(&mut s, "equip wear \"Tin Shield\" Arm");
+    let text = pcg_text(&s)
+        .replace("ID:0.2", "ID:0.02")
+        .replace("CALCEQUIPSET:0.2\n", "CALCEQUIPSET:0.7\n");
+    let ch = Character::from_pcg(PcgFile::parse(&text));
+    assert_eq!(ch.calc_equip_set(), "0.1");
+    assert!(ch.equipped().is_empty());
+    // the first in the file, whatever its number
+    let text = text.replace("ID:0.1|", "ID:0.9|");
+    let ch = Character::from_pcg(PcgFile::parse(&text));
+    assert_eq!(ch.calc_equip_set(), "0.9");
 }

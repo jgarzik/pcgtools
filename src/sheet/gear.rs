@@ -453,6 +453,8 @@ pub fn equipment(s: &SheetCtx) -> Element {
     out
 }
 
+type PlacedTest<'t> = dyn Fn(&Placed) -> bool + 't;
+
 /// Armor, shields and other items that change armor class.
 pub fn protection(s: &SheetCtx) -> Element {
     let c = &s.calc;
@@ -460,7 +462,7 @@ pub fn protection(s: &SheetCtx) -> Element {
     let mut out = Element::new("protection");
     let order = merged(&items);
     let alters_ac = |p: &Placed| p.item.bonus(c, "COMBAT", "AC", true) != 0.0;
-    let groups: [(&str, &dyn Fn(&Placed) -> bool); 3] = [
+    let groups: [(&str, &PlacedTest); 3] = [
         ("armor", &|p: &Placed| {
             p.item.is_type(c, "Armor") && alters_ac(p)
         }),

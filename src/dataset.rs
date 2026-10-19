@@ -20,7 +20,7 @@ use crate::lst::line::{HeadOp, LineKind, LstFile};
 use crate::pcc::fileref::Filter;
 use crate::text::TextFile;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Where something came from: index into [`Dataset::files`] and a
@@ -203,6 +203,18 @@ impl Object {
     }
 }
 
+/// The source date of an object: its own SOURCEDATE, its file's, or
+/// its campaign's.
+fn object_date(
+    o: &Object,
+    campaigns: &BTreeMap<PathBuf, String>,
+    campaign: &Path,
+) -> Option<String> {
+    o.source_value("SOURCEDATE")
+        .map(str::to_string)
+        .or_else(|| campaigns.get(campaign).cloned())
+}
+
 /// Tags that hold one value: a later one replaces an earlier one.
 const SINGLE_VALUED: &[&str] = &[
     "ABB",
@@ -319,12 +331,12 @@ impl KindTable {
     }
 
     fn reindex(&mut self) {
-        self.index = self
-            .objects
-            .iter()
-            .enumerate()
-            .map(|(i, o)| (o.index_key(), i))
-            .collect();
+        // with duplicates allowed, the first object of a key is found
+        let mut index = HashMap::new();
+        for (i, o) in self.objects.iter().enumerate() {
+            index.entry(o.index_key()).or_insert(i);
+        }
+        self.index = index;
     }
 
     pub fn len(&self) -> usize {
@@ -344,6 +356,15 @@ pub struct Dataset {
     pub kinds: BTreeMap<FileKind, KindTable>,
     pub tables: Vec<Table>,
     pub diags: Diagnostics,
+    /// kinds whose objects may share keys
+    #[serde(skip)]
+    allow_dupes: BTreeSet<FileKind>,
+    /// source date of each campaign
+    #[serde(skip)]
+    source_dates: BTreeMap<PathBuf, String>,
+    /// source date each object was defined with, by kind and index key
+    #[serde(skip)]
+    dates: HashMap<(FileKind, String), String>,
 }
 
 /// Deferred operations collected while loading the files of a kind.
@@ -371,7 +392,11 @@ struct Deferred {
 
 impl Dataset {
     pub fn load(plan: &LoadPlan) -> Dataset {
-        let mut ds = Dataset::default();
+        let mut ds = Dataset {
+            allow_dupes: plan.allow_dupes.clone(),
+            source_dates: plan.source_dates.clone(),
+            ..Default::default()
+        };
         for (kind, files) in &plan.files {
             ds.load_kind(*kind, files);
         }
@@ -665,7 +690,36 @@ impl Dataset {
                                 cur = Cur::Skip;
                                 continue;
                             }
+                            // the kind allows duplicates: keep both, the
+                            // first found by key
+                            Some(_) if self.allow_dupes.contains(&kind) => {
+                                let i = table.objects.len();
+                                table.objects.push(o);
+                                cur = Cur::Obj(i);
+                                continue;
+                            }
                             Some(_) => {
+                                // a definition from a newer source replaces
+                                // an older one
+                                let date = object_date(&o, &self.source_dates, &pf.campaign);
+                                let old = self.dates.get(&(kind, ik.clone())).cloned();
+                                if let (Some(new), Some(old)) = (&date, &old) {
+                                    if new > old {
+                                        let i = table.index[&ik];
+                                        let key = o.key.clone();
+                                        table.objects[i] = o;
+                                        self.dates.insert((kind, ik.clone()), new.clone());
+                                        self.diag(
+                                            Diagnostic::info(format!(
+                                                "{}: newer definition of '{}' replaces the older",
+                                                kind, key
+                                            )),
+                                            origin,
+                                        );
+                                        cur = Cur::Obj(i);
+                                        continue;
+                                    }
+                                }
                                 self.diag(
                                     Diagnostic::warning(format!(
                                         "{}: duplicate object '{}' ignored",
@@ -676,7 +730,12 @@ impl Dataset {
                                 cur = Cur::Skip;
                                 continue;
                             }
-                            None => table.insert(o),
+                            None => {
+                                if let Some(d) = object_date(&o, &self.source_dates, &pf.campaign) {
+                                    self.dates.insert((kind, ik.clone()), d);
+                                }
+                                table.insert(o)
+                            }
                         }
                         cur = Cur::Obj(table.index[&ik]);
                     }

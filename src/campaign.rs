@@ -17,7 +17,7 @@ use crate::pcc::fileref::Filter;
 use crate::pcc::resolve::DataDirs;
 use crate::pcc::{Campaign, PccFile};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -137,6 +137,13 @@ pub struct LoadPlan {
     pub campaigns: Vec<PathBuf>,
     /// files grouped by kind, kinds in load order
     pub files: BTreeMap<FileKind, Vec<PlannedFile>>,
+    /// kinds whose objects may share keys (ALLOWDUPES)
+    pub allow_dupes: BTreeSet<FileKind>,
+    /// objects declared to be referenced before (or without) being
+    /// defined (FORWARDREF): (kind as written, key)
+    pub forward_refs: Vec<(String, String)>,
+    /// each campaign's SOURCEDATE
+    pub source_dates: BTreeMap<PathBuf, String>,
     pub diags: Diagnostics,
 }
 
@@ -178,6 +185,26 @@ impl LoadPlan {
                 let c = reg.get(cpath).expect("loaded by closure");
                 if first_seen {
                     plan.diags.extend(c.diags.clone());
+                    for (tag, value) in &c.meta {
+                        match tag.as_str() {
+                            "ALLOWDUPES" => {
+                                if let Some(k) = FileKind::from_tag(value.trim()) {
+                                    plan.allow_dupes.insert(k);
+                                }
+                            }
+                            "FORWARDREF" => {
+                                if let Some((kind, keys)) = value.split_once('|') {
+                                    for k in keys.split(',') {
+                                        plan.forward_refs.push((kind.to_string(), k.to_string()));
+                                    }
+                                }
+                            }
+                            "SOURCEDATE" => {
+                                plan.source_dates.insert(cpath.clone(), value.clone());
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 excludes.extend(c.lst_excludes.iter().cloned());
                 for f in &c.files {

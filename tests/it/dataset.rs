@@ -139,3 +139,41 @@ fn shared_include_diagnostics_reported_once() {
         .count();
     assert_eq!(n, 1, "{:?}", plan.diags.items);
 }
+
+/// Two campaigns defining the same objects: the newer source date
+/// wins, an object's own SOURCEDATE counts, and ALLOWDUPES keeps both.
+#[test]
+fn duplicates_by_source_date_and_allowed() {
+    let data = common::fixture("mini/data");
+    let mut reg = Registry::new(DataDirs {
+        data: Some(data.clone()),
+        ..Default::default()
+    });
+    let plan = LoadPlan::build(
+        &mut reg,
+        &[data.join("dated/old.pcc"), data.join("dated/new.pcc")],
+    );
+    assert!(plan.allow_dupes.contains(&FileKind::Language));
+    assert!(plan
+        .forward_refs
+        .contains(&("SPELL".to_string(), "Promised Spell".to_string())));
+    let ds = Dataset::load(&plan);
+    // the newer campaign's Flicker replaces the older one
+    let f = ds.get(FileKind::Spell, "Flicker").unwrap();
+    assert_eq!(f.get("SCHOOL"), Some("Illusion"));
+    // Steady carries its own later date, so the first definition stays
+    let st = ds.get(FileKind::Spell, "Steady").unwrap();
+    assert_eq!(st.get("SCHOOL"), Some("Abjuration"));
+    // both languages are kept; lookups find the first
+    assert_eq!(
+        ds.objects(FileKind::Language)
+            .iter()
+            .filter(|o| o.key == "Hush")
+            .count(),
+        2
+    );
+    assert_eq!(
+        ds.get(FileKind::Language, "Hush").unwrap().get("TYPE"),
+        Some("Spoken")
+    );
+}

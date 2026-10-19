@@ -2423,9 +2423,12 @@ impl<'a> Calc<'a> {
             }
             "MOVE" => {
                 let mv = self.movement();
+                // a character with no movement at all meets every
+                // speed requirement
+                let none = self.movement_named().is_empty();
                 self.count_items(args, |a| {
                     let (t, v) = a.split_once('=').unwrap_or((a, "1"));
-                    mv.get(&lower(t)).is_some_and(|sp| *sp >= num(v))
+                    none || mv.get(&lower(t)).is_some_and(|sp| *sp >= num(v))
                 })
             }
             "AGESET" => {

@@ -124,6 +124,27 @@ fn class_and_skill_type_prerequisites() {
 }
 
 #[test]
+fn move_prerequisites_without_any_movement() {
+    use pcgtools::token::pre::Prereq;
+    let dirs = dirs();
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs.clone());
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs.clone());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // with no movement at all, every speed requirement is met
+    assert!(check(&s.ch, "PREMOVE:1,Climb=1"));
+    assert!(!check(&s.ch, "!PREMOVE:1,Climb=1"));
+    // once the race gives a speed, only the speeds it has count
+    s.exec("race Gearling").unwrap();
+    assert!(!check(&s.ch, "PREMOVE:1,Climb=1"));
+    assert!(check(&s.ch, "PREMOVE:1,Walk=20"));
+    assert!(!check(&s.ch, "PREMOVE:1,Walk=30"));
+}
+
+#[test]
 fn carried_weight_without_saved_weights() {
     // the editor saves items without a WT; their data weight counts
     let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());

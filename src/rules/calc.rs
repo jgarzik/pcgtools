@@ -1325,6 +1325,57 @@ impl<'a> Calc<'a> {
         pattern.eq_ignore_ascii_case(choice)
     }
 
+    /// Count items by type: `ARMOR.IS.HEAVY_ARMOR`, `ARMOR.EQUIPPED`,
+    /// `WEAPON.NOT.MELEE`.  The first part (and each part after IS) is a
+    /// type the item must have, each part after NOT one it must not;
+    /// EQUIPPED counts only equipped items.
+    fn count_eqtype(&self, spec: &str) -> usize {
+        let parts: Vec<&str> = spec.split('.').collect();
+        let mut need: Vec<&str> = Vec::new();
+        let mut exclude: Vec<&str> = Vec::new();
+        let mut equipped = false;
+        let mut i = 0;
+        while i < parts.len() {
+            match parts[i] {
+                "EQUIPPED" => equipped = true,
+                "IS" if i + 1 < parts.len() => {
+                    need.push(parts[i + 1]);
+                    i += 1;
+                }
+                "NOT" if i + 1 < parts.len() => {
+                    exclude.push(parts[i + 1]);
+                    i += 1;
+                }
+                "NOTEQUIPPED" | "CARRIED" | "CONTAINER" => {}
+                t => need.push(t),
+            }
+            i += 1;
+        }
+        let ok =
+            |o: &Object| need.iter().all(|t| o.is_type(t)) && !exclude.iter().any(|t| o.is_type(t));
+        if equipped {
+            self.items.iter().filter(|it| ok(it.obj)).count()
+        } else {
+            self.ch
+                .equipped()
+                .iter()
+                .filter_map(|e| e.item.as_deref())
+                .filter_map(|n| {
+                    let base = self
+                        .ch
+                        .equipment()
+                        .into_iter()
+                        .find(|x| x.name == n)
+                        .and_then(|x| x.base);
+                    self.ds
+                        .get(FileKind::Equipment, base.as_deref().unwrap_or(n))
+                        .or_else(|| self.ds.get(FileKind::Equipment, n))
+                })
+                .filter(|o| ok(o))
+                .count()
+        }
+    }
+
     /// Stats in display (SORTKEY) order.
     pub fn stats_in_order(&self) -> Vec<&'a Object> {
         let mut v: Vec<&Object> = self.ds.objects(FileKind::Stat).iter().collect();
@@ -1752,6 +1803,9 @@ impl<'a> Calc<'a> {
             "ENCUMBERANCE" => return Some(self.encumbrance() as f64),
             "SCORE" => return Some(0.0),
             "COUNT[CLASSES]" => return Some(self.classes.len() as f64),
+            _ if u.starts_with("COUNT[EQTYPE.") && u.ends_with(']') => {
+                return Some(self.count_eqtype(&u["COUNT[EQTYPE.".len()..u.len() - 1]) as f64)
+            }
             "COUNT[FEATS]" | "COUNT[FEATS.ALL]" | "COUNT[FEATSALL]" => {
                 return Some(
                     self.ability_srcs()

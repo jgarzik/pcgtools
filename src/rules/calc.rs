@@ -2545,12 +2545,31 @@ impl<'a> Calc<'a> {
     /// Tokens of a class active at its current level.
     fn class_tokens(&self, o: &'a Object, level: u32) -> Vec<&'a Tok> {
         let mut v: Vec<&Tok> = o.tokens.iter().collect();
+        let subs = self.substitutions(o);
+        for (n, sub) in &subs {
+            if *n > level {
+                continue;
+            }
+            for sl in sub
+                .sublines
+                .iter()
+                .filter(|sl| sl.tag == "SUBSTITUTIONLEVEL")
+            {
+                if level_number(&sl.value) == *n {
+                    v.extend(sl.tokens.iter());
+                }
+            }
+        }
         for sl in &o.sublines {
             if sl.tag != "LEVEL" {
                 continue;
             }
             let mut parts = sl.value.splitn(3, ':');
             let start: u32 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+            // a substitution level replaces the class's own line
+            if subs.iter().any(|(n, _)| *n == start) && !sl.value.contains("REPEATLEVEL") {
+                continue;
+            }
             let applies = match (parts.next(), parts.next()) {
                 (Some("REPEATLEVEL"), Some(spec)) => {
                     let mut it = spec.split('|');
@@ -2587,18 +2606,42 @@ impl<'a> Calc<'a> {
         if let Some(sub) = self.subclass_of(o) {
             v.extend(sub.tokens.iter());
             for sl in sub.sublines.iter().filter(|sl| sl.tag == "SUBCLASSLEVEL") {
-                let n: u32 = sl
-                    .value
-                    .split(':')
-                    .next()
-                    .and_then(|x| x.trim().parse().ok())
-                    .unwrap_or(0);
+                let n = level_number(&sl.value);
                 if n > 0 && n <= level {
                     v.extend(sl.tokens.iter());
                 }
             }
         }
         v
+    }
+
+    /// Substitution levels taken in a class: (level, substitution class),
+    /// from SUBSTITUTIONLEVEL on the saved level lines.
+    fn substitutions(&self, cls: &'a Object) -> Vec<(u32, &'a Object)> {
+        let mut out = Vec::new();
+        for l in self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL") {
+            let Some((c, n)) = l.head().and_then(|h| {
+                h.value_text()
+                    .rsplit_once('=')
+                    .map(|(c, n)| (c.to_string(), n.to_string()))
+            }) else {
+                continue;
+            };
+            if !(c.eq_ignore_ascii_case(&cls.key) || c.eq_ignore_ascii_case(&cls.name)) {
+                continue;
+            }
+            let Some(name) = l.text("SUBSTITUTIONLEVEL") else {
+                continue;
+            };
+            let sub = cls.children.iter().find(|ch| {
+                ch.head_tag.as_deref() == Some("SUBSTITUTIONCLASS")
+                    && (ch.key.eq_ignore_ascii_case(&name) || ch.name.eq_ignore_ascii_case(&name))
+            });
+            if let (Some(sub), Ok(n)) = (sub, n.trim().parse()) {
+                out.push((n, sub));
+            }
+        }
+        out
     }
 
     /// The subclass chosen for a class, if any.
@@ -3602,6 +3645,14 @@ impl Env for ScoreEnv<'_, '_> {
             self.calc.var_value(name, None)
         }
     }
+}
+
+/// The level a level line names ("3" or "3:REPEATLEVEL:..."), 0 if none.
+fn level_number(v: &str) -> u32 {
+    v.split(':')
+        .next()
+        .and_then(|x| x.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

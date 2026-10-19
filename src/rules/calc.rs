@@ -131,6 +131,7 @@ pub struct Calc<'a> {
     defined: HashSet<String>,
     unknown: RefCell<BTreeMap<String, usize>>,
     class_skills: HashSet<String>,
+    cross_class_skills: HashSet<String>,
     rules: HashMap<String, bool>,
 }
 
@@ -168,6 +169,7 @@ impl<'a> Calc<'a> {
             defined: HashSet::new(),
             unknown: RefCell::new(BTreeMap::new()),
             class_skills: HashSet::new(),
+            cross_class_skills: HashSet::new(),
             rules: HashMap::new(),
         };
         for cl in ch.classes() {
@@ -501,6 +503,66 @@ impl<'a> Calc<'a> {
         m
     }
 
+    /// Movement types with their speeds (after MOVEADD bonuses), named
+    /// as first written.
+    pub fn movement_named(&self) -> Vec<(String, f64)> {
+        let mut names: Vec<String> = Vec::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "MOVE") {
+                for ty in t.value.split(',').step_by(2) {
+                    let ty = ty.trim();
+                    if !ty.is_empty() && !names.iter().any(|n| n.eq_ignore_ascii_case(ty)) {
+                        names.push(ty.to_string());
+                    }
+                }
+            }
+        }
+        names
+            .into_iter()
+            .map(|n| {
+                let v = self.move_speed(&n);
+                (n, v)
+            })
+            .filter(|(_, v)| *v > 0.0)
+            .collect()
+    }
+
+    /// Experience needed for a level, from the level table.
+    pub fn min_xp(&self, level: u32) -> Option<f64> {
+        self.level_value(level, |r| r.min_xp.clone())
+    }
+
+    /// A level-table value for a level: the level's own row, else the
+    /// `LEVEL:LEVEL` formula row.
+    pub fn level_value(
+        &self,
+        level: u32,
+        field: impl Fn(&crate::gamemode::LevelRow) -> String,
+    ) -> Option<f64> {
+        let gm = self.gm?;
+        let table = self.ch.pcg.value("EXPERIENCETABLE");
+        let mut rows = gm.level_table(table.as_deref());
+        if rows.is_empty() {
+            rows = gm.level_table(None);
+        }
+        let f = rows
+            .iter()
+            .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
+            .map(&field)
+            .filter(|f| !f.is_empty())
+            .or_else(|| {
+                rows.iter()
+                    .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
+                    .map(&field)
+                    .filter(|f| !f.is_empty())
+            })?;
+        let env = LevelEnv {
+            calc: self,
+            level: level as f64,
+        };
+        Some(eval_str(&f, &env))
+    }
+
     /// The ability category an ability pool draws from (pools are
     /// declared by ABILITYCATEGORY objects; a category is its own pool).
     fn pool_category(&self, pool: &str) -> String {
@@ -583,6 +645,84 @@ impl<'a> Calc<'a> {
     /// Classes taken, with levels, in the order first taken.
     pub fn classes(&self) -> &[(&'a Object, u32)] {
         &self.classes
+    }
+
+    /// Challenge rating: class levels (by each class type's CR
+    /// formula and modifier) or the race's CR for creatures with
+    /// racial hit dice, plus templates and MISC|CR bonuses.
+    pub fn challenge_rating(&self) -> f64 {
+        let frac = |v: &str| -> f64 {
+            match v.split_once('/') {
+                Some((a, b)) => {
+                    a.trim().parse::<f64>().unwrap_or(0.0) / b.trim().parse::<f64>().unwrap_or(1.0)
+                }
+                None => v.trim().parse().unwrap_or(0.0),
+            }
+        };
+        let class_type = |cls: &Object| {
+            self.gm.and_then(|g| {
+                g.lines("miscinfo.lst", "CLASSTYPE")
+                    .find(|l| cls.is_type(&l.value))
+            })
+        };
+        let monster = |cls: &Object| {
+            class_type(cls)
+                .and_then(|l| l.get("ISMONSTER"))
+                .is_some_and(|v| v.eq_ignore_ascii_case("YES"))
+        };
+        let race = self.sources.iter().find(|s| s.kind == SrcKind::Race);
+        let racial_hd = race.is_some_and(|r| r.obj.has("MONSTERCLASS"))
+            || self.classes.iter().any(|(c, l)| *l > 0 && monster(c));
+        let mut cr = 0.0;
+        if racial_hd {
+            cr += race.and_then(|r| r.obj.get("CR")).map(frac).unwrap_or(0.0);
+            for (c, l) in &self.classes {
+                if !monster(c) {
+                    cr += *l as f64;
+                }
+            }
+        } else {
+            let mut best: Option<(i64, f64)> = None;
+            for (c, l) in &self.classes {
+                let line = class_type(c);
+                let formula = c
+                    .get("CRFORMULA")
+                    .or_else(|| line.and_then(|l| l.get("CRFORMULA")))
+                    .unwrap_or("CL");
+                if formula.eq_ignore_ascii_case("NONE") {
+                    continue;
+                }
+                let env = LevelEnv {
+                    calc: self,
+                    level: *l as f64,
+                };
+                cr += if formula.eq_ignore_ascii_case("CL") {
+                    *l as f64
+                } else {
+                    eval_str(formula, &env)
+                };
+                if let Some(line) = line {
+                    let prio: i64 = line
+                        .get("CRMODPRIORITY")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    let m: f64 = line
+                        .get("CRMOD")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    if prio > 0 && best.is_none_or(|(p, _)| prio < p) {
+                        best = Some((prio, m));
+                    }
+                }
+            }
+            cr += best.map(|(_, m)| m).unwrap_or(0.0);
+        }
+        for s in self.sources.iter().filter(|s| s.kind == SrcKind::Template) {
+            if let Some(v) = s.obj.get("CR") {
+                cr += frac(v);
+            }
+        }
+        cr + self.bonus.total("MISC", "CR")
     }
 
     /// Damage reduction, e.g. `10/magic; 5/-`: the best value per
@@ -833,38 +973,19 @@ impl<'a> Calc<'a> {
     /// Maximum ranks for a skill at the character's level, from the
     /// game mode's experience table.
     pub fn max_ranks(&self, skill: &str) -> Option<f64> {
-        let gm = self.gm?;
-        let table = self.ch.pcg.value("EXPERIENCETABLE");
-        let mut rows = gm.level_table(table.as_deref());
-        if rows.is_empty() {
-            rows = gm.level_table(None);
-        }
-        let level = self.total_level();
         let class = self.is_class_skill(skill);
-        let field = |r: &crate::gamemode::LevelRow| -> String {
+        self.level_value(self.total_level(), |r| {
             if class {
                 r.class_skill_max.clone()
             } else {
                 r.cross_class_skill_max.clone()
             }
-        };
-        // the row for this level, else the formula row
-        let f = rows
-            .iter()
-            .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
-            .map(field)
-            .filter(|f| !f.is_empty())
-            .or_else(|| {
-                rows.iter()
-                    .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
-                    .map(field)
-                    .filter(|f| !f.is_empty())
-            })?;
-        let env = LevelEnv {
-            calc: self,
-            level: level as f64,
-        };
-        Some(eval_str(&f, &env))
+        })
+    }
+
+    /// Is the skill made a cross-class skill (CCSKILL) by some object?
+    pub fn is_cross_class_skill(&self, skill: &str) -> bool {
+        self.cross_class_skills.contains(&lower(skill))
     }
 
     pub fn is_class_skill(&self, skill: &str) -> bool {
@@ -1027,6 +1148,7 @@ impl<'a> Calc<'a> {
         match u.as_str() {
             "TL" | "HD" => return Some(self.total_level() as f64),
             "ECL" => return Some(self.ecl() as f64),
+            "CR" => return Some(self.challenge_rating()),
             "CL" => {
                 return Some(
                     src.and_then(|s| s.class.as_deref())
@@ -1741,7 +1863,40 @@ impl<'a> Calc<'a> {
                 v.extend(sl.tokens.iter());
             }
         }
+        // the chosen subclass adds its own tokens and level lines
+        if let Some(sub) = self.subclass_of(o) {
+            v.extend(sub.tokens.iter());
+            for sl in sub.sublines.iter().filter(|sl| sl.tag == "SUBCLASSLEVEL") {
+                let n: u32 = sl
+                    .value
+                    .split(':')
+                    .next()
+                    .and_then(|x| x.trim().parse().ok())
+                    .unwrap_or(0);
+                if n > 0 && n <= level {
+                    v.extend(sl.tokens.iter());
+                }
+            }
+        }
         v
+    }
+
+    /// The subclass chosen for a class, if any.
+    pub fn subclass_of(&self, cls: &'a Object) -> Option<&'a Object> {
+        let name = self
+            .ch
+            .pcg
+            .lines_tagged("CLASS")
+            .find(|l| {
+                l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(&cls.key))
+            })
+            .and_then(|l| l.text("SUBCLASS"))
+            .filter(|v| !v.is_empty() && v != "None")?;
+        cls.children.iter().find(|c| {
+            c.head_tag.as_deref() == Some("SUBCLASS")
+                && (c.key.eq_ignore_ascii_case(&name) || c.name.eq_ignore_ascii_case(&name))
+        })
     }
 
     fn gather(&mut self) {
@@ -1753,8 +1908,19 @@ impl<'a> Calc<'a> {
         for o in ds.objects(FileKind::Save) {
             srcs.push(self.src(SrcKind::Save, o));
         }
+        // skills the character has: those with ranks (bought, or
+        // granted as of the last pass), and once the character has a
+        // class, every skill usable untrained
+        let has_class = !self.classes.is_empty();
         for o in ds.objects(FileKind::Skill) {
-            srcs.push(self.src(SrcKind::Skill, o));
+            let untrained = !o
+                .get("USEUNTRAINED")
+                .is_some_and(|v| v.eq_ignore_ascii_case("NO"));
+            let ranked =
+                self.base_ranks(&o.key) > 0.0 || self.bonus.total("SKILLRANK", &o.key) > 0.0;
+            if ranked || has_class && untrained {
+                srcs.push(self.src(SrcKind::Skill, o));
+            }
         }
         if let Some(a) = self
             .ch
@@ -1981,13 +2147,16 @@ impl<'a> Calc<'a> {
             }
         }
 
-        // class skills
+        // class skills and cross-class skills granted to exclusive skills
         let mut cs = HashSet::new();
+        let mut ccs = HashSet::new();
         for s in &srcs {
             for t in &s.tokens {
-                if t.tag != "CSKILL" {
-                    continue;
-                }
+                let set = match t.tag.as_str() {
+                    "CSKILL" => &mut cs,
+                    "CCSKILL" => &mut ccs,
+                    _ => continue,
+                };
                 for item in t.value.split('|') {
                     if let Some(ty) = item
                         .strip_prefix("TYPE=")
@@ -1995,23 +2164,24 @@ impl<'a> Calc<'a> {
                     {
                         for sk in ds.objects(FileKind::Skill) {
                             if sk.is_type(ty) {
-                                cs.insert(lower(&sk.key));
+                                set.insert(lower(&sk.key));
                             }
                         }
-                    } else if item == "%LIST" {
+                    } else if item == "%LIST" || item == "LIST" {
                         for c in &s.choices {
-                            cs.insert(lower(c));
+                            set.insert(lower(c));
                         }
                     } else if item.eq_ignore_ascii_case("ALL") {
                         for sk in ds.objects(FileKind::Skill) {
-                            cs.insert(lower(&sk.key));
+                            set.insert(lower(&sk.key));
                         }
                     } else {
-                        cs.insert(lower(item));
+                        set.insert(lower(item));
                     }
                 }
             }
         }
+        self.cross_class_skills = ccs;
         self.class_skills = cs;
         self.sources = srcs;
     }

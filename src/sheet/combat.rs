@@ -113,21 +113,7 @@ fn hit_points(s: &SheetCtx) -> Element {
     hp.add("points", s.sheet.hp);
     hp.add("alternate", c.bonus.total("HP", "ALTHP") as i64);
 
-    let mut dice: Vec<String> = Vec::new();
-    for (cls, lvl) in c.classes() {
-        let die = c.hit_die(cls);
-        if die != 0 && *lvl > 0 {
-            dice.push(format!("({}d{})", lvl, die));
-        }
-    }
-    let mut die = dice.join("+");
-    if !c.classes().is_empty() {
-        let t = con * c.total_level() as i64 + c.bonus.total("HP", "CURRENTMAX") as i64;
-        if t != 0 {
-            die.push_str(&signed(t));
-        }
-    }
-    hp.add("die", die);
+    hp.add("die", hit_dice(s));
     hp.add("current", "");
     hp.add("subdual", "");
     hp.add("damage_reduction", c.damage_reduction());
@@ -157,6 +143,28 @@ fn hit_points(s: &SheetCtx) -> Element {
     }
     hp.push(hist);
     hp
+}
+
+/// Hit dice per class, `(3d8)+(2d10)`, with the total stat and
+/// maximum hit point bonus.
+pub fn hit_dice(s: &SheetCtx) -> String {
+    let c = &s.calc;
+    let mut dice: Vec<String> = Vec::new();
+    for (cls, lvl) in c.classes() {
+        let die = c.hit_die(cls);
+        if die != 0 && *lvl > 0 {
+            dice.push(format!("({}d{})", lvl, die));
+        }
+    }
+    let mut die = dice.join("+");
+    if !c.classes().is_empty() {
+        let t =
+            c.hp_stat_bonus() * c.total_level() as i64 + c.bonus.total("HP", "CURRENTMAX") as i64;
+        if t != 0 {
+            die.push_str(&signed(t));
+        }
+    }
+    die
 }
 
 fn armor_class(s: &SheetCtx) -> Element {

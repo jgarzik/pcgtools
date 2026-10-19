@@ -367,6 +367,19 @@ fn two_handed(w: &Weapon) -> bool {
     w.wield.eq_ignore_ascii_case("TwoHanded")
 }
 
+/// Whether PCGen fails to find how the weapon is wielded: with no
+/// `Light` or `OneHanded` wield category in the game mode, a weapon
+/// with a proficiency (the unarmed strike always has one) has none,
+/// and its attacks and damage come out empty.
+fn wield_unknown(s: &SheetCtx, w: &Weapon) -> bool {
+    let defined = s.ctx.gamemode.as_ref().is_some_and(|g| {
+        g.lines("miscinfo.lst", "WIELDCATEGORY").any(|l| {
+            l.value.eq_ignore_ascii_case("Light") || l.value.eq_ignore_ascii_case("OneHanded")
+        })
+    });
+    !defined && (w.is("Unarmed") || prof_of(s, w).is_some())
+}
+
 fn finessable(w: &Weapon) -> bool {
     w.is("Finesseable") || light(w)
 }
@@ -514,6 +527,9 @@ fn mode_bonus(s: &SheetCtx, w: &Weapon, mode: Mode, ranged: bool) -> i64 {
 /// Attack sequence for a weapon in a mode, at a distance (ranged).
 fn to_hit(s: &SheetCtx, w: &Weapon, all_w: &[Weapon], mode: Mode, distance: Option<f64>) -> String {
     let b = &s.calc.bonus;
+    if wield_unknown(s, w) {
+        return String::new();
+    }
     let two = two_handed(w);
     // weapons too big for one hand can only be used two-handed
     if w.melee() && two && !matches!(mode, Mode::TwoHands) && distance.is_none() {
@@ -690,6 +706,9 @@ fn damage(
 ) -> String {
     let c = &s.calc;
     let b = &c.bonus;
+    if wield_unknown(s, w) {
+        return String::new();
+    }
     let two = two_handed(w);
     let mode = forced.unwrap_or_else(|| {
         if w.natural() && w.hand == Hand::Secondary {

@@ -292,3 +292,41 @@ fn sparse_game_mode_basics() {
     assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/holyitem[0]"), "");
     assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/source[0]"), "");
 }
+
+/// A copy of the mini fixture with lines of the game mode's
+/// miscinfo.lst for which `drop` is true removed.
+fn fixture_copy(name: &str, drop: &dyn Fn(&str) -> bool) -> std::path::PathBuf {
+    let src = common::fixture("mini");
+    let dst = std::env::temp_dir().join(format!("pcgtools-{}-{}", name, std::process::id()));
+    for e in walkdir::WalkDir::new(&src).into_iter().flatten() {
+        let to = dst.join(e.path().strip_prefix(&src).unwrap());
+        if e.file_type().is_dir() {
+            std::fs::create_dir_all(&to).unwrap();
+        } else if e.file_name() == "miscinfo.lst" {
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            let kept: Vec<&str> = text.lines().filter(|l| !drop(l)).collect();
+            std::fs::write(&to, kept.join("\n")).unwrap();
+        } else {
+            std::fs::copy(e.path(), &to).unwrap();
+        }
+    }
+    dst
+}
+
+#[test]
+fn unarmed_strike_without_wield_categories() {
+    // PCGen cannot size up the unarmed strike when the game mode
+    // defines no wield categories, and leaves its attack empty
+    let root = fixture_copy("nowield", &|l| l.starts_with("WIELDCATEGORY"));
+    let dirs = DataDirs {
+        data: Some(root.join("data")),
+        system: Some(root.join("system")),
+        ..Default::default()
+    };
+    let s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    let m: HashMap<String, String> = sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect();
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(at(&m, "weapons[0]/unarmed[0]/total[0]"), "");
+    assert_eq!(at(&m, "weapons[0]/unarmed[0]/damage[0]"), "");
+    assert_eq!(at(&m, "weapons[0]/unarmed[0]/critical[0]"), "20/x2");
+}

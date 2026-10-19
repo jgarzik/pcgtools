@@ -1322,6 +1322,7 @@ and non-standard weapons get a single `simple` row instead.
 | `num_attacks` | length of the attack sequence + natural extra attacks + `WEAPON.ATTACKS` |
 | `feat/hit`, `feat/damage` | weapon bonuses from feats; for a weapon with no proficiency object, also feat bonuses to `WEAPONPROF=` its name |
 | two-handed weapon not held in two hands | `N/A` |
+| game mode with no `Light` or `OneHanded` wield category | to-hit and damage empty for the unarmed strike and weapons with a proficiency (PCGen cannot tell how they are wielded) |
 
 **Ranges.** A ranged weapon lists five range rows at multiples of its
 increment *r*; a 30-foot row is inserted before the first multiple

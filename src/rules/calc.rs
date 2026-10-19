@@ -70,6 +70,12 @@ pub struct Src<'a> {
     pub item: Option<usize>,
     /// times the object applies (abilities taken more than once)
     pub times: f64,
+    /// for abilities: how the character has it (NORMAL, AUTOMATIC or
+    /// VIRTUAL), the category it was taken in, and the choices as
+    /// recorded (empty entries included)
+    pub nature: Option<String>,
+    pub category: Option<String>,
+    pub applied: Vec<String>,
 }
 
 impl Src<'_> {
@@ -337,7 +343,7 @@ impl<'a> Calc<'a> {
     }
 
     /// Maximum load before the heaviest category.
-    fn max_load(&self) -> f64 {
+    pub fn max_load(&self) -> f64 {
         let Some(g) = self.gm else { return 0.0 };
         let score = self
             .var_value("LOADSCORE", None)
@@ -385,7 +391,26 @@ impl<'a> Calc<'a> {
                     .flatten()
             })
             .unwrap_or(1.0);
+        // quadrupeds and the like carry more for their size
+        let size_mult = size_mult + self.bonus.total("LOADMULT", "TYPE=SIZE");
         lookup(s) * factor * size_mult
+    }
+
+    /// The game mode's multiplier of the maximum load for a load
+    /// category (Light, Medium, Heavy, OverHead, OffGround, PushDrag).
+    pub fn load_fraction(&self, name: &str) -> Option<f64> {
+        let g = self.gm?;
+        let l = g.lines("load.lst", "ENCUMBRANCE").find(|l| {
+            l.value
+                .split('|')
+                .next()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })?;
+        let f = l.value.split('|').nth(1)?;
+        match f.split_once('/') {
+            Some((a, b)) => Some(a.parse::<f64>().ok()? / b.parse::<f64>().ok()?),
+            None => f.parse().ok(),
+        }
     }
 
     /// Load category: 0 light, 1 medium, 2 heavy, 3 overloaded.
@@ -393,27 +418,16 @@ impl<'a> Calc<'a> {
         if !self.rules.get("SYS_LDPACSK").copied().unwrap_or(true) {
             return 0;
         }
-        let Some(g) = self.gm else { return 0 };
+        if self.gm.is_none() {
+            return 0;
+        }
         let max = self.max_load();
         if max <= 0.0 {
             return 0;
         }
         let ratio = self.carried_weight() / max;
-        let frac = |name: &str| -> Option<f64> {
-            let l = g.lines("load.lst", "ENCUMBRANCE").find(|l| {
-                l.value
-                    .split('|')
-                    .next()
-                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
-            })?;
-            let f = l.value.split('|').nth(1)?;
-            match f.split_once('/') {
-                Some((a, b)) => Some(a.parse::<f64>().ok()? / b.parse::<f64>().ok()?),
-                None => f.parse().ok(),
-            }
-        };
         for (i, n) in ["Light", "Medium", "Heavy"].iter().enumerate() {
-            if frac(n).is_some_and(|f| ratio <= f) {
+            if self.load_fraction(n).is_some_and(|f| ratio <= f) {
                 return i as u32;
             }
         }
@@ -1819,6 +1833,9 @@ impl<'a> Calc<'a> {
             choices: Vec::new(),
             item: None,
             times: 1.0,
+            nature: None,
+            category: None,
+            applied: Vec::new(),
         }
     }
 
@@ -1976,8 +1993,10 @@ impl<'a> Calc<'a> {
         }
 
         // abilities stored in the character
-        let mut seen: HashSet<(String, String, Vec<String>)> = HashSet::new();
-        let mut pending: Vec<(String, String, Vec<String>, Option<String>)> = Vec::new();
+        let mut seen: HashSet<(String, String, Vec<String>, &str)> = HashSet::new();
+        let mut applied: HashSet<(String, String, Vec<String>)> = HashSet::new();
+        let mut pending: Vec<(String, String, Vec<String>, Option<String>, &'static str)> =
+            Vec::new();
         for a in self.ch.abilities() {
             if a.key.starts_with('*') {
                 continue;
@@ -1987,10 +2006,16 @@ impl<'a> Calc<'a> {
                 .rsplit_once('|')
                 .map(|(_, k)| k.to_string())
                 .unwrap_or(migrated);
-            pending.push((a.category.clone(), key, a.applied_to.clone(), None));
+            pending.push((
+                a.category.clone(),
+                key,
+                a.applied_to.clone(),
+                None,
+                nature_of(&a.nature),
+            ));
         }
         for f in self.ch.legacy_feats() {
-            pending.push(("FEAT".into(), f, Vec::new(), None));
+            pending.push(("FEAT".into(), f, Vec::new(), None, "NORMAL"));
         }
 
         // grants from active objects, repeated to closure
@@ -2034,6 +2059,7 @@ impl<'a> Calc<'a> {
                                     k.to_string(),
                                     Vec::new(),
                                     s.class.clone(),
+                                    nature_of(parts[1]),
                                 ));
                             }
                         }
@@ -2045,11 +2071,17 @@ impl<'a> Calc<'a> {
                                         k.to_string(),
                                         Vec::new(),
                                         s.class.clone(),
+                                        "AUTOMATIC",
                                     ));
                                 }
                             }
                         }
                         "VFEAT" | "FEAT" if s.kind != SrcKind::Ability => {
+                            let nature = if t.tag == "VFEAT" {
+                                "VIRTUAL"
+                            } else {
+                                "NORMAL"
+                            };
                             for k in t.value.split('|') {
                                 if !Prereq::is_pre_tag(k.split(':').next().unwrap_or("")) {
                                     pending.push((
@@ -2057,6 +2089,7 @@ impl<'a> Calc<'a> {
                                         k.to_string(),
                                         Vec::new(),
                                         s.class.clone(),
+                                        nature,
                                     ));
                                 }
                             }
@@ -2089,7 +2122,7 @@ impl<'a> Calc<'a> {
             }
             // TYPE=x grants every ability of the category with that type
             let mut batch = Vec::new();
-            for (cat, key, choices, class) in std::mem::take(&mut pending) {
+            for (cat, key, choices, class, nature) in std::mem::take(&mut pending) {
                 match key
                     .strip_prefix("TYPE=")
                     .or_else(|| key.strip_prefix("TYPE."))
@@ -2106,14 +2139,15 @@ impl<'a> Calc<'a> {
                                     o.key.clone(),
                                     choices.clone(),
                                     class.clone(),
+                                    nature,
                                 ));
                             }
                         }
                     }
-                    None => batch.push((cat, key, choices, class)),
+                    None => batch.push((cat, key, choices, class, nature)),
                 }
             }
-            for (cat, key, choices, class) in batch {
+            for (cat, key, choices, class, nature) in batch {
                 let (obj, choices) = match ds.get_in(FileKind::Ability, &cat, &key) {
                     Some(o) => (Some(o), choices),
                     None => {
@@ -2128,11 +2162,20 @@ impl<'a> Calc<'a> {
                 let Some(obj) = obj.or_else(|| ds.get(FileKind::Ability, &key)) else {
                     continue;
                 };
-                let id = (lower(&cat), lower(&obj.key), choices.clone());
+                let id = (lower(&cat), lower(&obj.key), choices.clone(), nature);
                 if !seen.insert(id) {
                     continue;
                 }
+                // held a second way (say, chosen and also granted): listed
+                // under both natures, but its effects apply once
+                let again = !applied.insert((lower(&cat), lower(&obj.key), choices.clone()));
                 let mut s = self.src(SrcKind::Ability, obj);
+                if again {
+                    s.tokens.clear();
+                }
+                s.nature = Some(nature.to_string());
+                s.category = Some(cat.clone());
+                s.applied = choices.clone();
                 // stacking abilities apply once per time taken
                 if obj
                     .get("STACK")
@@ -2551,6 +2594,15 @@ impl<'a> Calc<'a> {
             .collect();
         sheet.unknown = self.unknown.borrow().clone();
         sheet
+    }
+}
+
+/// The nature an ability is held with: NORMAL, AUTOMATIC or VIRTUAL.
+fn nature_of(s: &str) -> &'static str {
+    match s.to_ascii_uppercase().as_str() {
+        "AUTOMATIC" => "AUTOMATIC",
+        "VIRTUAL" => "VIRTUAL",
+        _ => "NORMAL",
     }
 }
 

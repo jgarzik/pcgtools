@@ -15,6 +15,8 @@
 
 mod basics;
 mod combat;
+mod gear;
+mod lists;
 mod skills;
 pub mod tree;
 pub mod units;
@@ -262,6 +264,24 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
     }
     root.push(skills::build(&s));
     for e in combat::build_after_skills(&s) {
+        root.push(e);
+    }
+    root.push(lists::class_features(&s));
+    root.push(gear::weight_allowance(&s));
+    root.push(lists::special_abilities(&s));
+    root.push(lists::feats(&s));
+    root.push(lists::ability_objects(&s));
+    if let Some(e) = lists::domains(&s) {
+        root.push(e);
+    }
+    root.push(lists::weapon_proficiencies(&s));
+    root.push(lists::languages(&s));
+    if let Some(e) = lists::templates(&s) {
+        root.push(e);
+    }
+    root.push(lists::misc(&s));
+    root.push(lists::companions(&s));
+    if let Some(e) = lists::prohibited_schools(&s) {
         root.push(e);
     }
     root

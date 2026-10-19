@@ -80,7 +80,8 @@ Commands (names may be quoted; most accept --force to skip checks):
   deity KEY | deity none       set or clear deity
   domain add KEY               add a domain
   class add KEY [HP] [--subclass SUB] [--choose CHOICE]... [--stat ABB]...
-                               gain a level (HP defaults to the hit die);
+                               gain a level (HP: the highest roll allowed
+                               by the hit die and HD bonuses, by default);
                                choices for the level's ADD tokens, in order;
                                the stats its stat increases raise
   class rm                     remove the last level gained

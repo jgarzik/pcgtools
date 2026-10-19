@@ -144,3 +144,22 @@ fn sheet_xml_round_trips() {
     let diff = sheet::compare(&built, &reparsed);
     assert!(diff.mismatches.is_empty(), "{:?}", diff.mismatches);
 }
+
+#[test]
+fn defaults_for_missing_values() {
+    // a new character has no gender, handedness or equipment set lines
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    let m: HashMap<String, String> = sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect();
+    assert_eq!(at(&m, "basics[Nova]/gender[0]/long[0]"), "Male");
+    assert_eq!(at(&m, "basics[Nova]/gender[0]/short[0]"), "Male");
+    assert_eq!(at(&m, "basics[Nova]/handed[0]"), "Right");
+    assert_eq!(
+        at(&m, "equipment[0]/equipmentsets[0]/equipmentset[0]/@name"),
+        "Default Set"
+    );
+}

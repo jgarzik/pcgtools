@@ -468,7 +468,8 @@ pub fn equipment(s: &SheetCtx) -> Element {
             .lines_tagged("EQUIPSET")
             .find(|l| l.text("ID").as_deref() == Some(calc_set.as_str()))
             .and_then(|l| l.head().map(|h| h.value_text()))
-            .unwrap_or_default();
+            // a character without equipment sets gets a default one
+            .unwrap_or_else(|| "Default Set".into());
     let mut set = Element::new("equipmentset").attr("name", set_name);
     for (i, qty) in merged(&items) {
         set.push(item_element(s, &items, i, false, qty));

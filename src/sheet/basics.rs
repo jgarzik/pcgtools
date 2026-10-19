@@ -64,7 +64,8 @@ pub fn build(s: &SheetCtx) -> Element {
     let gender = match pcg("GENDER").as_str() {
         "M" => "Male".to_string(),
         "F" => "Female".to_string(),
-        "" => "Unknown".to_string(),
+        // a character without a gender is taken as male
+        "" => "Male".to_string(),
         g => g.to_string(),
     };
     b.push(
@@ -72,7 +73,16 @@ pub fn build(s: &SheetCtx) -> Element {
             .with(Element::leaf("long", &gender))
             .with(Element::leaf("short", &gender)),
     );
-    b.add("handed", pcg("HANDED"));
+    // and as right-handed
+    let handed = pcg("HANDED");
+    b.add(
+        "handed",
+        if handed.is_empty() {
+            "Right".to_string()
+        } else {
+            handed
+        },
+    );
     let h: i64 = pcg("HEIGHT").trim().parse().unwrap_or(0);
     b.push(
         Element::new("height")

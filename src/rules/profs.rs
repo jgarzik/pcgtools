@@ -132,8 +132,9 @@ pub fn weapon_prof_keys(c: &Calc) -> Vec<String> {
             }
         }
     }
-    // natural attacks are proficiencies of their own; one saved with the
-    // character counts only while it is in the equipment set in use
+    // natural attacks are proficiencies of their own, while they are in
+    // the equipment set in use (PCGen rebuilds the character's
+    // equipment from that set when loading it)
     let names_attack = |item: &str, attack: &str| {
         item.eq_ignore_ascii_case(attack)
             || item
@@ -141,11 +142,9 @@ pub fn weapon_prof_keys(c: &Calc) -> Vec<String> {
                 .is_some_and(|h| h.eq_ignore_ascii_case(attack))
                 && item[attack.len()..].starts_with(" (")
     };
-    let saved: Vec<String> = c.ch.equipment().into_iter().map(|e| e.name).collect();
     let equipped: Vec<String> = c.ch.equipped().into_iter().filter_map(|e| e.item).collect();
     for n in super::equip::natural_weapons(c) {
-        let is_saved = saved.iter().any(|x| names_attack(x, &n.name));
-        if !is_saved || equipped.iter().any(|x| names_attack(x, &n.name)) {
+        if equipped.iter().any(|x| names_attack(x, &n.name)) {
             add(&n.name);
         }
     }

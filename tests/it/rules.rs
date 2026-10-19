@@ -367,3 +367,22 @@ fn damage_reduction_prerequisites() {
     assert!(!meets(&[], "!PREDR:1,Piercing=0"));
     assert!(!meets(&[], "PREDR:1,-=1"));
 }
+
+#[test]
+fn monster_hit_dice_advance_size() {
+    let size_after = |levels: usize| {
+        let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        s.exec("race Cogbeast").unwrap();
+        for _ in 0..levels {
+            s.exec("class add Beastling --force").unwrap();
+        }
+        let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        calc.run();
+        calc.size_key()
+    };
+    // a step past each threshold the hit dice exceed (2, then 4)
+    assert_eq!(size_after(2), "M");
+    assert_eq!(size_after(3), "L");
+    assert_eq!(size_after(4), "L");
+    assert_eq!(size_after(5), "H");
+}

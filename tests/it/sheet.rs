@@ -478,3 +478,25 @@ fn spells_granted_as_known_count_toward_known() {
     // SPELLKNOWN grants Spark and Glow to the class's list at level 0
     assert_eq!(known.as_deref(), Some("2"));
 }
+
+#[test]
+fn size_stat_bonuses_count_only_in_full_scores() {
+    // three monster levels make the Cogbeast large; Large adds 4 Might
+    let m = new_sheet(&[
+        "race Cogbeast",
+        "class add Beastling --force",
+        "class add Beastling --force",
+        "class add Beastling --force",
+    ]);
+    let a = "abilities[0]/ability[Might]";
+    assert_eq!(at(&m, &format!("{}/score[0]", a)), "14");
+    assert_eq!(at(&m, &format!("{}/noequip[0]", a)), "10");
+    assert_eq!(at(&m, &format!("{}/no_temp_score[0]", a)), "10");
+}
+
+#[test]
+fn natural_attacks_outside_the_equipment_set_give_no_proficiency() {
+    // the race's natural attack is in no equipment set of the file
+    let m = new_sheet(&["race Cogbeast"]);
+    assert_eq!(at(&m, "weapon_proficiencies[0]"), "");
+}

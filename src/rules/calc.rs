@@ -1703,7 +1703,9 @@ impl<'a> Calc<'a> {
                                 &src.key,
                             )
                             .is_some_and(|o| o.is_type("Equipment"));
-                !(equipment && eq) && !(temporary && src.temp)
+                // size categories' own bonuses are not among the
+                // bonuses PCGen sums for these partial scores
+                src.kind != "Size" && !(equipment && eq) && !(temporary && src.temp)
             })
     }
 
@@ -2036,8 +2038,44 @@ impl<'a> Calc<'a> {
     /// Index of the character's size category.
     pub fn size_index(&self) -> i64 {
         let n = self.size_list().len();
-        let idx = self.base_size_index() + self.bonus.total("SIZEMOD", "NUMBER") as i64;
+        let idx = self.base_size_index()
+            + self.bonus.total("SIZEMOD", "NUMBER") as i64
+            + self.size_advancement();
         idx.clamp(0, n.saturating_sub(1) as i64)
+    }
+
+    /// Size steps the race's HITDICEADVANCEMENT gives for the levels in
+    /// monster classes: one per threshold exceeded, in order, except
+    /// the last threshold (the most hit dice allowed; `*` for none).
+    fn size_advancement(&self) -> i64 {
+        let Some(race) = self.race() else { return 0 };
+        let Some(v) = race.get("HITDICEADVANCEMENT") else {
+            return 0;
+        };
+        let thresholds: Vec<i64> = v
+            .split(',')
+            .filter_map(|t| match t.trim() {
+                "*" => Some(i64::MAX),
+                t => t.parse().ok(),
+            })
+            .collect();
+        let limit = thresholds.last().copied().unwrap_or(0);
+        let hd: i64 = self
+            .classes
+            .iter()
+            .filter(|(o, _)| self.is_monster_class(o))
+            .map(|(_, l)| *l as i64)
+            .sum();
+        let mut steps = 0;
+        for t in thresholds {
+            if hd <= t {
+                break;
+            }
+            if t < limit {
+                steps += 1;
+            }
+        }
+        steps
     }
 
     pub fn size_key(&self) -> String {

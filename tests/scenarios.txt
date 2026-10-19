@@ -335,3 +335,16 @@ class add Cleric
 class add Cleric
 feat add "Spell Focus" Conjuration
 class add Thaumaturgist
+
+== worg_advanced_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+campaign 3.5 RSRD Monsters
+race Worg
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force

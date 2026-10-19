@@ -85,6 +85,9 @@ pub struct Spells<'a> {
     lists: BTreeMap<(char, String), BTreeMap<i64, Vec<&'a Object>>>,
     /// spells SPELLKNOWN grants: (class list lower, level) -> spells
     granted_known: BTreeMap<(String, i64), Vec<&'a Object>>,
+    /// books that are items the character has (TYPE Spellbook), one
+    /// per item: `Name`, `Name #2`, ...
+    pub item_books: Vec<(String, &'a Object)>,
 }
 
 fn lower(s: &str) -> String {
@@ -189,6 +192,7 @@ impl<'a> Spells<'a> {
             by_caster: Vec::new(),
             lists,
             granted_known: BTreeMap::new(),
+            item_books: Vec::new(),
         };
         for l in calc.ch.pcg.lines_tagged("SPELLBOOK") {
             if let Some(n) = l.head().map(|h| h.value_text()) {
@@ -211,10 +215,38 @@ impl<'a> Spells<'a> {
         s.auto_known(calc);
         s.granted(calc);
         s.load_saved(calc);
+        s.item_books(calc);
         for v in &mut s.by_caster {
             v.sort_by(compare);
         }
         s
+    }
+
+    /// Books from spellbook items, after those the file names.
+    fn item_books(&mut self, calc: &Calc<'a>) {
+        for e in calc.ch.equipment() {
+            let key = e.base.clone().unwrap_or_else(|| e.name.clone());
+            let obj = calc
+                .ds
+                .get(FileKind::Equipment, &key)
+                .or_else(|| {
+                    calc.ds
+                        .get(FileKind::Equipment, &calc.migrate("EQUIPMENT", &key))
+                })
+                .or_else(|| calc.ds.get(FileKind::Equipment, &e.name));
+            let Some(obj) = obj.filter(|o| o.is_type("Spellbook")) else {
+                continue;
+            };
+            for i in 0..e.quantity.trunc().max(0.0) as usize {
+                let name = if i == 0 {
+                    e.name.clone()
+                } else {
+                    format!("{} #{}", e.name, i + 1)
+                };
+                self.add_book(&name);
+                self.item_books.push((name, obj));
+            }
+        }
     }
 
     fn add_book(&mut self, name: &str) {

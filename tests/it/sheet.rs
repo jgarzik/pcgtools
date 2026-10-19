@@ -602,6 +602,22 @@ fn region_from_templates() {
     assert_eq!(at(&m, "basics[Nova]/region[0]"), "Far Hills");
 }
 
+#[test]
+fn spellbook_items_are_books() {
+    let m = new_sheet(&["class add Sage", "equip add Notebook 2"]);
+    let name = |i: usize| {
+        m.get(&format!(
+            "character/spells[0]/memorized_spells[0]/spellbook[{}]/@name",
+            i
+        ))
+        .cloned()
+    };
+    // one book per item, after the books the file names
+    assert_eq!(name(0).as_deref(), Some("Notebook"));
+    assert_eq!(name(1).as_deref(), Some("Notebook #2"));
+    assert_eq!(name(2), None);
+}
+
 /// Prepared spells of the nth book's first class at a level, sorted:
 /// (name, times, dc).
 fn prepared(

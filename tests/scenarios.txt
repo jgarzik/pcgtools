@@ -638,3 +638,16 @@ spell prep Wizard "Magic Missile"
 spell prep Wizard Sleep --meta "Heighten Spell"
 spell prep Wizard "Burning Hands" --meta "Extend Spell,Heighten Spell"
 spell prep Wizard "Burning Hands" --meta "Heighten Spell,Extend Spell"
+
+== wizard_spellbook_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+race Gnome
+set align CN
+class add Wizard
+class add Wizard
+spell add Wizard Sleep
+spell add Wizard Light
+equip add "Spellbook (Wizard's/Blank)" 2
+spell prep Wizard Sleep

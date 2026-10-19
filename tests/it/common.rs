@@ -7,14 +7,32 @@
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Whether PCGEN_REQUIRE (a comma-separated list) names `what`: a
+/// required input that is missing fails the test instead of skipping it.
+pub fn required(what: &str) -> bool {
+    std::env::var("PCGEN_REQUIRE")
+        .is_ok_and(|v| v.split(',').any(|x| x.trim().eq_ignore_ascii_case(what)))
+}
+
+/// Note (or, when required, fail on) a test skipped for missing input.
+pub fn skip(what: &str, var: &str) {
+    assert!(
+        !required(what),
+        "{} is required (PCGEN_REQUIRE) but not set or not a directory",
+        var
+    );
+    eprintln!("skipped: {} not set", var);
+}
+
 /// Root of the PCGen source checkouts, if configured.
 pub fn pcgen_root() -> Option<PathBuf> {
-    let root = PathBuf::from(std::env::var_os("PCGEN_ROOT")?);
-    if root.is_dir() {
-        Some(root)
-    } else {
-        None
+    let root = std::env::var_os("PCGEN_ROOT")
+        .map(PathBuf::from)
+        .filter(|r| r.is_dir());
+    if root.is_none() {
+        skip("root", "PCGEN_ROOT");
     }
+    root
 }
 
 /// Path below PCGEN_ROOT, if it exists.

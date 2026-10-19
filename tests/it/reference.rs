@@ -8,7 +8,8 @@
 // apart from those it also makes about a bare new character.
 //
 // Runs only when PCGEN_ROOT names the data checkouts and PCGEN_REF a
-// built PCGen tree (with build/libs, and JavaFX jars in mods/lib).
+// built PCGen tree (with build/libs, and JavaFX jars in mods/lib);
+// PCGEN_REQUIRE=root,ref makes their absence a failure.
 // The JVM is $PCGEN_JAVA, else $JAVA_HOME/bin/java, else java.
 // REF_ONLY=name runs one scenario; REF_VERBOSE=1 prints differences.
 
@@ -218,10 +219,14 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
 
 #[test]
 fn reference_sheets() {
-    let (Some(root), Some(reference)) = (
-        common::pcgen_root(),
-        std::env::var_os("PCGEN_REF").map(PathBuf::from),
-    ) else {
+    let Some(root) = common::pcgen_root() else {
+        return;
+    };
+    let Some(reference) = std::env::var_os("PCGEN_REF")
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+    else {
+        common::skip("ref", "PCGEN_REF");
         return;
     };
     let text =

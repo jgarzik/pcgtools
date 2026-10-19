@@ -223,6 +223,9 @@ runtime that can run it:
 
 `REF_ONLY=name` runs one scenario and `REF_VERBOSE=1` prints every
 difference; `PCGEN_JAVA` or `JAVA_HOME` selects the Java runtime.
+Without their inputs these tests are skipped (with a note on stderr);
+`PCGEN_REQUIRE=root,ref` makes a missing `PCGEN_ROOT` or `PCGEN_REF`
+a failure instead, as continuous integration does.
 
 Continuous integration runs both: the plain test suite, and the corpus
 tests against PCGen data checked out at a pinned revision.

@@ -67,6 +67,7 @@ jobs:
 
     env:
       PCGEN_ROOT: ${{ github.workspace }}/corpus
+      PCGEN_REQUIRE: root
 
     steps:
     - uses: actions/checkout@v4
@@ -93,6 +94,7 @@ jobs:
     env:
       PCGEN_ROOT: ${{ github.workspace }}/corpus
       PCGEN_REF: ${{ github.workspace }}/corpus/pcgen
+      PCGEN_REQUIRE: root,ref
 
     steps:
     - uses: actions/checkout@v4

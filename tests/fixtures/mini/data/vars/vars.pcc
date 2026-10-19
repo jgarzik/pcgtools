@@ -1,0 +1,13 @@
+CAMPAIGN:Variable Book
+KEY:VB
+GAMEMODE:Testmode
+DATACONTROL:vb_datacontrol.lst
+DATATABLE:vb_tables.lst
+VARIABLE:vb_variables.lst
+DYNAMIC:vb_dynamic.lst
+GLOBALMODIFIER:vb_global.lst
+STAT:vb_stats.lst
+RACE:vb_races.lst
+ABILITY:vb_abilities.lst
+EQUIPMOD:vb_eqmods.lst
+EQUIPMENT:vb_equip.lst

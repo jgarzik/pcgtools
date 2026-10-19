@@ -1,5 +1,5 @@
 //
-// main.rs -- pcgtools core code
+// main.rs -- pcgtools command line interface
 //
 // Copyright (c) 2024 Jeff Garzik
 //
@@ -8,479 +8,485 @@
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
 
-extern crate clap;
-extern crate log;
+mod cmd;
 
-use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fs::File,
-    io,
-    io::{prelude::*, BufReader, Error, ErrorKind},
-    path::Path,
-};
+use clap::{Args, Parser, Subcommand};
+use pcgtools::pcc::resolve::DataDirs;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
-    /// Pathname of PCC file to input
-    pccfile: String,
+struct Cli {
+    #[command(flatten)]
+    opts: GlobalOpts,
 
-    /// Base directory where PCC and LST files are found
-    #[arg(short, long, default_value = ".")]
-    datadir: String,
+    #[command(subcommand)]
+    cmd: Command,
 }
 
-#[derive(Serialize, Deserialize)]
-enum PccTag {
-    Bool,
-    Date,
-    LstFile,
-    Number,
-    Text,
-    PccFile,
+/// Options shared by all subcommands.
+#[derive(Args, Debug, Clone)]
+pub struct GlobalOpts {
+    /// PCGen installation root (contains data/, vendordata/, homebrewdata/)
+    #[arg(long, global = true, env = "PCGEN_INSTALL")]
+    pub pcgen_root: Option<PathBuf>,
+
+    /// Data directory (target of '@' paths); guessed from PCC paths if unset
+    #[arg(long, global = true)]
+    pub data_dir: Option<PathBuf>,
+
+    /// Vendor data directory (target of '&' paths)
+    #[arg(long, global = true)]
+    pub vendor_dir: Option<PathBuf>,
+
+    /// Homebrew data directory (target of '$' paths)
+    #[arg(long, global = true)]
+    pub homebrew_dir: Option<PathBuf>,
+
+    /// System directory (contains gameModes/)
+    #[arg(long, global = true)]
+    pub system_dir: Option<PathBuf>,
+
+    /// Emit JSON instead of text
+    #[arg(long, global = true)]
+    pub json: bool,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PccElem {
-    _ident: String,
-    attribs: Vec<(String, String)>,
-}
-
-impl PccElem {
-    fn new(ident: &str) -> PccElem {
-        PccElem {
-            _ident: String::from(ident),
-            attribs: Vec::new(),
-        }
+impl GlobalOpts {
+    /// Resolve data directories: explicit options first, then the
+    /// installation root, then a guess based on `hint`.
+    pub fn dirs(&self, hint: Option<&Path>) -> DataDirs {
+        let explicit = DataDirs {
+            data: self.data_dir.clone(),
+            vendor: self.vendor_dir.clone(),
+            homebrew: self.homebrew_dir.clone(),
+            system: self.system_dir.clone(),
+        };
+        let install = self
+            .pcgen_root
+            .as_deref()
+            .map(DataDirs::from_install)
+            .unwrap_or_default();
+        let guess = hint.map(DataDirs::guess_from).unwrap_or_default();
+        explicit.or(install).or(guess)
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PccList {
-    _ident: String,
-    props: HashMap<String, PccElem>,
+#[derive(Subcommand, Debug)]
+enum PcgCommand {
+    /// Summarize a character
+    Show {
+        /// PCG file
+        file: PathBuf,
+    },
+
+    /// Check a character against its data
+    Lint {
+        /// PCG file
+        file: PathBuf,
+    },
+
+    /// Build the full character sheet (XML or JSON), optionally
+    /// comparing it with an expected sheet
+    Sheet {
+        /// PCG file
+        file: PathBuf,
+
+        /// Compare with this expected sheet (XML) and list differences
+        #[arg(long)]
+        compare: Option<PathBuf>,
+    },
+
+    /// Show declared variables and their values
+    Vars {
+        /// PCG file
+        file: PathBuf,
+
+        /// Only this scope (e.g. PC, PC.STAT)
+        #[arg(short, long)]
+        scope: Option<String>,
+    },
+
+    /// Compute derived statistics
+    Stats {
+        /// PCG file
+        file: PathBuf,
+
+        /// Show all skills, active abilities and unresolved terms
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Explain a bonus total, e.g. SKILL.Climb or COMBAT.AC
+        #[arg(short, long, value_name = "CATEGORY.TARGET")]
+        explain: Vec<String>,
+    },
 }
 
-impl PccList {
-    fn new(ident: &str) -> PccList {
-        PccList {
-            _ident: String::from(ident),
-            props: HashMap::new(),
-        }
-    }
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Edit a character interactively (or run commands from stdin)
+    Repl {
+        /// Character file to open (or to save a new character to)
+        file: Option<PathBuf>,
+
+        /// Create a new character
+        #[arg(long)]
+        new: bool,
+
+        /// Game mode for a new character
+        #[arg(long, required_if_eq("new", "true"))]
+        gamemode: Option<String>,
+
+        /// Campaign key for a new character (repeatable)
+        #[arg(long)]
+        campaign: Vec<String>,
+
+        /// Name for a new character
+        #[arg(long, default_value = "New Character")]
+        name: String,
+    },
+
+    /// Run one character editing command, saving the file if it changes
+    Char {
+        /// Character file
+        file: PathBuf,
+
+        /// Write the result here instead of back to the file
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// The command, e.g.: class add Fighter
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Work with PCG character files
+    Pcg {
+        #[command(subcommand)]
+        cmd: PcgCommand,
+    },
+
+    /// List campaigns (PCC files) found below a directory
+    Campaigns {
+        /// Directory to scan (default: the data directory)
+        dir: Option<PathBuf>,
+
+        /// Only campaigns supporting this game mode
+        #[arg(short, long)]
+        gamemode: Option<String>,
+    },
+
+    /// Show the campaigns and LST files a selection of PCCs will load
+    Deps {
+        /// Selected PCC files
+        #[arg(required = true)]
+        pcc: Vec<PathBuf>,
+    },
+
+    /// Load a campaign selection and summarize the result
+    Load {
+        /// Selected PCC files
+        #[arg(required = true)]
+        pcc: Vec<PathBuf>,
+
+        /// Do not print diagnostics
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Load a campaign selection and print the whole dataset as JSON
+    Dump {
+        /// Selected PCC files
+        #[arg(required = true)]
+        pcc: Vec<PathBuf>,
+    },
+
+    /// Show one object, merged, with provenance
+    Show {
+        /// Selected PCC files
+        #[arg(short, long = "pcc", required = true)]
+        pcc: Vec<PathBuf>,
+
+        /// Object kind (SPELL, CLASS, ABILITY, ...)
+        kind: String,
+
+        /// Object key (abilities: CATEGORY|Key or Key)
+        key: String,
+    },
+
+    /// Find objects matching conditions
+    Query {
+        /// Selected PCC files
+        #[arg(short, long = "pcc", required = true)]
+        pcc: Vec<PathBuf>,
+
+        /// Object kind (SPELL, CLASS, ABILITY, ...)
+        kind: String,
+
+        /// Conditions: TAG, !TAG, TAG=value, TAG~regex, TYPE=type
+        conds: Vec<String>,
+
+        /// Glob on object key or name (case-insensitive)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Comma-separated tags to print for each match
+        #[arg(short, long)]
+        fields: Option<String>,
+
+        /// Print only the number of matches
+        #[arg(short, long)]
+        count: bool,
+    },
+
+    /// Edit one object in an LST file, preserving all other bytes
+    Edit {
+        /// LST file
+        file: PathBuf,
+
+        /// Object name (record head)
+        object: String,
+
+        /// Replace all TAG tokens with TAG:value
+        #[arg(long, value_name = "TAG:VALUE")]
+        set: Vec<String>,
+
+        /// Append TAG:value
+        #[arg(long, value_name = "TAG:VALUE")]
+        add: Vec<String>,
+
+        /// Remove all tokens with this tag
+        #[arg(long, value_name = "TAG")]
+        remove: Vec<String>,
+
+        /// Rename the object (keeps .MOD/.COPY suffixes)
+        #[arg(long)]
+        rename: Option<String>,
+
+        /// Delete the record
+        #[arg(long)]
+        delete: bool,
+
+        /// Also match .MOD/.COPY/.FORGET records
+        #[arg(long)]
+        any_op: bool,
+
+        /// Write the result here instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Modify the file in place
+        #[arg(short, long)]
+        in_place: bool,
+    },
+
+    /// Rewrite files in canonical layout
+    Fmt {
+        /// LST or PCC files
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Report files that are not canonical; exit 1 if any
+        #[arg(long)]
+        check: bool,
+
+        /// Rewrite files in place
+        #[arg(short, long)]
+        write: bool,
+    },
+
+    /// Check data files for problems
+    Lint {
+        /// PCC files (or LST files with --kind)
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Treat the arguments as LST files of this kind
+        #[arg(short, long)]
+        kind: Option<String>,
+
+        /// Print counts per problem type instead of each problem
+        #[arg(short, long)]
+        summary: bool,
+
+        /// Do not report unknown tags
+        #[arg(long)]
+        no_unknown: bool,
+
+        /// Do not check formulas
+        #[arg(long)]
+        no_formulas: bool,
+
+        /// Minimum severity to report: info, warning, error
+        #[arg(long, default_value = "info")]
+        min: String,
+    },
+
+    /// List game modes, or show one game mode's settings
+    Gamemode {
+        /// Game mode name or alias
+        name: Option<String>,
+
+        /// Show only this file (e.g. miscinfo.lst, level.lst)
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+
+    /// List known tags from the built-in catalog
+    Tags {
+        /// Only this scope (a file kind, GLOBAL, PRE, BONUS, CLASSLEVEL, ...)
+        scope: Option<String>,
+    },
+
+    /// Parse a data file and print its syntax tree as JSON
+    Parse {
+        /// File to parse
+        file: PathBuf,
+    },
+
+    /// Verify that files survive a parse/write cycle byte-for-byte
+    Roundtrip {
+        /// Files or directories to check
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum PccDatum {
-    Text(String),
-    List(PccList),
-}
-
-impl PccDatum {
-    pub fn as_mut_list(&mut self) -> Option<&mut PccList> {
-        match self {
-            PccDatum::List(l) => Some(l),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct PccConfig {
-    datadir: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Pcc {
-    config: PccConfig,
-    dict: HashMap<String, PccDatum>,
-    pcc_schema: HashMap<String, PccTag>,
-    aliases: HashMap<String, String>,
-}
-
-fn dir_from_path(full_path: &str) -> Option<String> {
-    let path = Path::new(full_path);
-    path.parent() // Get the parent directory as Option<&Path>
-        .and_then(|p| p.to_str()) // Convert &Path to Option<&str>
-        .map(|s| s.to_string()) // Convert &str to String
-}
-
-fn new_pcc_schema() -> HashMap<String, PccTag> {
-    HashMap::from([
-        (String::from("PRECAMPAIGN"), PccTag::Text),
-        (String::from("BOOKTYPE"), PccTag::Text),
-        (String::from("CAMPAIGN"), PccTag::Text),
-        (String::from("COMPANIONLIST"), PccTag::Text),
-        (String::from("COPYRIGHT"), PccTag::Text),
-        (String::from("COVER"), PccTag::Text),
-        (String::from("DESC"), PccTag::Text),
-        (String::from("DYNAMIC"), PccTag::Text),
-        (String::from("FORWARDREF"), PccTag::Text),
-        (String::from("GAMEMODE"), PccTag::Text),
-        (String::from("GENRE"), PccTag::Text),
-        (String::from("HELP"), PccTag::Text),
-        (String::from("HIDETYPE"), PccTag::Text),
-        (String::from("INFOTEXT"), PccTag::Bool),
-        (String::from("ISOGL"), PccTag::Bool),
-        (String::from("ISLICENSED"), PccTag::Bool),
-        (String::from("KEY"), PccTag::Text),
-        (String::from("LOGO"), PccTag::Text),
-        (String::from("PCC"), PccTag::PccFile),
-        (String::from("PUBNAMELONG"), PccTag::Text),
-        (String::from("PUBNAMESHORT"), PccTag::Text),
-        (String::from("PUBNAMEWEB"), PccTag::Text),
-        (String::from("RANK"), PccTag::Number),
-        (String::from("SETTING"), PccTag::Text),
-        (String::from("SHOWINMENU"), PccTag::Text),
-        (String::from("SOURCEDATE"), PccTag::Date),
-        (String::from("SOURCELONG"), PccTag::Text),
-        (String::from("SOURCESHORT"), PccTag::Text),
-        (String::from("SOURCEWEB"), PccTag::Text),
-        (String::from("STATUS"), PccTag::Text),
-        (String::from("TYPE"), PccTag::Text),
-        (String::from("URL"), PccTag::Text),
-        (String::from("ABILITY"), PccTag::LstFile),
-        (String::from("ABILITYCATEGORY"), PccTag::LstFile),
-        (String::from("ALIGNMENT"), PccTag::LstFile),
-        (String::from("ARMORPROF"), PccTag::LstFile),
-        (String::from("BIOSET"), PccTag::LstFile),
-        (String::from("CLASS"), PccTag::LstFile),
-        (String::from("COMPANIONMOD"), PccTag::LstFile),
-        (String::from("DATATABLE"), PccTag::LstFile),
-        (String::from("DATACONTROL"), PccTag::LstFile), // includes wildcards?
-        (String::from("DEITY"), PccTag::LstFile),
-        (String::from("DOMAIN"), PccTag::LstFile),
-        (String::from("EQUIPMENT"), PccTag::LstFile),
-        (String::from("EQUIPMOD"), PccTag::LstFile),
-        (String::from("GLOBALMODIFIER"), PccTag::LstFile),
-        (String::from("KIT"), PccTag::LstFile),
-        (String::from("LANGUAGE"), PccTag::LstFile),
-        (String::from("RACE"), PccTag::LstFile),
-        (String::from("SAVE"), PccTag::LstFile),
-        (String::from("SHIELDPROF"), PccTag::LstFile),
-        (String::from("SIZE"), PccTag::LstFile),
-        (String::from("SKILL"), PccTag::LstFile),
-        (String::from("SPELL"), PccTag::LstFile),
-        (String::from("STAT"), PccTag::LstFile),
-        (String::from("TEMPLATE"), PccTag::LstFile),
-        (String::from("VARIABLE"), PccTag::LstFile),
-        (String::from("WEAPONPROF"), PccTag::LstFile),
-    ])
-}
-
-impl Pcc {
-    // create a new Pcc object
-    pub fn new(config: &PccConfig) -> Pcc {
-        Pcc {
-            config: config.clone(),
-            dict: HashMap::new(),
-            pcc_schema: new_pcc_schema(),
-            aliases: HashMap::new(),
-        }
-    }
-
-    // Read a single LST record
-    fn read_lst_line(&mut self, datum: &mut PccDatum, line: &str) -> io::Result<()> {
-        // split input by <tab> into tokens
-        let mut tokens: Vec<&str> = line.split('\t').collect();
-
-        // the first token is our symbol.  the remainder are attribs.
-        let raw_ident = tokens.remove(0);
-
-        // the ".MOD" suffix triggers update of existing elem
-        let is_mod = raw_ident.ends_with(".MOD");
-        let mut ident;
-        if is_mod {
-            ident = String::from(&raw_ident[0..(raw_ident.len() - 4)]);
-        } else {
-            ident = String::from(raw_ident);
-        }
-
-        // if ident is an alias, lookup true ident
-        match self.aliases.get(&ident) {
-            None => {}
-            Some(alias) => {
-                log::debug!("ALIAS MATCH: {} => {}", ident, alias);
-                ident = alias.clone();
-            }
-        }
-
-        log::debug!("ID={}, is_mod={}", ident, is_mod);
-
-        // gather key=value attribs into a list
-        let mut attribs: Vec<(String, String)> = Vec::new();
-        for token in &tokens {
-            match token.split_once(':') {
-                None => {
-                    if !token.trim().is_empty() {
-                        log::debug!("\t{}", token);
-                        attribs.push((token.to_string(), String::from("")));
-                    }
-                }
-                Some((akey, aval)) => {
-                    log::debug!("\t{}={}", akey, aval);
-                    attribs.push((akey.to_string(), aval.to_string()));
-                }
-            }
-        }
-
-        // pre-processing
-        for (key, val) in &attribs {
-            match key.as_str() {
-                "ABB" => {
-                    log::debug!("ALIAS: {}={}", val, ident);
-                    self.aliases.insert(val.to_string(), ident.clone());
-                }
-
-                "KEY" => {
-                    log::debug!("KEY: {}={}", val, ident);
-                    ident = val.to_string();
-                }
-
-                _ => {}
-            }
-        }
-
-        // grab ref to list inside datum, for update
-        let lst = datum.as_mut_list().unwrap();
-
-        // remove Elem for update, or create new if nonexistent
-        let mut obj;
-        if lst.props.contains_key(&ident) {
-            obj = lst.props.remove(&ident).unwrap();
-        } else {
-            obj = PccElem::new(&ident);
-        }
-
-        // merge new attribs into master attrib list
-        for attrib in attribs {
-            obj.attribs.push(attrib);
-        }
-
-        // push Elem with new attribs back into List
-        lst.props.insert(ident.to_string(), obj);
-
-        Ok(())
-    }
-
-    // Read LST file into data dictionary
-    pub fn read_lst(
-        &mut self,
-        pcc_tag: &str,
-        basedir: &str,
-        lstpath: &str,
-        lstopts: &str,
-    ) -> io::Result<()> {
-        let mut fpath = String::new();
-
-        // parse path prefixes
-        let prefix = lstpath.chars().next().expect("Empty LST path");
-        match prefix {
-            // absolute path
-            '/' => {
-                fpath.push_str(lstpath);
-            }
-
-            // base directory is toplevel data dir
-            '@' | '*' => {
-                let relpath = &lstpath[1..];
-                fpath.push_str(&self.config.datadir);
-                fpath.push_str(relpath);
-            }
-
-            // "local file", in the same directory as PCC file
-            _ => {
-                fpath.push_str(basedir);
-                fpath.push_str("/");
-                fpath.push_str(lstpath);
-            }
-        }
-
-        log::debug!("Pcc.read_lst({}, {}, \"{}\")", pcc_tag, fpath, lstopts);
-
-        let mut datum;
-
-        // Does the List record already exist?  if not, create a new one.
-        // Due to "second mutable borrow" issue, we must remove from
-        // HashMap, and then insert back into HashMap when we're done.
-        if !self.dict.contains_key(pcc_tag) {
-            datum = PccDatum::List(PccList::new(pcc_tag));
-        } else {
-            datum = self.dict.remove(pcc_tag).unwrap();
-        }
-
-        // record type check
-        match &datum {
-            PccDatum::List(_val) => {}
-            _ => {
-                // todo: technically an error, not a panic
-                panic!("key is not a list");
-            }
-        }
-
-        // open and buffer list file input data
-        let file = File::open(fpath)?;
-        let rdr = BufReader::new(file);
-
-        // iterate through each text file line
-        for line_res in rdr.lines() {
-            let line = line_res.expect("BufReader.lst parse failed");
-
-            // comments and empty lines
-            let ch = line.chars().next();
-            if ch.is_none() || ch == Some('#') {
-                continue;
-            }
-
-            // parse line
-            self.read_lst_line(&mut datum, &line)?;
-        }
-
-        // finally, replace updated datum in dictionary
-        self.dict.insert(pcc_tag.to_string(), datum);
-
-        Ok(())
-    }
-
-    fn read_pcc_line(&mut self, basedir: &str, line: &str) -> io::Result<()> {
-        // split on ':'
-        let sor = line.split_once(':');
-        if sor.is_none() {
-            return Err(Error::new(ErrorKind::Other, "PCC invalid line:colon"));
-        }
-
-        let mut lhs;
-        let rhs;
-        (lhs, rhs) = sor.unwrap();
-        let _tag_negate;
-
-        if lhs.chars().next() == Some('!') {
-            lhs = &lhs[1..];
-            _tag_negate = true;
-        } else {
-            _tag_negate = false;
-        }
-
-        // is this tag in the known schema?
-        let tagtype_res = self.pcc_schema.get(lhs);
-        if tagtype_res.is_none() {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!("PCC invalid key {}", lhs),
-            ));
-        }
-
-        let tagtype = tagtype_res.unwrap();
-        match tagtype {
-            // input included PCC file
-            PccTag::PccFile => {
-                // relative path indicated by leading '@'
-                let (is_rel, fpath);
-                if rhs.chars().nth(0) == Some('@') {
-                    is_rel = true;
-                    fpath = &rhs[1..];
-                } else {
-                    is_rel = false;
-                    fpath = &rhs;
-                }
-
-                self.read(fpath, is_rel)?;
-            }
-
-            // read LST file
-            PccTag::LstFile => match rhs.split_once('|') {
-                None => self.read_lst(lhs, &basedir, rhs, String::from("").as_str())?,
-                Some((lstpath, lstopts)) => self.read_lst(lhs, &basedir, lstpath, lstopts)?,
-            },
-
-            // handle other data types
-            PccTag::Bool | PccTag::Date | PccTag::Number | PccTag::Text => {
-                // store in global data dictionary
-                let tag = self.dict.get_mut(lhs);
-                match tag {
-                    // new key; store in hashmap
-                    None => {
-                        self.dict
-                            .insert(lhs.to_string(), PccDatum::Text(rhs.to_string()));
-                    }
-
-                    // existing key; append to string value
-                    Some(datum) => match datum {
-                        PccDatum::Text(val) => {
-                            val.push_str("\n");
-                            val.push_str(rhs);
-                        }
-                        _ => {}
-                    },
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    // recursively read PCC file data into Pcc object
-    pub fn read(&mut self, pccpath: &str, is_relative: bool) -> io::Result<()> {
-        let mut fpath = String::new();
-
-        if is_relative {
-            fpath.push_str(&self.config.datadir);
-        }
-
-        fpath.push_str(pccpath);
-
-        if fpath.contains("\\") {
-            fpath = fpath.replace("\\", "/");
-        }
-
-        let basedir = dir_from_path(&fpath).unwrap();
-
-        log::debug!("Pcc.read({})", fpath);
-
-        let file = File::open(fpath)?;
-        let rdr = BufReader::new(file);
-
-        for line_res in rdr.lines() {
-            let line = line_res.expect("BufReader parse failed");
-
-            // comments and empty lines
-            let ch = line.chars().next();
-            if ch.is_none() || ch == Some('#') {
-                continue;
-            }
-
-            self.read_pcc_line(&basedir, &line)?;
-        }
-
-        Ok(())
-    }
-
-    // display all data in data dictionary
-    pub fn display(&self) {
-        println!("{}", serde_json::to_string_pretty(self).unwrap());
-    }
-}
-
-fn main() {
+fn main() -> ExitCode {
     env_logger::builder().format_timestamp(None).init();
 
-    // parse command line options
-    let args = Args::parse();
+    let cli = Cli::parse();
+    let o = &cli.opts;
+    let res = match &cli.cmd {
+        Command::Campaigns { dir, gamemode } => {
+            cmd::campaign::campaigns(o, dir.as_deref(), gamemode.as_deref())
+        }
+        Command::Deps { pcc } => cmd::campaign::deps(o, pcc),
+        Command::Load { pcc, quiet } => cmd::data::load(o, pcc, *quiet),
+        Command::Dump { pcc } => cmd::data::dump(o, pcc),
+        Command::Show { pcc, kind, key } => cmd::data::show(o, pcc, kind, key),
+        Command::Lint {
+            files,
+            kind,
+            summary,
+            no_unknown,
+            no_formulas,
+            min,
+        } => {
+            let min = match min.as_str() {
+                "error" => pcgtools::Severity::Error,
+                "warning" => pcgtools::Severity::Warning,
+                _ => pcgtools::Severity::Info,
+            };
+            cmd::check::lint(
+                o,
+                cmd::check::LintArgs {
+                    files,
+                    kind: kind.as_deref(),
+                    summary: *summary,
+                    opts: pcgtools::lint::LintOptions {
+                        unknown_tags: !no_unknown,
+                        deprecated: true,
+                        formulas: !no_formulas,
+                    },
+                    min,
+                },
+            )
+        }
+        Command::Query {
+            pcc,
+            kind,
+            conds,
+            name,
+            fields,
+            count,
+        } => cmd::data::query(
+            o,
+            cmd::data::QueryArgs {
+                pcc,
+                kind,
+                name: name.as_deref(),
+                conds,
+                fields: fields.as_deref(),
+                count: *count,
+            },
+        ),
+        Command::Edit {
+            file,
+            object,
+            set,
+            add,
+            remove,
+            rename,
+            delete,
+            any_op,
+            output,
+            in_place,
+        } => cmd::edit::edit(cmd::edit::EditArgs {
+            file,
+            object,
+            set,
+            add,
+            remove,
+            rename: rename.as_deref(),
+            delete: *delete,
+            any_op: *any_op,
+            output: output.as_deref(),
+            in_place: *in_place,
+        }),
+        Command::Fmt {
+            files,
+            check,
+            write,
+        } => cmd::edit::fmt(files, *check, *write),
+        Command::Gamemode { name, file } => {
+            cmd::campaign::gamemode(o, name.as_deref(), file.as_deref())
+        }
+        Command::Repl {
+            file,
+            new,
+            gamemode,
+            campaign,
+            name,
+        } => {
+            let n = match (new, gamemode) {
+                (true, Some(g)) => Some(cmd::repl::NewChar {
+                    gamemode: g,
+                    campaigns: campaign,
+                    name,
+                }),
+                _ => None,
+            };
+            cmd::repl::repl(o, file.as_deref(), n)
+        }
+        Command::Char {
+            file,
+            output,
+            command,
+        } => cmd::repl::one_shot(o, file, command, output.as_ref()),
+        Command::Pcg { cmd } => match cmd {
+            PcgCommand::Show { file } => cmd::pcg::show(o, file),
+            PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
+            PcgCommand::Vars { file, scope } => cmd::pcg::vars(o, file, scope.as_deref()),
+            PcgCommand::Sheet { file, compare } => cmd::pcg::sheet(o, file, compare.as_deref()),
+            PcgCommand::Stats {
+                file,
+                verbose,
+                explain,
+            } => cmd::pcg::stats(o, file, *verbose, explain),
+        },
+        Command::Tags { scope } => cmd::check::tags(o, scope.as_deref()),
+        Command::Parse { file } => cmd::misc::parse(file),
+        Command::Roundtrip { paths } => cmd::misc::roundtrip(paths),
+    };
 
-    let mut datadir = args.datadir.clone();
-    if datadir.chars().last() != Some('/') {
-        datadir.push_str("/"); // todo: windows
+    match res {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("pcgtools: {}", e);
+            ExitCode::from(2)
+        }
     }
-
-    // create new Pcc object
-    let pcc_cfg = PccConfig { datadir };
-    let mut pcc = Pcc::new(&pcc_cfg);
-
-    // recursively read all PCC and LST data, starting at toplevel file
-    pcc.read(&args.pccfile, true).expect("PCC.read I/O error");
-
-    // debug: display data dictionary
-    pcc.display();
 }

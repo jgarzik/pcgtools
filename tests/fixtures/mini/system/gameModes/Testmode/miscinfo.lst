@@ -1,0 +1,10 @@
+# synthetic game mode
+ALLOWEDMODES:Testmode|TM
+GAMEMODEKEY:Testmode
+BONUSSTACKS:Dodge.Circumstance
+BONUSSTACKS:Untyped
+TAB:SUMMARY		NAME:in_summary	VISIBLE:YES
+ACNAME:Defense
+ACTYPE:Total	ADD:TOTAL
+ACTYPE:Flatfooted	ADD:TOTAL	REMOVE:Ability
+ACTYPE:Touch	ADD:TOTAL	REMOVE:Shield

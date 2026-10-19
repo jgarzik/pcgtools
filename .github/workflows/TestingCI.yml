@@ -11,8 +11,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+    - name: Format
+      run: cargo fmt --check
+    - name: Lint
+      run: cargo clippy --all-targets -- -D warnings
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  # The same tests against real PCGen data: every campaign loads, data
+  # files round-trip, and character sheets match the expected sheets.
+  # The data is read in place at a pinned revision, never copied here.
+  corpus:
+
+    runs-on: ubuntu-latest
+
+    env:
+      PCGEN_ROOT: ${{ github.workspace }}/corpus
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch PCGen data
+      uses: actions/checkout@v4
+      with:
+        repository: PCGen/pcgen
+        ref: 6de48a9292cbdcc64ebd181d1707b67699da1e82
+        path: corpus/pcgen
+        sparse-checkout: |
+          data
+          system
+          code/testsuite
+    - name: Run tests with data
+      run: cargo test --release

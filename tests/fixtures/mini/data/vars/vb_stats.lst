@@ -1,0 +1,2 @@
+SOURCELONG:Variable Book	SOURCESHORT:VB
+Might	ABB:MGT	STATMOD:floor(SCORE/2)-5	MODIFY:Score|SET|input("StatScore")	MODIFY:Mod|SET|d20Mod(Score)	MODIFY:MGTMOD|SET|Mod

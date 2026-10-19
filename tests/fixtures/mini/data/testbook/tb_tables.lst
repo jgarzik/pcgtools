@@ -1,0 +1,6 @@
+STARTTABLE:Spoon Prices,
+Level,Price
+NUMBER,NUMBER
+1,10
+"2",20
+ENDTABLE:

@@ -4,13 +4,19 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Jeff Garzik"]
-description = "pcgtools: tools for reading PCgen PCC and LST data files"
+description = "Read, query, edit and write PCGen data and character files"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11"
+globset = "0.4.20"
 log = "0.4"
+quick-xml = "0.37"
+regex = "1.13.1"
+rustyline = "15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+thiserror = "2.0.21"
+walkdir = "2.5.0"

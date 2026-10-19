@@ -1,0 +1,2 @@
+SOURCELONG:Variable Book	SOURCESHORT:VB
+Big Pocket	KEY:BIGPOCKET	MODIFY:Capacity|ADD|lookup("Pocket Sizes",2,"Extra")

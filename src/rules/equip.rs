@@ -377,6 +377,7 @@ impl<'a> EqItem<'a> {
             "HEADPLUSTOTAL" => Some(self.plus_total(head)),
             "ALTPLUSTOTAL" => Some(self.plus_total(&self.alt_eqmods)),
             "BASEQTY" => Some(self.base_qty()),
+            "PC.SIZE.INT" => Some(calc.size_index() as f64),
             "SIZE" | "EQUIP.SIZE.INT" => calc
                 .ds
                 .objects(FileKind::Size)
@@ -600,8 +601,27 @@ impl<'a> EqItem<'a> {
         let mut total = 0.0;
         let mods = if eqmods { &self.eqmods[..] } else { &[] };
         let objs = std::iter::once(&*self.data).chain(mods.iter().map(|m| m.obj));
-        for o in objs {
-            for v in o.values("BONUS") {
+        // the game mode's size penalty applies to every item as if it
+        // were one of its modifiers
+        let size_penalty: Vec<&str> = if eqmods {
+            calc.gm
+                .and_then(|g| g.lines("miscinfo.lst", "EQSIZEPENALTY").next())
+                .map(|l| {
+                    l.tokens
+                        .iter()
+                        .filter(|(t, _)| t == "BONUS")
+                        .map(|(_, v)| v.as_str())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let values = objs
+            .flat_map(|o| o.values("BONUS"))
+            .chain(size_penalty.iter().copied());
+        {
+            for v in values {
                 let Ok(b) = Bonus::parse(v) else { continue };
                 if !b.category.eq_ignore_ascii_case(category)
                     || !b.targets.iter().any(|t| t.eq_ignore_ascii_case(target))

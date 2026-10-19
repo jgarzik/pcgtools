@@ -18,6 +18,9 @@ use crate::lst::kind::FileKind;
 use crate::rules::bonus::Source;
 use crate::rules::equip::EqItem;
 
+/// Most extra attacks listed for one weapon, whatever the data says.
+const MAX_EXTRA_ATTACKS: i64 = 50;
+
 /// Where a weapon is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hand {
@@ -302,7 +305,10 @@ fn to_hit_bonus(s: &SheetCtx, w: &Weapon, distance: Option<f64>) -> i64 {
     }
     let prof = prof_of(s, w);
     let known = super::lists::weapon_prof_keys(s);
-    let proficient = prof.is_some_and(|p| known.iter().any(|k| k.eq_ignore_ascii_case(&p.key)));
+    let prof_key = prof
+        .map(|p| p.key.clone())
+        .or_else(|| w.is("Unarmed").then(|| "Unarmed Strike".to_string()));
+    let proficient = prof_key.is_some_and(|p| known.iter().any(|k| k.eq_ignore_ascii_case(&p)));
     if !w.natural() && !proficient {
         t += gm_num(s, "WEAPONNONPROFPENALTY", -4.0);
     }
@@ -392,7 +398,8 @@ fn to_hit(s: &SheetCtx, w: &Weapon, all_w: &[Weapon], mode: Mode, distance: Opti
     let seq = bab_sequence(s);
     let first = seq.first().copied().unwrap_or(0);
     let (progress, extra) = attacks(s, w);
-    let mut list: Vec<i64> = vec![first; extra.max(0) as usize];
+    // counts come from data files: keep them sane
+    let mut list: Vec<i64> = vec![first; extra.clamp(0, MAX_EXTRA_ATTACKS) as usize];
     if progress {
         list.extend(seq.iter().copied());
     } else {
@@ -479,7 +486,7 @@ fn item_dice(s: &SheetCtx, w: &Weapon) -> String {
     };
     let data_size = w
         .item
-        .base
+        .data
         .get("SIZE")
         .map(str::to_string)
         .unwrap_or_else(|| crate::rules::equip::default_size(c));
@@ -523,7 +530,7 @@ fn adjust_dice(s: &SheetCtx, dice: &str, diff: i64) -> String {
             let one = adjust_dice(s, &format!("1d{}", sides), diff);
             if let Some((m, sd)) = one.split_once('d') {
                 if let Ok(m) = m.parse::<i64>() {
-                    return format!("{}d{}", m * n, sd);
+                    return format!("{}d{}", m.saturating_mul(n), sd);
                 }
             }
         }
@@ -806,7 +813,7 @@ fn num_attacks(s: &SheetCtx, w: &Weapon) -> i64 {
         0
     };
     let _ = extra;
-    n + natural_extra + item_bonus(s, w, "ATTACKS") as i64
+    (n + natural_extra + item_bonus(s, w, "ATTACKS") as i64).clamp(0, MAX_EXTRA_ATTACKS + n)
 }
 
 fn reach(s: &SheetCtx, w: &Weapon) -> String {
@@ -873,10 +880,9 @@ fn magic(s: &SheetCtx, w: &Weapon, target: &str) -> String {
 }
 
 /// A weapon bonus from feats or from templates.
-fn from_kind(s: &SheetCtx, w: &Weapon, target: &str, keep: &dyn Fn(&Source) -> bool) -> String {
+fn from_kind(s: &SheetCtx, target: &str, keep: &dyn Fn(&Source) -> bool) -> String {
     let b = &s.calc.bonus;
-    let prof = prof_of(s, w);
-    let mut v = b.total_where("WEAPON", target, keep) + prof_bonus(s, prof, target, keep);
+    let mut v = b.total_where("WEAPON", target, keep);
     if target == "DAMAGE" {
         v -= b.total_where("WEAPON", "DAMAGE-SHORTRANGE", keep);
     }
@@ -933,8 +939,8 @@ fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     );
     e.push(
         Element::new("feat")
-            .with(Element::leaf("hit", from_kind(s, w, "TOHIT", &feat)))
-            .with(Element::leaf("damage", from_kind(s, w, "DAMAGE", &feat))),
+            .with(Element::leaf("hit", from_kind(s, "TOHIT", &feat)))
+            .with(Element::leaf("damage", from_kind(s, "DAMAGE", &feat))),
     );
     e.add("hand", w.hand.text());
     e.add("num_attacks", num_attacks(s, w));
@@ -943,11 +949,8 @@ fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     e.add("special_properties", w.item.special_properties(c));
     e.push(
         Element::new("template")
-            .with(Element::leaf("hit", from_kind(s, w, "TOHIT", &template)))
-            .with(Element::leaf(
-                "damage",
-                from_kind(s, w, "DAMAGE", &template),
-            )),
+            .with(Element::leaf("hit", from_kind(s, "TOHIT", &template)))
+            .with(Element::leaf("damage", from_kind(s, "DAMAGE", &template))),
     );
     e.add("type", type_abbrevs(s, w));
     let wt = if w.name == w.item.name && !w.is("Both") {
@@ -1020,7 +1023,11 @@ fn unarmed(s: &SheetCtx) -> Element {
         name: "Unarmed Strike".into(),
         key: "Unarmed Strike".into(),
         category: None,
-        tokens: Vec::new(),
+        tokens: vec![crate::dataset::Tok {
+            tag: "WIELD".into(),
+            value: "Light".into(),
+            origin: crate::dataset::Origin { file: 0, line: 0 },
+        }],
         sublines: Vec::new(),
         children: Vec::new(),
         source: Vec::new(),

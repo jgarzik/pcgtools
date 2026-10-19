@@ -276,15 +276,17 @@ pub fn bab_sequence(s: &SheetCtx) -> Vec<i64> {
         .gamemode
         .as_ref()
         .and_then(|g| g.misc("BABMAXATT"))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(4);
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(4)
+        .clamp(1, 50);
     let cycle: i64 = s
         .ctx
         .gamemode
         .as_ref()
         .and_then(|g| g.misc("BABATTCYC"))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5);
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(5)
+        .max(1);
     let mut class_bab = 0i64;
     for (cls, _) in c.classes() {
         class_bab += c.bonus.total_where("COMBAT", "BASEAB", |src| {

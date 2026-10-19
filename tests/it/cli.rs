@@ -300,3 +300,30 @@ fn parse_pcg_json() {
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["lines"][0]["elems"][0]["tag"], "PCGVERSION");
 }
+
+#[test]
+fn pcg_stats_json_and_explain() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let base = ["--data-dir", &data_dir(), "--system-dir", &sys];
+    let mut args: Vec<&str> = base.to_vec();
+    let t = tess();
+    args.extend(["--json", "pcg", "stats", &t]);
+    let o = pcgtools(&args);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["bab"], 1);
+    assert_eq!(v["hp"], 14);
+    assert_eq!(v["ac"]["Total"], 12);
+
+    let mut args: Vec<&str> = base.to_vec();
+    args.extend(["pcg", "stats", &t, "-e", "COMBAT.AC"]);
+    let o = pcgtools(&args);
+    let out = stdout(&o);
+    assert!(
+        out.contains("+1 [Shield] from Equipment Tin Shield"),
+        "{}",
+        out
+    );
+}

@@ -16,6 +16,7 @@ Contents:
 6. [Token value syntax](#6-token-value-syntax)
 7. [Game mode files](#7-game-mode-files)
 8. [PCG character files](#8-pcg-character-files)
+9. [Derived values](#9-derived-values)
 
 Conventions: `<TAB>` is a horizontal tab (U+0009). Grammar fragments use
 EBNF with `|` for alternation, `[ ]` for optional, and `{ }` for
@@ -782,3 +783,82 @@ EQUIPMENT:Old Item<TAB>NEWKEY:New Item<TAB>MAXVER:6.00.01
 A rule applies when the character's `VERSION` is no newer than
 `MAXVER` — or, failing that, no newer than `MAXDEVVER` within the same
 major.minor series — and no older than `MINVER` if given.
+
+---
+
+## 9. Derived values
+
+The formats above define *data*; the meaning of most of it is the
+bonus and variable model described here. It is how a character's
+attack bonus, saves, armor class, hit points and skill totals follow
+from the objects it has. (This chapter describes the classic model
+used by most shipped data. Newer data also uses `MODIFY` and declared
+variables; see 6.5.)
+
+### 9.1 Active objects
+
+An object contributes its tokens while it is *active*:
+
+* every stat, save and skill object;
+* the character's alignment, race, and size category;
+* templates: those recorded in the character, plus those granted by
+  `TEMPLATE:` tokens of active objects;
+* each class, with its class-line tokens and the level lines for every
+  level the character has (a `REPEATLEVEL` line applies repeatedly);
+* abilities: those recorded in the character, plus those granted by
+  `ABILITY:pool|nature|key...` tokens of active objects whose trailing
+  prerequisites pass (a pool names an ability category, which may draw
+  on another category);
+* equipped items and their equipment modifiers — an item is equipped
+  when it sits directly in the calculation equipment set at any
+  location other than *Carried* or *Not Carried*;
+* deity and domains; companion modifiers granting master bonuses.
+
+An object whose own `PRExxx` tokens fail contributes nothing.
+
+### 9.2 Variables
+
+`DEFINE:Name|formula` declares a variable with an initial value; if
+several active objects define it, the largest initial value is used.
+The variable's value is that initial value plus every
+`BONUS:VAR|Name|formula` that applies. Names not defined this way
+fall back to built-in terms: stat abbreviations (the modifier),
+`<STAT>SCORE`, `TL`/`HD` (total level), `CL` (level in the owning
+class), `CL=Class`, `BAB`, `SIZE`, `ENCUMBERANCE`, `MODEQUIPMAXDEX`,
+`MOVE[Walk]`, `SKILL.name.RANK`, `COUNT[...]`, and others. Unknown
+names are zero.
+
+Because values depend on each other (an ability granted only above a
+variable threshold may itself raise variables), evaluation repeats
+until no value changes.
+
+### 9.3 Bonus totals
+
+Every `BONUS:category|target|value` files its (integer-truncated)
+value under `category.target` with its type. Totals combine as
+follows:
+
+| Bonus | Combines |
+|---|---|
+| untyped | added |
+| a type the game mode lists in `BONUSSTACKS` | added |
+| any negative value | added |
+| `TYPE=x.STACK` | added, on top of everything else of type x |
+| `TYPE=x.REPLACE` | added among themselves; then the larger of the plain and replace totals of type x is used |
+| any other typed bonus | only the largest of that type counts |
+
+`%LIST` (or `%CHOICE`) in a target stands for each choice made for the
+granting object; an ability taken several times applies its other
+bonuses once per time.
+
+### 9.4 The usual results
+
+| Value | Computed as |
+|---|---|
+| ability score | base score + `STAT.abb` bonuses; the modifier comes from the stat's `STATMOD` formula |
+| base attack bonus | `COMBAT.BASEAB` (classes add their part with `TYPE=Base.REPLACE`) |
+| save | `SAVE.BASE.name` + `SAVE.name` + `SAVE.ALL` |
+| hit points | for each level gained: the roll plus the stat modifier given by stats' `HP.BONUS` bonuses (at least 1), plus `HP.CURRENTMAX` |
+| armor class of a type | per the game mode's `ACTYPE`: add the `COMBAT.AC` bonuses of the listed types (`TOTAL` means all), subtract the removed ones |
+| skill total | ranks + key stat modifier + `SKILL.name`, `SKILL.STAT.abb`, `SKILL.TYPE.t`, `SKILL.LIST`, `SKILL.ALL` + class/cross-class bonuses + armor check penalty for `ACHECK:YES` skills |
+| ranks | bought ranks + `SKILLRANK.name`, capped at the experience table's class or cross-class maximum for the character's level |

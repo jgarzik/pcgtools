@@ -1,0 +1,3 @@
+SOURCELONG:Test Book	SOURCESHORT:TB
+Toughness Save	KEY:Toughness	BONUS:SAVE|Toughness|MGT
+Quickness Save	KEY:Quickness	BONUS:SAVE|Quickness|GRC

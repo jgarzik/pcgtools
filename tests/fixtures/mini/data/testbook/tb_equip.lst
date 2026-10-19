@@ -1,5 +1,6 @@
 Wooden Spoon	TYPE:Goods.Kitchen	COST:1	WT:0.5
 Cursed Spoon	TYPE:Goods.Kitchen	COST:1
+Tin Shield	TYPE:Shield	COST:5	WT:5	ACCHECK:-1	BONUS:COMBAT|AC|1|TYPE=Shield
 Wooden Spoon.COPY=Silver Spoon	COST:25
 Wooden Spoon	TYPE:Duplicate
 	WT:9

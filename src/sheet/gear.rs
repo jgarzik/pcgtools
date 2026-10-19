@@ -452,3 +452,85 @@ pub fn equipment(s: &SheetCtx) -> Element {
     out.push(sets);
     out
 }
+
+/// Armor, shields and other items that change armor class.
+pub fn protection(s: &SheetCtx) -> Element {
+    let c = &s.calc;
+    let (_, items) = placed(s);
+    let mut out = Element::new("protection");
+    let order = merged(&items);
+    let alters_ac = |p: &Placed| p.item.bonus(c, "COMBAT", "AC", true) != 0.0;
+    let groups: [(&str, &dyn Fn(&Placed) -> bool); 3] = [
+        ("armor", &|p: &Placed| {
+            p.item.is_type(c, "Armor") && alters_ac(p)
+        }),
+        ("shield", &|p: &Placed| p.item.is_type(c, "Shield")),
+        ("item", &|p: &Placed| {
+            !p.item.is_type(c, "Armor") && !p.item.is_type(c, "Shield") && alters_ac(p)
+        }),
+    ];
+    for (tag, keep) in groups {
+        for (i, _) in &order {
+            let p = &items[*i];
+            if !keep(p) {
+                continue;
+            }
+            let it = &p.item;
+            let signed = super::signed;
+            let mut e = Element::new(tag);
+            e.add(
+                "name",
+                format!("{}{}", if p.equipped { "*" } else { "" }, it.output_name()),
+            );
+            let ac = it.bonus(c, "COMBAT", "AC", true) as i64;
+            e.add("acbonus", signed(ac));
+            let acp = (num(it.data.get("ACCHECK")) + it.bonus(c, "EQMARMOR", "ACCHECK", true))
+                .min(0.0) as i64;
+            e.add("accheck", signed(acp));
+            e.add("baseac", signed(it.bonus(c, "COMBAT", "AC", false) as i64));
+            let edr = (num(it.data.get("EDR")) + it.bonus(c, "EQMARMOR", "EDR", true)).max(0.0);
+            e.add("edr", signed(edr as i64));
+            let maxdex = if tag == "armor" {
+                let md = it
+                    .data
+                    .get("MAXDEX")
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .unwrap_or(100.0)
+                    + it.bonus(c, "EQMARMOR", "MAXDEX", true);
+                let md = md.clamp(0.0, 100.0);
+                if md >= 100.0 {
+                    String::new()
+                } else {
+                    signed(md as i64)
+                }
+            } else {
+                String::new()
+            };
+            e.add("maxdex", maxdex);
+            e.add("move", "");
+            let sf = (num(it.data.get("SPELLFAILURE"))
+                + it.bonus(c, "EQMARMOR", "SPELLFAILURE", true))
+            .max(0.0) as i64;
+            e.add("spellfail", sf);
+            e.add("special_properties", it.special_properties(c));
+            e.add("totalac", signed(ac));
+            let kind = if it.is_type(c, "Light") {
+                "Light"
+            } else if it.is_type(c, "Medium") {
+                "Medium"
+            } else if it.is_type(c, "Heavy") {
+                "Heavy"
+            } else if it.is_type(c, "Shield") {
+                "Shield"
+            } else if it.is_type(c, "Extra") {
+                "Extra"
+            } else {
+                ""
+            };
+            e.add("type", kind);
+            e.add("wt", trim_zeros(it.weight(c) as f32 as f64));
+            out.push(e);
+        }
+    }
+    out
+}

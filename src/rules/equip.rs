@@ -591,12 +591,19 @@ impl<'a> EqItem<'a> {
 
     /// Total of BONUS:EQM|target on the item and its modifiers.
     pub fn eqm_bonus(&self, calc: &Calc<'a>, target: &str) -> f64 {
+        self.bonus(calc, "EQM", target, true)
+    }
+
+    /// Total of BONUS:category|target on the item and, if asked, its
+    /// modifiers.
+    pub fn bonus(&self, calc: &Calc<'a>, category: &str, target: &str, eqmods: bool) -> f64 {
         let mut total = 0.0;
-        let objs = std::iter::once(&*self.data).chain(self.eqmods.iter().map(|m| m.obj));
+        let mods = if eqmods { &self.eqmods[..] } else { &[] };
+        let objs = std::iter::once(&*self.data).chain(mods.iter().map(|m| m.obj));
         for o in objs {
             for v in o.values("BONUS") {
                 let Ok(b) = Bonus::parse(v) else { continue };
-                if !b.category.eq_ignore_ascii_case("EQM")
+                if !b.category.eq_ignore_ascii_case(category)
                     || !b.targets.iter().any(|t| t.eq_ignore_ascii_case(target))
                 {
                     continue;

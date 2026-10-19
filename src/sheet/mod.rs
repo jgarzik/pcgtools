@@ -271,6 +271,7 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
     for e in combat::build_after_skills(&s) {
         root.push(e);
     }
+    root.push(gear::protection(&s));
     root.push(lists::class_features(&s));
     root.push(gear::equipment(&s));
     root.push(gear::weight_allowance(&s));

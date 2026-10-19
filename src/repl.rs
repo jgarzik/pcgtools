@@ -863,6 +863,17 @@ impl Session {
                     {
                         return Err(Error::Other(format!("the character has no {} levels", cls)));
                     }
+                    // a class knows a spell once
+                    let known = crate::rules::spells::KNOWN_BOOK;
+                    if book.eq_ignore_ascii_case(known)
+                        && self.ch.spells().iter().any(|(spell, class, b, _, _)| {
+                            spell.eq_ignore_ascii_case(&key)
+                                && class.eq_ignore_ascii_case(&cls)
+                                && b.eq_ignore_ascii_case(known)
+                        })
+                    {
+                        return Err(Error::Other(format!("{} already knows {}", cls, key)));
+                    }
                     self.checkpoint();
                     self.ch.add_spell(&key, &cls, book, level, 1);
                     changed(self, format!("added {} (level {}) to {}", key, level, book))

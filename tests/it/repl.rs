@@ -1009,3 +1009,17 @@ fn preparing_spells_with_metamagic() {
         text
     );
 }
+
+#[test]
+fn a_known_spell_is_not_learned_twice() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "spell add Tinker Spark");
+    assert!(err(&mut s, "spell add Tinker Spark").contains("already knows"));
+    let known = String::from_utf8(s.ch.pcg.encode())
+        .unwrap()
+        .lines()
+        .filter(|l| l.starts_with("SPELLNAME:Spark|"))
+        .count();
+    assert_eq!(known, 1);
+}

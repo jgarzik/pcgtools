@@ -120,8 +120,14 @@ impl Context {
     pub fn check_references(&self, c: &Character) -> Diagnostics {
         let mut d = Diagnostics::default();
         let ds = &self.dataset;
+        let forward = &self.plan.forward_refs;
         let mut need = |kind: FileKind, key: &str, what: &str| {
-            if ds.get(kind, key).is_none() {
+            // objects the data declares it will reference (FORWARDREF)
+            // are not reported missing
+            let declared = forward
+                .iter()
+                .any(|(k, n)| k.eq_ignore_ascii_case(kind.tag()) && n.eq_ignore_ascii_case(key));
+            if ds.get(kind, key).is_none() && !declared {
                 d.push(Diagnostic::warning(format!(
                     "{} '{}' not found in data",
                     what, key

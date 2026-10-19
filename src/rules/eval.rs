@@ -222,7 +222,7 @@ impl Env for Probe<'_> {
     }
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         let v = self.env.call(name, args);
-        if v.is_none() {
+        if v.is_none() && !PCGEN_FUNCTIONS.contains(&name.to_ascii_lowercase().as_str()) {
             self.no_function.set(true);
         }
         v
@@ -251,6 +251,41 @@ impl Env for Quiet<'_> {
 /// handed to the environment unevaluated.
 const BUILTINS: &[&str] = &[
     "floor", "ceil", "round", "abs", "trunc", "intval", "sqrt", "min", "max", "if", "d20mod",
+];
+
+/// Functions PCGen's formula parser knows, whether or not this crate
+/// works them out; only a call to another one makes it fall back.
+const PCGEN_FUNCTIONS: &[&str] = &[
+    "abs",
+    "acos",
+    "asin",
+    "atan",
+    "ceil",
+    "charbonusto",
+    "classlevel",
+    "cos",
+    "count",
+    "countdistinct",
+    "exp",
+    "floor",
+    "getvar",
+    "if",
+    "ln",
+    "log",
+    "mastervar",
+    "max",
+    "min",
+    "mod",
+    "or",
+    "rand",
+    "roll",
+    "round",
+    "sin",
+    "skillinfo",
+    "sqrt",
+    "sum",
+    "tan",
+    "var",
 ];
 
 /// Can evaluation skip part of the expression (`if`, `&&`, `||`)?
@@ -589,6 +624,9 @@ mod tests {
             ("max(NOPE,5)+1", 1.0),
             ("floor(STR/2)+NOPE", 0.0),
             ("mystery(1)+2*3", 6.0),
+            ("1+2*mystery(1)+3", 3.0),
+            // a function PCGen knows does not, though it has no value here
+            ("1+2*mastervar(\"X\")+3", 4.0),
             // also when only an untaken branch is unresolved
             ("if(CL>3,1,NOPE)+2*3", 6.0),
             ("max(0,min(4,CL))+2*3", 10.0),

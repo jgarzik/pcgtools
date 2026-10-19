@@ -3402,9 +3402,15 @@ impl<'a> Calc<'a> {
 
     /// Armor check penalty of equipped armor and shields (zero or less).
     pub fn armor_check(&self) -> i64 {
+        self.armor_check_where(|_| true)
+    }
+
+    /// Armor check penalty of the equipped armor and shields that pass
+    /// `keep`.
+    fn armor_check_where(&self, keep: impl Fn(&Item) -> bool) -> i64 {
         let mut total = 0.0;
         for (i, it) in self.items.iter().enumerate() {
-            if !(it.obj.is_type("Armor") || it.obj.is_type("Shield")) {
+            if !(it.obj.is_type("Armor") || it.obj.is_type("Shield")) || !keep(it) {
                 continue;
             }
             let base: f64 = it
@@ -3439,15 +3445,73 @@ impl<'a> Calc<'a> {
         } else if sk.get("EXCLUSIVE") != Some("YES") {
             b += self.bonus.total("CCSKILL", &sk.key);
         }
-        let ac = self.armor_check() as f64;
-        b += match sk.get("ACHECK").map(upper).as_deref() {
-            Some("YES") => ac,
-            Some("DOUBLE") => 2.0 * ac,
-            // one point per five pounds carried
-            Some("WEIGHT") => -(self.carried_weight() / 5.0).floor(),
-            _ => 0.0,
-        };
+        b += self.skill_check_penalty(sk.get("ACHECK"));
         (self.skill_ranks(&sk.key) + b).floor() as i64
+    }
+
+    /// Armor check penalty on a skill with the given ACHECK: the worse
+    /// of the load's penalty and the armor's (adjusted by MISC|ACCHECK
+    /// bonuses), doubled for DOUBLE.  For WEIGHT the weight carried
+    /// stands in for the armor (a point per five pounds); NONPROF
+    /// counts only armor the character is not proficient with and
+    /// ignores load.  Without the game mode's weight penalty rule only
+    /// the bonuses count.
+    pub fn skill_check_penalty(&self, acheck: Option<&str>) -> f64 {
+        let kind = acheck.map(upper).unwrap_or_default();
+        if !matches!(kind.as_str(), "YES" | "DOUBLE" | "WEIGHT" | "NONPROF") {
+            return 0.0;
+        }
+        let (mut load, mut armor) = (0.0, 0.0);
+        if self.rule("SYS_WTPSK") {
+            if kind != "NONPROF" {
+                load = self.load_check_penalty();
+            }
+            armor = match kind.as_str() {
+                "WEIGHT" => -(self.carried_weight() / 5.0).trunc(),
+                "NONPROF" => self.armor_check_where(|it| {
+                    let shield = it.obj.is_type("Shield") && !it.obj.is_type("Armor");
+                    let prof = it
+                        .obj
+                        .get("PROFICIENCY")
+                        .and_then(|v| v.split_once('|'))
+                        .map(|(_, n)| n.to_string())
+                        .unwrap_or_else(|| it.obj.name.clone());
+                    let types: Vec<String> = it.obj.types().iter().map(|t| t.to_string()).collect();
+                    !crate::rules::profs::armor_proficient(self, shield, &prof, &types)
+                }) as f64,
+                _ => self.armor_check() as f64,
+            };
+        }
+        let mult = if kind == "DOUBLE" { 2.0 } else { 1.0 };
+        mult * f64::min(load, armor + self.bonus.total("MISC", "ACCHECK").trunc())
+    }
+
+    /// Check penalty of the character's load, from the game mode's
+    /// ENCUMBRANCE rows, when load penalties apply to skills.
+    fn load_check_penalty(&self) -> f64 {
+        let Some(g) = self.gm else { return 0.0 };
+        if !self.rule("SYS_LDPACSK") {
+            return 0.0;
+        }
+        let name = match self.encumbrance() {
+            0 => "Light",
+            1 => "Medium",
+            _ => "Heavy",
+        };
+        g.lines("load.lst", "ENCUMBRANCE")
+            .find(|l| {
+                l.value
+                    .split('|')
+                    .next()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })
+            .and_then(|l| {
+                l.value
+                    .split('|')
+                    .nth(3)
+                    .and_then(|v| v.trim().parse().ok())
+            })
+            .unwrap_or(0.0)
     }
 
     /// What a skill's total holds beyond its ranks and key stat

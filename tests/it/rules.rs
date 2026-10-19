@@ -47,6 +47,17 @@ fn fixture_character_sheet() {
 }
 
 #[test]
+fn check_penalty_bonus_offsets_armor_on_skills() {
+    let path = common::fixture("mini/characters/tess.pcg");
+    let mut s = pcgtools::repl::Session::open(&path, dirs()).unwrap();
+    // MGT 2, shield -1
+    assert_eq!(s.sheet().skills["Climbing"], 1);
+    s.exec("feat add \"Armor Ease\"").unwrap();
+    // the +1 to the check penalty cancels the shield's
+    assert_eq!(s.sheet().skills["Climbing"], 2);
+}
+
+#[test]
 fn edits_change_the_sheet() {
     let mut ch = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
     ch.set_stat("GRC", 16);

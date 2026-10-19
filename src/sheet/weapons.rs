@@ -80,6 +80,7 @@ enum Dmg {
 
 /// A weapon as listed: an item, or one of the melee and thrown copies
 /// of a weapon that can be used both ways.
+#[derive(Clone)]
 struct Weapon<'a> {
     item: EqItem<'a>,
     hand: Hand,
@@ -94,6 +95,10 @@ struct Weapon<'a> {
     name: String,
     /// how the character wields it (Light, OneHanded, TwoHanded, ...)
     wield: String,
+    /// distinct items the weapon holds (ammunition)
+    contents: Vec<EqItem<'a>>,
+    /// the ammunition a range listing is for
+    ammo: Option<EqItem<'a>>,
 }
 
 impl Weapon<'_> {
@@ -173,6 +178,12 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
             })
             .unwrap_or(p);
         let hand = hand_of(last, &items);
+        let mut contents: Vec<EqItem> = Vec::new();
+        for x in items.iter().filter(|x| x.parent == Some(i)) {
+            if !contents.iter().any(|y| y.long_name() == x.item.long_name()) {
+                contents.push(x.item.clone());
+            }
+        }
         let range = p
             .item
             .data
@@ -227,6 +238,8 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 types: melee,
                 range: 0.0,
                 wield: String::new(),
+                contents: contents.clone(),
+                ammo: None,
             });
             out.push(Weapon {
                 name: tname,
@@ -237,6 +250,8 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 types: thrown,
                 range,
                 wield: String::new(),
+                contents: contents.clone(),
+                ammo: None,
             });
         } else {
             let ranged = has("RANGED");
@@ -249,6 +264,8 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 types,
                 range: if ranged { range } else { 0.0 },
                 wield: String::new(),
+                contents: contents.clone(),
+                ammo: None,
             });
         }
     }
@@ -400,6 +417,9 @@ fn to_hit_bonus(s: &SheetCtx, w: &Weapon, distance: Option<f64>) -> i64 {
     t += b.total("COMBAT", "TOHIT") as i64 as f64;
     t += nonproficient_armor_penalty(s) as f64;
     t += item_bonus(s, w, "TOHIT");
+    if let (Some(a), true) = (&w.ammo, distance.is_some()) {
+        t += a.bonus(c, "WEAPON", "TOHIT", true);
+    }
     t as i64
 }
 
@@ -1151,6 +1171,16 @@ fn melee(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
 fn ranges(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     let units = Units::from_gamemode(s.ctx.gamemode.as_ref());
     let mut e = Element::new("ranges");
+    if let Some(a) = &w.ammo {
+        e.push(
+            Element::new("ammunition")
+                .with(Element::leaf("name", &a.name))
+                .with(Element::leaf(
+                    "special_properties",
+                    a.special_properties(&s.calc),
+                )),
+        );
+    }
     for d in range_list(w) {
         let dist = if w.range > 0.0 { Some(d) } else { None };
         e.push(
@@ -1223,6 +1253,8 @@ fn unarmed(s: &SheetCtx) -> Element {
         .collect(),
         range: 0.0,
         wield: "Light".into(),
+        contents: Vec::new(),
+        ammo: None,
     };
     let all_w = std::slice::from_ref(&w);
     Element::new("unarmed")
@@ -1254,7 +1286,14 @@ pub fn build(s: &SheetCtx) -> Element {
             }
         } else if w.ranged() {
             e.push(common(s, w, &all_w));
-            e.push(ranges(s, w, &all_w));
+            if w.contents.is_empty() {
+                e.push(ranges(s, w, &all_w));
+            }
+            for a in &w.contents {
+                let mut with = w.clone();
+                with.ammo = Some(a.clone());
+                e.push(ranges(s, &with, &all_w));
+            }
         } else if w.is("Double") || w.natural() || category(s, w).contains("Non-Standard") {
             e.push(common(s, w, &all_w));
             e.push(simple(s, w, &all_w));

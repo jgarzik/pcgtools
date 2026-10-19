@@ -114,8 +114,8 @@ enum Command {
         new: bool,
 
         /// Game mode for a new character
-        #[arg(long, default_value = "Pathfinder")]
-        gamemode: String,
+        #[arg(long, required_if_eq("new", "true"))]
+        gamemode: Option<String>,
 
         /// Campaign key for a new character (repeatable)
         #[arg(long)]
@@ -429,11 +429,14 @@ fn main() -> ExitCode {
             campaign,
             name,
         } => {
-            let n = new.then(|| cmd::repl::NewChar {
-                gamemode,
-                campaigns: campaign,
-                name,
-            });
+            let n = match (new, gamemode) {
+                (true, Some(g)) => Some(cmd::repl::NewChar {
+                    gamemode: g,
+                    campaigns: campaign,
+                    name,
+                }),
+                _ => None,
+            };
             cmd::repl::repl(o, file.as_deref(), n)
         }
         Command::Char {

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Jeff Garzik"]
-description = "pcgtools: tools for reading PCgen PCC and LST data files"
+description = "Read, query, edit and write PCGen data and character files"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

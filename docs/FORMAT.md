@@ -18,6 +18,9 @@ Contents:
 8. [PCG character files](#8-pcg-character-files)
 9. [Derived values](#9-derived-values)
 
+Appendices: [A. A complete small example](#appendix-a-a-complete-small-example),
+[B. Tag catalog](#appendix-b-tag-catalog)
+
 Conventions: `<TAB>` is a horizontal tab (U+0009). Grammar fragments use
 EBNF with `|` for alternation, `[ ]` for optional, and `{ }` for
 zero-or-more repetition. Literal text is quoted.
@@ -862,3 +865,103 @@ bonuses once per time.
 | armor class of a type | per the game mode's `ACTYPE`: add the `COMBAT.AC` bonuses of the listed types (`TOTAL` means all), subtract the removed ones |
 | skill total | ranks + key stat modifier + `SKILL.name`, `SKILL.STAT.abb`, `SKILL.TYPE.t`, `SKILL.LIST`, `SKILL.ALL` + class/cross-class bonuses + armor check penalty for `ACHECK:YES` skills |
 | ranks | bought ranks + `SKILLRANK.name`, capped at the experience table's class or cross-class maximum for the character's level |
+
+---
+
+## Appendix A. A complete small example
+
+A tiny data set, invented for illustration (TABs shown as `<TAB>`).
+
+`data/clockwork/clockwork.pcc`:
+
+```
+CAMPAIGN:Clockwork Companions
+KEY:Clockwork
+GAMEMODE:Testmode
+BOOKTYPE:Supplement
+RANK:3
+SOURCELONG:Clockwork Companions
+SOURCESHORT:CC
+STAT:cc_stats.lst
+CLASS:cc_classes.lst
+ABILITY:cc_feats.lst
+EQUIPMENT:cc_equip.lst|(EXCLUDE:Broken Gear)
+PCC:@/common/common.pcc
+```
+
+`cc_stats.lst`:
+
+```
+SOURCELONG:Clockwork Companions<TAB>SOURCESHORT:CC
+Might<TAB>ABB:MGT<TAB>STATMOD:floor(SCORE/2)-5<TAB>BONUS:HP|BONUS|MGT
+Grace<TAB>ABB:GRC<TAB>STATMOD:floor(SCORE/2)-5<TAB>BONUS:COMBAT|AC|10|TYPE=Base<TAB>BONUS:COMBAT|AC|GRC|TYPE=Ability
+```
+
+`cc_classes.lst`:
+
+```
+SOURCELONG:Clockwork Companions<TAB>SOURCESHORT:CC
+CLASS:Tinker<TAB>HD:6<TAB>TYPE:Base.PC<TAB>MAXLEVEL:20<TAB>BONUS:COMBAT|BASEAB|classlevel()*3/4|TYPE=Base.REPLACE
+CLASS:Tinker<TAB>CSKILL:Tinkering|Climbing
+1<TAB>ABILITY:FEAT|AUTOMATIC|Steady Hands
+3<TAB>ADD:FEAT|1
+```
+
+`cc_feats.lst`:
+
+```
+SOURCELONG:Clockwork Companions<TAB>SOURCESHORT:CC
+Steady Hands<TAB>CATEGORY:FEAT<TAB>TYPE:General<TAB>BONUS:SKILL|Tinkering|2
+Quick Step<TAB>CATEGORY:FEAT<TAB>KEY:QuickStep<TAB>PREABILITY:1,CATEGORY=FEAT,Steady Hands
+CATEGORY=FEAT|Steady Hands.MOD<TAB>DESC:Your hands never shake.
+```
+
+`cc_equip.lst`:
+
+```
+SOURCELONG:Clockwork Companions<TAB>SOURCESHORT:CC
+Tin Shield<TAB>TYPE:Shield<TAB>COST:5<TAB>WT:5<TAB>ACCHECK:-1<TAB>BONUS:COMBAT|AC|1|TYPE=Shield
+Tin Shield.COPY=Brass Shield<TAB>COST:12
+Broken Gear<TAB>TYPE:Goods
+```
+
+A character using it (`tess.pcg`):
+
+```
+PCGVERSION:2.0
+CAMPAIGN:Clockwork
+VERSION:6.09.00
+GAMEMODE:Testmode
+CHARACTERNAME:Tess Tinkerton
+CITY:Gear&colon;town
+STAT:MGT|SCORE:14
+STAT:GRC|SCORE:12
+CLASS:Tinker|LEVEL:2|SKILLPOOL:0
+CLASSABILITIESLEVEL:Tinker=1|HITPOINTS:6|SKILLSGAINED:4|SKILLSREMAINING:0
+CLASSABILITIESLEVEL:Tinker=2|HITPOINTS:4|SKILLSGAINED:4|SKILLSREMAINING:0
+SKILL:Tinkering|OUTPUTORDER:1|CLASSBOUGHT:[CLASS:Tinker|RANKS:2.0|COST:1|CLASSSKILL:Y]
+ABILITY:FEAT|TYPE:NORMAL|CATEGORY:FEAT|KEY:QuickStep
+EQUIPNAME:Tin Shield|OUTPUTORDER:1|WT:5.0|QUANTITY:1.0
+EQUIPSET:Default Set|ID:0.1
+EQUIPSET:Shield|ID:0.1.1|VALUE:Tin Shield|QUANTITY:1.0
+CALCEQUIPSET:0.1
+```
+
+What a loader derives:
+
+* `Steady Hands` carries the `DESC` added by the `.MOD`; `Brass Shield`
+  exists as a copy of `Tin Shield` with its own cost; `Broken Gear` is
+  excluded by the campaign's filter.
+* Tess has two Tinker levels: base attack bonus 1 (1.5 truncated); hit
+  points (6+2)+(4+2) = 14 with Might 14 (+2); armor class
+  10 + 1 (Grace) + 1 (shield) = 12; she has `Steady Hands` automatically
+  from her first level, which satisfies `Quick Step`'s prerequisite.
+
+## Appendix B. Tag catalog
+
+`pcgtools tags [SCOPE]` lists the tags PCGen recognizes, by scope: a
+file kind (`SPELL`, `CLASS`, ...), a line type (`CLASSLEVEL`,
+`SUBCLASS`), a token family (`PRE`, `BONUS`, `CHOOSE`, `ADD`, `AUTO`),
+`GLOBAL` (valid on every object), `PCC`, or a game mode file
+(`GAMEMODE.MISCINFO`, ...). Deprecated tags are marked. The catalog
+is generated from PCGen's sources and lists names and validity only.

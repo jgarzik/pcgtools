@@ -76,3 +76,15 @@ fn corpus_modes() {
     unknown.dedup();
     eprintln!("GAMEMODE values with no game mode: {:?}", unknown);
 }
+
+#[test]
+fn load_only_the_named_mode() {
+    let dir = common::fixture("mini/system/gameModes");
+    let (by_key, _) = GameModes::load_named(&dir, "testmode");
+    assert_eq!(by_key.map(|m| m.key), Some("Testmode".to_string()));
+    // an allowed alias finds the mode as well
+    let (by_alias, _) = GameModes::load_named(&dir, "TM");
+    assert_eq!(by_alias.map(|m| m.key), Some("Testmode".to_string()));
+    let (none, _) = GameModes::load_named(&dir, "Nomode");
+    assert!(none.is_none());
+}

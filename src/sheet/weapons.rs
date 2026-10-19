@@ -385,7 +385,9 @@ fn nonproficient_armor_penalty(s: &SheetCtx) -> i64 {
             .and_then(|v| v.split_once('|'))
             .map(|(_, n)| n.to_string())
             .unwrap_or_else(|| it.base.name.clone());
-        if armor_proficient(s, kind, grants, &prof, it) {
+        let shield = kind == FileKind::ShieldProf;
+        let _ = grants;
+        if crate::rules::profs::armor_proficient(c, shield, &prof, &it.types(c)) {
             continue;
         }
         let acp = num(it.data.get("ACCHECK")) + it.bonus(c, "EQMARMOR", "ACCHECK", true);
@@ -396,50 +398,6 @@ fn nonproficient_armor_penalty(s: &SheetCtx) -> i64 {
 
 fn num(v: Option<&str>) -> f64 {
     v.and_then(|x| x.trim().parse().ok()).unwrap_or(0.0)
-}
-
-/// Is the character proficient with a worn armor or shield: granted
-/// its proficiency by name, or every item of one of its types
-/// (AUTO:ARMORPROF|ARMORTYPE=x, AUTO:SHIELDPROF|SHIELDTYPE=x)?
-fn armor_proficient(s: &SheetCtx, kind: FileKind, grants: &str, prof: &str, item: &EqItem) -> bool {
-    let c = &s.calc;
-    let obj = c.ds.get(kind, prof);
-    let prefix = format!("{}|", grants);
-    for src in &c.sources {
-        for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
-            let Some(rest) = t.value.strip_prefix(&prefix) else {
-                continue;
-            };
-            let items: Vec<&str> = rest.split('|').collect();
-            let ok = items
-                .iter()
-                .filter(|i| {
-                    crate::token::pre::Prereq::is_pre_tag(i.split(':').next().unwrap_or(""))
-                        || i.starts_with("!PRE")
-                })
-                .filter_map(|i| crate::token::pre::Prereq::parse(i).ok())
-                .all(|p| c.passes(&p, Some(src)));
-            if !ok {
-                continue;
-            }
-            for i in items {
-                if let Some(ty) = i
-                    .strip_prefix("ARMORTYPE=")
-                    .or_else(|| i.strip_prefix("SHIELDTYPE="))
-                    .or_else(|| i.strip_prefix("TYPE="))
-                {
-                    if item.is_type(c, ty) || obj.is_some_and(|o| o.is_type(ty)) {
-                        return true;
-                    }
-                } else if i.eq_ignore_ascii_case(prof)
-                    || i == "%LIST" && src.choices.iter().any(|x| x.eq_ignore_ascii_case(prof))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// An item's own WEAPON bonus, with temporary bonuses on a copy.
@@ -700,7 +658,8 @@ fn damage(
         hands = 1;
     }
     let mut dice = item_dice(s, w);
-    if w.is("Unarmed") {
+    // monk-style unarmed weapons use unarmed strike damage
+    if w.is("Unarmed") && w.is("Monk") {
         dice = unarmed_dice(s);
     }
     let ranged = distance.is_some();

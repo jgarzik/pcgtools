@@ -136,6 +136,9 @@ pub struct Calc<'a> {
     vars: HashMap<String, f64>,
     defined: HashSet<String>,
     unknown: RefCell<BTreeMap<String, usize>>,
+    /// set while proficiencies are worked out, so prerequisites on
+    /// proficiency grants do not ask for proficiencies again
+    in_profs: std::cell::Cell<bool>,
     class_skills: HashSet<String>,
     cross_class_skills: HashSet<String>,
     rules: HashMap<String, bool>,
@@ -192,6 +195,7 @@ impl<'a> Calc<'a> {
             vars: HashMap::new(),
             defined: HashSet::new(),
             unknown: RefCell::new(BTreeMap::new()),
+            in_profs: std::cell::Cell::new(false),
             class_skills: HashSet::new(),
             cross_class_skills: HashSet::new(),
             rules: HashMap::new(),
@@ -1560,6 +1564,14 @@ impl<'a> Calc<'a> {
             .or_else(|| self.ds.get(FileKind::Race, &self.migrate("RACE", &r)))
     }
 
+    /// Index of a size key among the sizes, smallest first.
+    pub fn size_index_of(&self, key: &str) -> Option<i64> {
+        self.size_list()
+            .iter()
+            .position(|o| o.key.eq_ignore_ascii_case(key))
+            .map(|i| i as i64)
+    }
+
     /// Size categories in order, smallest first.
     fn size_list(&self) -> Vec<&'a Object> {
         let mut v: Vec<&Object> = self.ds.objects(FileKind::Size).iter().collect();
@@ -2385,7 +2397,58 @@ impl<'a> Calc<'a> {
                     .unwrap_or_else(|| "PC".into());
                 a.eq_ignore_ascii_case(&t)
             }),
-            "ARMORTYPE" | "PROFWITHARMOR" | "PROFWITHSHIELD" | "WEAPONPROF" => true,
+            "WEAPONPROF" | "PROFWITHARMOR" | "PROFWITHSHIELD" => {
+                if self.in_profs.get() {
+                    return true;
+                }
+                self.in_profs.set(true);
+                let r = match kind.as_str() {
+                    "WEAPONPROF" => {
+                        let keys = super::profs::weapon_prof_keys(self);
+                        self.count_items(args, |a| {
+                            if let Some(t) =
+                                a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE="))
+                            {
+                                keys.iter().any(|k| {
+                                    self.ds
+                                        .get(FileKind::WeaponProf, k)
+                                        .is_some_and(|o| o.is_type(t))
+                                })
+                            } else if a.eq_ignore_ascii_case("DEITYWEAPON") {
+                                self.deity().is_some_and(|d| {
+                                    d.values("DEITYWEAP")
+                                        .flat_map(|v| v.split('|'))
+                                        .any(|w| keys.iter().any(|k| k.eq_ignore_ascii_case(w)))
+                                })
+                            } else {
+                                keys.iter().any(|k| k.eq_ignore_ascii_case(a))
+                            }
+                        })
+                    }
+                    other => {
+                        let shield = other == "PROFWITHSHIELD";
+                        let (names, types) = super::profs::armor_grants(self, shield);
+                        self.count_items(args, |a| {
+                            match a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE=")) {
+                                Some(t) => types.iter().any(|x| x.eq_ignore_ascii_case(t)),
+                                None => names.iter().any(|x| x.eq_ignore_ascii_case(a)),
+                            }
+                        })
+                    }
+                };
+                self.in_profs.set(false);
+                r
+            }
+            // PREARMORTYPE: wearing armor of a type
+            "ARMORTYPE" => self.count_items(args, |a| {
+                let t = a
+                    .strip_prefix("TYPE.")
+                    .or_else(|| a.strip_prefix("TYPE="))
+                    .unwrap_or(a);
+                self.items.iter().any(|it| {
+                    it.obj.is_type("Armor") && (t.eq_ignore_ascii_case("ANY") || it.obj.is_type(t))
+                })
+            }),
             // things that cannot be judged here pass
             other => {
                 *self

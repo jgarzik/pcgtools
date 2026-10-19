@@ -12,5 +12,6 @@ pub mod bonus;
 pub mod calc;
 pub mod equip;
 pub mod eval;
+pub mod profs;
 pub mod spells;
 pub mod vars;

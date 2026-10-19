@@ -378,12 +378,7 @@ impl<'a> EqItem<'a> {
             "ALTPLUSTOTAL" => Some(self.plus_total(&self.alt_eqmods)),
             "BASEQTY" => Some(self.base_qty()),
             "PC.SIZE.INT" => Some(calc.size_index() as f64),
-            "SIZE" | "EQUIP.SIZE.INT" => calc
-                .ds
-                .objects(FileKind::Size)
-                .iter()
-                .position(|o| o.key.eq_ignore_ascii_case(&self.size))
-                .map(|i| i as f64),
+            "SIZE" | "EQUIP.SIZE.INT" => calc.size_index_of(&self.size).map(|i| i as f64),
             _ => None,
         }
     }

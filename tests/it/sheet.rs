@@ -330,3 +330,34 @@ fn unarmed_strike_without_wield_categories() {
     assert_eq!(at(&m, "weapons[0]/unarmed[0]/damage[0]"), "");
     assert_eq!(at(&m, "weapons[0]/unarmed[0]/critical[0]"), "20/x2");
 }
+
+/// A new character in the fixture game mode.
+fn nova() -> pcgtools::repl::Session {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs)
+}
+
+fn sheet_of(s: &pcgtools::repl::Session) -> HashMap<String, String> {
+    sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect()
+}
+
+#[test]
+fn unarmed_damage_from_a_single_die() {
+    let mut s = nova();
+    let unarmed = |s: &pcgtools::repl::Session| {
+        let m = sheet_of(s);
+        (
+            at(&m, "weapons[0]/unarmed[0]/total[0]").to_string(),
+            at(&m, "weapons[0]/unarmed[0]/damage[0]").to_string(),
+        )
+    };
+    // not proficient with it in this game mode
+    assert_eq!(unarmed(&s), ("-4".into(), "1d3".into()));
+    // one UDAM value holds at every size
+    s.exec("feat add \"Iron Fist\"").unwrap();
+    assert_eq!(unarmed(&s).1, "1d8");
+}

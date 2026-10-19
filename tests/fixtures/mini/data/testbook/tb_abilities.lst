@@ -6,3 +6,4 @@ Quick Step	CATEGORY:FEAT	KEY:QuickStep	TYPE:General	PREABILITY:1,CATEGORY=FEAT,S
 CATEGORY=FEAT|Steady Hands.MOD	DESC:Hands do not shake.
 CATEGORY=FEAT|QuickStep.COPY=Quicker Step	TYPE:.CLEAR	TYPE:Advanced
 CATEGORY=FEAT|Loud Voice.MOD	DESC:filtered target, no error
+Iron Fist	CATEGORY:FEAT	TYPE:General	UDAM:1d8

@@ -789,9 +789,20 @@ fn damage(
     }
 }
 
+/// The die of a UDAM list for a size: one value serves every size,
+/// otherwise the list has one value per size.
+fn udam_at(list: &str, size: usize) -> Option<&str> {
+    let v: Vec<&str> = list.split(',').collect();
+    if v.len() == 1 {
+        Some(v[0])
+    } else {
+        v.get(size).copied()
+    }
+}
+
 /// Unarmed damage dice: the best of 1d2, the classes' unarmed damage
 /// (UDAM on level lines), unarmed damage from the race, templates and
-/// abilities (UDAM lists by size), and the race's (1d3 at medium size,
+/// abilities (UDAM), and the race's (1d3 at medium size,
 /// scaled by size).
 fn unarmed_dice(s: &SheetCtx) -> String {
     let c = &s.calc;
@@ -847,8 +858,7 @@ fn unarmed_dice(s: &SheetCtx) -> String {
             .filter_map(|sl| sl.tokens.iter().find(|t| t.tag == "UDAM"))
             .next_back();
         if let Some(t) = line {
-            let list: Vec<&str> = t.value.split(',').collect();
-            if let Some(d) = list.get(size_at) {
+            if let Some(d) = udam_at(&t.value, size_at) {
                 consider(d);
             }
         }
@@ -857,11 +867,8 @@ fn unarmed_dice(s: &SheetCtx) -> String {
         if src.kind == crate::rules::calc::SrcKind::Class {
             continue;
         }
-        if let Some(u) = src.obj.get("UDAM") {
-            let list: Vec<&str> = u.split(',').collect();
-            if let Some(d) = list.get(size_at) {
-                consider(d);
-            }
+        if let Some(d) = src.obj.get("UDAM").and_then(|u| udam_at(u, size_at)) {
+            consider(d);
         }
     }
     let race_die = adjust_dice(s, "1d3", pos(&race_size) - pos(&medium));

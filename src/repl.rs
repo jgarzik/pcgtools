@@ -106,6 +106,10 @@ Commands (names may be quoted; most accept --force to skip checks):
                                with metamagic feats; needs a free slot
   spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]
                                remove a prepared copy
+  spell scribe CLASS SPELL BOOK [--level N] | spell unscribe CLASS SPELL BOOK
+                               write a known spell in a spellbook the
+                               character has, if it has the pages; or
+                               remove a copy
   spellbook add NAME | spellbook rm NAME | spellbook ls
                                spell lists and books
   follower add NAME TYPE RACE [FILE]     add a follower or companion
@@ -874,6 +878,7 @@ impl Session {
                     changed(self, format!("removed {}", spell))
                 }
                 "prep" | "unprep" => self.cmd_prep(&w, force, changed),
+                "scribe" | "unscribe" => self.cmd_scribe(&w, force, changed),
                 other => Err(Error::Other(format!("unknown spell command '{}'", other))),
             },
             "spellbook" => self.cmd_spellbook(&w, changed),
@@ -2195,10 +2200,12 @@ impl Session {
                     .books
                     .iter()
                     .map(|b| {
+                        let item = sp.item_books.iter().find(|(n, _)| n == b).map(|x| x.1);
                         let kind = match types.iter().find(|(n, _)| n == b).map(|(_, t)| *t) {
                             _ if b == spells::KNOWN_BOOK => 1,
                             _ if b == spells::INNATE_BOOK => 4,
                             Some(t) => t,
+                            None if item.is_some() => 3,
                             None => 2,
                         };
                         let kind = match kind {
@@ -2215,7 +2222,14 @@ impl Session {
                             .filter(|i| i.book == *b)
                             .map(|i| i.times.max(1))
                             .sum();
-                        format!("{}\t{}\t{}", b, kind, count)
+                        let pages = item.map_or(String::new(), |o| {
+                            format!(
+                                "\t{}/{} pages",
+                                self.ch.spell_book_pages(b),
+                                spells::book_pages(o)
+                            )
+                        });
+                        format!("{}\t{}\t{}{}", b, kind, count, pages)
                     })
                     .collect();
                 Ok(Outcome::Text(out.join("\n")))
@@ -2240,6 +2254,12 @@ impl Session {
                 let name = name()?;
                 if fixed(name) {
                     return Err(Error::Other(format!("{} cannot be removed", name)));
+                }
+                if self.item_book(name).is_some() {
+                    return Err(Error::Other(format!(
+                        "{} is an item the character has; it stays a book until discarded",
+                        name
+                    )));
                 }
                 self.checkpoint();
                 if !self.ch.remove_spell_book(name) {
@@ -2344,6 +2364,12 @@ impl Session {
             )));
         }
         let books = self.ch.spell_books();
+        if self.item_book(&book).is_some() || books.iter().any(|(b, t)| *b == book && *t == 3) {
+            return Err(Error::Other(format!(
+                "{} is a spellbook; use 'spell scribe'",
+                book
+            )));
+        }
         if !books.iter().any(|(b, _)| *b == book) {
             self.check_book_name(&book)?;
         }
@@ -2468,6 +2494,148 @@ impl Session {
             format!(
                 "{}prepared {} (level {}) in {}, {} in all",
                 warn, spell, copy.level, book, times
+            ),
+        )
+    }
+
+    /// The item a spellbook of the character is.
+    fn item_book(&self, name: &str) -> Option<&Object> {
+        let c = self.calc();
+        let sp = spells::Spells::new(&c);
+        sp.item_books
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, o)| *o)
+    }
+
+    /// `spell scribe` and `spell unscribe`.
+    fn cmd_scribe(
+        &mut self,
+        w: &[&str],
+        force: bool,
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let mut pos: Vec<&str> = Vec::new();
+        let mut level: Option<i64> = None;
+        let mut it = w.iter().copied();
+        while let Some(x) = it.next() {
+            match x {
+                "--level" => {
+                    let v = it
+                        .next()
+                        .ok_or_else(|| Error::Other("--level needs a value".into()))?;
+                    level = Some(
+                        v.parse()
+                            .map_err(|_| Error::Other(format!("bad spell level '{}'", v)))?,
+                    );
+                }
+                o if o.starts_with("--") => {
+                    return Err(Error::Other(format!("unknown option {}", o)));
+                }
+                _ => pos.push(x),
+            }
+        }
+        let arg = |i: usize| {
+            pos.get(i)
+                .copied()
+                .ok_or_else(|| Error::Other("missing argument (try 'help')".into()))
+        };
+        let cls = self.find(FileKind::Class, arg(2)?)?.key.clone();
+        if !self
+            .ch
+            .classes()
+            .iter()
+            .any(|c| c.name.eq_ignore_ascii_case(&cls))
+        {
+            return Err(Error::Other(format!("the character has no {} levels", cls)));
+        }
+        let spell = self.find(FileKind::Spell, arg(3)?)?.key.clone();
+        let book = arg(4)?.to_string();
+        let Some(item) = self.item_book(&book) else {
+            return Err(Error::Other(format!(
+                "the character has no spellbook named {}",
+                book
+            )));
+        };
+        let capacity = spells::book_pages(item);
+        if arg(1)? == "unscribe" {
+            self.checkpoint();
+            if !self.ch.remove_spell_copy(&spell, &cls, Some(&book), None) {
+                self.undo.pop();
+                return Err(Error::Other(format!("{} is not in {}", spell, book)));
+            }
+            return changed(self, format!("removed a copy of {} from {}", spell, book));
+        }
+        let (copy, warn) = {
+            let mut c = self.calc();
+            c.run();
+            let ds = &self.ctx.dataset;
+            let cls_obj = ds.get(FileKind::Class, &cls).unwrap();
+            let sp_obj = ds.get(FileKind::Spell, &spell).unwrap();
+            let sps = spells::Spells::new(&c);
+            let base = level.or_else(|| {
+                sps.class_lists(&c, cls_obj)
+                    .iter()
+                    .flat_map(|l| sps.levels_on('C', l, sp_obj))
+                    .min()
+            });
+            let Some(base) = base else {
+                return Err(Error::Other(format!(
+                    "{} is not on the {} list; give a level",
+                    spell, cls
+                )));
+            };
+            let known = sps.caster_index(cls_obj).is_some_and(|ci| {
+                sps.by_caster[ci].iter().any(|cs| {
+                    std::ptr::eq(cs.spell, sp_obj)
+                        && cs.owner == spells::Owner::Class(cls_obj)
+                        && cs.infos.iter().any(|i| i.book == spells::KNOWN_BOOK)
+                })
+            });
+            let mut warn = String::new();
+            let mut fail = |msg: String| -> Result<()> {
+                if force {
+                    warn.push_str(&format!("warning: {}\n", msg));
+                    Ok(())
+                } else {
+                    Err(Error::Other(format!("{} (use --force to override)", msg)))
+                }
+            };
+            if !known {
+                fail(format!("{} does not know {}", cls, spell))?;
+            }
+            let pages = spells::page_cost(&c, item, base);
+            let used = self.ch.spell_book_pages(&book);
+            if used + pages > capacity {
+                fail(format!(
+                    "not enough pages left in {}: {} of {} used, {} needed",
+                    book, used, capacity, pages
+                ))?;
+            }
+            (
+                SpellCopy {
+                    spell: spell.clone(),
+                    class: cls.clone(),
+                    book: book.clone(),
+                    level: base,
+                    feats: Vec::new(),
+                    domain: None,
+                    pages,
+                },
+                warn,
+            )
+        };
+        self.checkpoint();
+        // recorded before its spells, so PCGen keeps it a spellbook
+        if self.ch.spell_books().iter().all(|(b, _)| *b != book) {
+            self.ch.add_spell_book(&book, 3);
+        }
+        let times = self.ch.add_spell_copy(&copy, 1);
+        changed(
+            self,
+            format!(
+                "{}scribed {} (level {}, {} pages) in {}, {} in all",
+                warn, spell, copy.level, copy.pages, book, times
             ),
         )
     }

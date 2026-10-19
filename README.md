@@ -150,6 +150,7 @@ Commands (`help` in the editor lists them):
     spell add CLASS SPELL [LEVEL] [BOOK] | spell rm CLASS SPELL [BOOK]
     spell prep CLASS SPELL [LIST] [--meta FEAT[,FEAT]] [--level N] [--domain D]
     spell unprep CLASS SPELL [LIST] [--meta FEAT[,FEAT]]
+    spell scribe CLASS SPELL BOOK [--level N] | spell unscribe CLASS SPELL BOOK
     spellbook add NAME | spellbook rm NAME | spellbook ls
     follower add NAME TYPE RACE [FILE] | follower rm NAME | follower ls
     undo | save [PATH] | quit
@@ -161,7 +162,8 @@ their category's pool (bonus pools, the race's starting feats and the
 game mode's feat schedule); skill ranks are capped at the level
 maximum and paid for with the class's skill points; a spell is
 prepared only if it is known and a slot of its level (raised by any
-metamagic feats it is prepared with) is free. `info` shows the
+metamagic feats it is prepared with) is free, and written in a
+spellbook item only if the book has the pages left. `info` shows the
 pools and skill points left. A class level that offers choices
 (`ADD:` tokens granting spellcasting class levels, abilities, class
 skills or languages) takes them from `--choose`, in order; a choice

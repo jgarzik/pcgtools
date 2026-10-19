@@ -910,6 +910,51 @@ fn preparing_spells() {
 }
 
 #[test]
+fn scribing_spells() {
+    let mut s = sage();
+    let e = err(&mut s, "spell scribe Sage Ember Notebook");
+    assert!(e.contains("no spellbook named Notebook"), "{}", e);
+    ok(&mut s, "equip add Notebook");
+    // the item's pages: max(2*SPELLLEVEL,1) of its 10 for level 1
+    ok(&mut s, "spell scribe Sage Ember Notebook");
+    let text = pcg_text(&s);
+    assert!(text.contains("SPELLBOOK:Notebook|TYPE:3\n"), "{}", text);
+    assert!(
+        text.contains(
+            "SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Notebook|SPELLLEVEL:1|SPELLNUMPAGES:2|SOURCE:[TYPE:CLASS|NAME:Sage]\n"
+        ),
+        "{}",
+        text
+    );
+    let ls = ok(&mut s, "spellbook ls");
+    assert!(
+        ls.ends_with("\nNotebook\tspellbook\t1\t2/10 pages"),
+        "{}",
+        ls
+    );
+    for _ in 0..4 {
+        ok(&mut s, "spell scribe Sage Ember Notebook");
+    }
+    assert!(
+        pcg_text(&s).contains("|TIMES:5|CLASS:Sage|BOOK:Notebook|SPELLLEVEL:1|SPELLNUMPAGES:10|")
+    );
+    let e = err(&mut s, "spell scribe Sage Ember Notebook");
+    assert!(e.contains("not enough pages"), "{}", e);
+    ok(&mut s, "spell unscribe Sage Ember Notebook");
+    assert!(
+        pcg_text(&s).contains("|TIMES:4|CLASS:Sage|BOOK:Notebook|SPELLLEVEL:1|SPELLNUMPAGES:8|")
+    );
+    // spells are scribed only in spellbooks, and prepared only in lists
+    let e = err(&mut s, "spell scribe Sage Ember \"Prepared Spells\"");
+    assert!(e.contains("no spellbook named"), "{}", e);
+    let e = err(&mut s, "spell prep Sage Ember Notebook");
+    assert!(e.contains("is a spellbook"), "{}", e);
+    assert!(err(&mut s, "spell scribe Sage Mend Notebook").contains("does not know"));
+    // the item keeps its book
+    assert!(err(&mut s, "spellbook rm Notebook").contains("item"));
+}
+
+#[test]
 fn preparing_spells_with_metamagic() {
     let mut s = sage();
     // third level: one level-2 slot, none of level 3

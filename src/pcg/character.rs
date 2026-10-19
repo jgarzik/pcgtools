@@ -1300,6 +1300,15 @@ impl Character {
             .collect()
     }
 
+    /// Pages the spells written in a book take (their SPELLNUMPAGES).
+    pub fn spell_book_pages(&self, book: &str) -> i64 {
+        self.pcg
+            .lines_tagged("SPELLNAME")
+            .filter(|l| l.text("BOOK").as_deref() == Some(book))
+            .filter_map(|l| num::<i64>(l.text("SPELLNUMPAGES")))
+            .sum()
+    }
+
     /// Record a spell book or list of a type (see [`Self::spell_books`]).
     pub fn add_spell_book(&mut self, name: &str, kind: i64) {
         self.insert_ordered(

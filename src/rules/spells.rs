@@ -1204,6 +1204,23 @@ pub fn caster_level(calc: &Calc, sp: &Spells, cs: &CharSpell) -> i64 {
     }
 }
 
+/// Pages a spellbook item has (NUMPAGES).
+pub fn book_pages(item: &Object) -> i64 {
+    item.get("NUMPAGES")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Pages a spell of a level takes in a spellbook item: its PAGEUSAGE
+/// formula, with SPELLLEVEL the spell's level (none without one).
+pub fn page_cost(calc: &Calc, item: &Object, level: i64) -> i64 {
+    item.get("PAGEUSAGE").map_or(0, |f| {
+        calc.eval_with(f, &|n| {
+            n.eq_ignore_ascii_case("SPELLLEVEL").then_some(level as f64)
+        }) as i64
+    })
+}
+
 /// A metamagic feat by key.
 pub fn metamagic_feat<'a>(calc: &Calc<'a>, key: &str) -> Option<&'a Object> {
     calc.ds.get_in(FileKind::Ability, "FEAT", key)

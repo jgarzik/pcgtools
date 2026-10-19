@@ -134,6 +134,7 @@ Commands (`help` in the editor lists them):
     info | stats [-v] | explain CATEGORY.TARGET | vars [SCOPE]
     ls KIND [GLOB] [COND...] | show KIND KEY | prereq KIND KEY
     set stat ABB SCORE | set xp N | set align ABB | set FIELD VALUE
+    set gold N|+N|-N | set debt on|off
     stats buy [METHOD] | stats roll [METHOD] [--seed N] | stats same SCORE
     stats assign SCORE... | stats method
     race KEY | deity KEY|none | domain add KEY
@@ -145,6 +146,7 @@ Commands (`help` in the editor lists them):
     lang add KEY | template add KEY | kit apply KEY
     equip add NAME [QTY] | equip rm NAME | equip wear NAME [LOCATION] | equip unwear NAME
     equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
+    equip buy NAME [QTY] | equip sell NAME [QTY|all]
     spell add CLASS SPELL [LEVEL] [BOOK] | spell rm CLASS SPELL [BOOK]
     follower add NAME TYPE RACE [FILE] | follower rm NAME | follower ls
     undo | save [PATH] | quit
@@ -166,6 +168,13 @@ it. A level that brings a stat increase (`BONUSSTATLEVELSTARTINTERVAL`)
 takes the stat to raise from `--stat`; the increase, like any change
 to a score after the first level, is recorded with the level, and
 `class rm` takes it back. Scores must lie in the stat's `STATRANGE`.
+`equip buy` pays the item's price from the character's gold, refusing
+to go into debt unless `set debt on`; `equip sell` refunds half the
+price (all of it for coins, gems and trade goods), PCGen's default
+rates. `equip add` and `equip rm` cost and refund nothing. A kit adds
+its funds and pays for its gear as PCGen does: at its `EQUIPBUY`
+rate, as much as the funds allow, or once at its `TOTALCOST`; lines
+whose prerequisites fail are skipped.
 `--force` overrides the checks. After
 each change the editor shows the updated level, attack bonus, hit
 points, armor class and saves.

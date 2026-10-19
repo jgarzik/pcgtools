@@ -653,6 +653,99 @@ fn stat_edits_after_levels_are_recorded() {
 }
 
 #[test]
+fn gold_buying_and_selling() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "set gold 100");
+    assert_eq!(lines(&s, "MONEY"), ["MONEY:100"]);
+    ok(&mut s, "set gold +25.5");
+    ok(&mut s, "set gold -0.5");
+    assert_eq!(lines(&s, "MONEY"), ["MONEY:125"]);
+    assert!(err(&mut s, "set gold lots").contains("amount"));
+
+    // buying pays the full price
+    ok(&mut s, "equip buy \"Tin Shield\" 2");
+    assert_eq!(s.ch.gold(), 115.0);
+    assert_eq!(s.ch.equipment()[0].quantity, 2.0);
+    let e = err(&mut s, "equip buy \"Great Axe\" 10");
+    assert!(e.contains("200") && e.contains("115"), "{}", e);
+    // in debt only when allowed (or forced)
+    ok(&mut s, "set debt on");
+    assert_eq!(lines(&s, "ALLOWDEBT"), ["ALLOWDEBT:Y"]);
+    ok(&mut s, "equip buy \"Great Axe\" 10");
+    assert_eq!(s.ch.gold(), -85.0);
+    ok(&mut s, "undo");
+    ok(&mut s, "undo");
+    ok(&mut s, "equip buy \"Great Axe\" 10 --force");
+    assert_eq!(s.ch.gold(), -85.0);
+    ok(&mut s, "undo");
+    assert!(info_line(&mut s, "gold:").contains("115 gp"));
+
+    // selling refunds half, a gem all of its price
+    ok(&mut s, "equip sell \"Tin Shield\"");
+    assert_eq!(s.ch.gold(), 117.5);
+    assert_eq!(s.ch.equipment()[0].quantity, 1.0);
+    ok(&mut s, "equip wear \"Tin Shield\"");
+    ok(&mut s, "equip sell \"Tin Shield\" all");
+    assert_eq!(s.ch.gold(), 120.0);
+    assert!(s.ch.equipment().is_empty() && s.ch.equipped().is_empty());
+    ok(&mut s, "equip buy Ruby");
+    ok(&mut s, "equip sell Ruby");
+    assert_eq!(s.ch.gold(), 120.0);
+    assert!(err(&mut s, "equip sell Ruby").contains("has no"));
+    // a free addition costs nothing
+    ok(&mut s, "equip add Ruby");
+    assert_eq!(s.ch.gold(), 120.0);
+}
+
+#[test]
+fn kits_bring_funds_and_pay_for_gear() {
+    let kit = |name: &str| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        let out = ok(&mut s, &format!("kit apply \"{}\"", name));
+        let gear: Vec<(String, f64)> =
+            s.ch.equipment()
+                .iter()
+                .map(|e| (e.name.clone(), e.quantity))
+                .collect();
+        (s.ch.gold(), gear, lines(&s, "KIT"), out)
+    };
+    // funds first, then two spoons at 1 each
+    let (gold, gear, kits, _) = kit("Cook Kit");
+    assert_eq!(gold, 8.0);
+    assert_eq!(gear, [("Wooden Spoon".to_string(), 2.0)]);
+    assert_eq!(kits, ["KIT:Cook Kit"]);
+    // a line's prerequisites decide whether it applies
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "kit apply \"Cook Kit\"");
+    assert_eq!(s.ch.gold(), 108.0);
+    // 25 funds buy one of two axes at 20
+    let (gold, gear, _, out) = kit("Axe Kit");
+    assert_eq!(gold, 5.0);
+    assert_eq!(gear, [("Great Axe".to_string(), 1.0)]);
+    assert!(out.contains("could not buy 1 Great Axe"), "{}", out);
+    // free gear
+    let (gold, gear, _, _) = kit("Free Kit");
+    assert_eq!(gold, 0.0);
+    assert_eq!(gear.len(), 1);
+    // one price for the whole kit, even into debt; applied at once,
+    // so not recorded
+    let (gold, gear, kits, _) = kit("Pricey Kit");
+    assert_eq!(gold, -30.0);
+    assert_eq!(gear.len(), 1);
+    assert!(kits.is_empty());
+}
+
+/// The line of `info` starting with `label`.
+fn info_line(s: &mut Session, label: &str) -> String {
+    ok(s, "info")
+        .lines()
+        .find(|l| l.trim_start().starts_with(label))
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
 fn new_characters_carry_pcgen_defaults() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     ok(&mut s, "class add Tinker");

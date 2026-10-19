@@ -12,3 +12,4 @@ Tin Pistol	PROFICIENCY:WEAPON|Tin Pistol	TYPE:Weapon.Ranged.Firearm	COST:10	WT:2
 Wool Cloak	TYPE:Goods.Clothing	COST:2	WT:6
 Linen Shirt	TYPE:Goods.Clothing	COST:1	WT:5
 Dented Vest	TYPE:Armor.Light.Suit	COST:5	WT:5	EQMOD:DENT|-1	BONUS:COMBAT|AC|0|TYPE=Armor
+Ruby	TYPE:Gem	COST:50	WT:0

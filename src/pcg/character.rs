@@ -175,6 +175,19 @@ fn trim_float(v: f64) -> String {
     }
 }
 
+/// An amount of money as saved: a plain decimal without trailing zeros
+/// (rounded to a ten-thousandth).
+pub fn money_text(v: f64) -> String {
+    let r = (v * 10000.0).round() / 10000.0;
+    let s = format!("{:.4}", r);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".into()
+    } else {
+        s.to_string()
+    }
+}
+
 fn num<T: std::str::FromStr>(e: Option<String>) -> Option<T> {
     e.and_then(|s| s.trim().parse().ok())
 }
@@ -598,6 +611,29 @@ impl Character {
             "POOLPOINTSAVAIL",
             vec![Elem::raw("POOLPOINTSAVAIL", &n.to_string())],
         );
+    }
+
+    /// The character's funds (MONEY).
+    pub fn gold(&self) -> f64 {
+        num(self.pcg.value("MONEY")).unwrap_or(0.0)
+    }
+
+    /// Set the character's funds.
+    pub fn set_gold(&mut self, gold: f64) {
+        self.put("MONEY", vec![Elem::raw("MONEY", &money_text(gold))]);
+    }
+
+    /// A Y/N setting line (ALLOWDEBT, IGNORECOST, AUTORESIZEGEAR): on
+    /// when it ends in Y, else `default` when there is none.
+    pub fn flag(&self, tag: &str, default: bool) -> bool {
+        match self.pcg.value(tag) {
+            Some(v) => v.trim_end().ends_with('Y'),
+            None => default,
+        }
+    }
+
+    pub fn set_flag(&mut self, tag: &str, on: bool) {
+        self.put(tag, vec![Elem::raw(tag, if on { "Y" } else { "N" })]);
     }
 
     /// Record a change to a stat's base score with the latest level
@@ -1046,6 +1082,26 @@ impl Character {
         before != self.pcg.lines.len()
     }
 
+    /// Give up some of an item: all of it (with its places in
+    /// equipment sets) when no more than `qty` is had.  Returns how
+    /// many were given up.
+    pub fn reduce_equipment(&mut self, name: &str, qty: f64) -> f64 {
+        let Some(i) = self.pcg.indices("EQUIPNAME").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text() == name)
+        }) else {
+            return 0.0;
+        };
+        let have = num::<f64>(self.pcg.lines[i].text("QUANTITY")).unwrap_or(1.0);
+        if qty >= have {
+            self.remove_equipment(name);
+            return have;
+        }
+        self.set_elem(i, "QUANTITY", &format!("{:.1}", have - qty));
+        qty
+    }
+
     /// Place an item at a location in the calculation equipment set.
     pub fn equip(&mut self, name: &str, location: &str, qty: f64) {
         let calc = self
@@ -1390,6 +1446,36 @@ DOMAIN:Light|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]\n";
         assert!(c.remove_spell("spark", "Tinker", Some("Gadgets")));
         assert!(!c.remove_spell("Spark", "Tinker", None));
         assert_eq!(c.spells().len(), 1);
+    }
+
+    #[test]
+    fn money_amounts() {
+        assert_eq!(money_text(0.0), "0");
+        assert_eq!(money_text(-0.0), "0");
+        assert_eq!(money_text(473.0), "473");
+        assert_eq!(money_text(480.5), "480.5");
+        assert_eq!(money_text(-202.0), "-202");
+        assert_eq!(money_text(0.1 + 0.2), "0.3");
+        assert_eq!(money_text(12.345678), "12.3457");
+        assert_eq!(money_text(1000000.0), "1000000");
+    }
+
+    #[test]
+    fn gold_flags_and_partial_removal() {
+        let mut c = ch();
+        assert_eq!(c.gold(), 0.0);
+        c.set_gold(12.5);
+        assert_eq!(c.gold(), 12.5);
+        assert!(c.pcg.value("MONEY").is_some_and(|m| m == "12.5"));
+        assert!(!c.flag("ALLOWDEBT", false));
+        assert!(c.flag("AUTORESIZEGEAR", true));
+        c.set_flag("ALLOWDEBT", true);
+        assert!(c.flag("ALLOWDEBT", false));
+        assert_eq!(c.reduce_equipment("Rope", 1.0), 1.0);
+        assert_eq!(c.equipment()[0].quantity, 1.0);
+        assert_eq!(c.reduce_equipment("Shiny Sword", 3.0), 1.0);
+        assert!(c.equipped().is_empty());
+        assert_eq!(c.reduce_equipment("Nothing", 1.0), 0.0);
     }
 
     #[test]

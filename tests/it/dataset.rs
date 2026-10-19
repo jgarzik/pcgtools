@@ -94,7 +94,7 @@ fn objects_and_operations() {
     // kits group their lines
     let kit = ds.get(FileKind::Kit, "Cook Kit").unwrap();
     let tags: Vec<&str> = kit.sublines.iter().map(|s| s.tag.as_str()).collect();
-    assert_eq!(tags, vec!["REGION", "GEAR", "STAT"]);
+    assert_eq!(tags, vec!["REGION", "FUNDS", "FUNDS", "GEAR", "STAT"]);
 
     // included campaign's languages
     assert_eq!(ds.objects(FileKind::Language).len(), 2);

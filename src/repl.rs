@@ -19,15 +19,22 @@ use crate::error::{Error, Result};
 use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
 use crate::pcc::resolve::DataDirs;
-use crate::pcg::character::Character;
+use crate::pcg::character::{money_text, Character};
 use crate::query::Query;
 use crate::rules::calc::{Calc, Sheet};
+use crate::rules::equip::EqItem;
 use crate::rules::statgen::{self, PointBuy, Rng};
 use crate::token::pre::Prereq;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 const MAX_UNDO: usize = 100;
+
+/// PCGen's default rates, in percent of an item's price: buying,
+/// selling, and selling coins, gems and trade goods.
+const BUY_RATE: f64 = 100.0;
+const SELL_RATE: f64 = 50.0;
+const CASH_SELL_RATE: f64 = 100.0;
 
 /// Text fields that `set` may change, by command name.
 const FIELDS: &[(&str, &str)] = &[
@@ -65,6 +72,8 @@ Commands (names may be quoted; most accept --force to skip checks):
                                in stat order
   stats method                 how the scores were made; point costs
   set xp N | set align ABB     experience, alignment
+  set gold N|+N|-N             set or change the character's funds
+  set debt on|off              allow buying into debt
   set FIELD VALUE              name, player, age, gender, city, bio, ...
   race KEY                     set race
   deity KEY | deity none       set or clear deity
@@ -82,6 +91,8 @@ Commands (names may be quoted; most accept --force to skip checks):
   template add KEY             apply a template
   equip add NAME [QTY]         acquire equipment
   equip rm NAME                discard equipment
+  equip buy NAME [QTY]         acquire equipment, paying for it
+  equip sell NAME [QTY|all]    give up equipment for half its price
   equip wear NAME [LOCATION]   equip an item (location defaults by type)
   equip unwear NAME            stop using an item
   equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
@@ -960,6 +971,40 @@ impl Session {
                 self.ch.set_experience(xp);
                 changed(self, format!("experience is now {}", xp))
             }
+            "gold" | "funds" => {
+                let v = need(2)?;
+                let n: f64 = v
+                    .trim_start_matches('+')
+                    .parse()
+                    .map_err(|_| Error::Other(format!("'{}' is not an amount of gold", v)))?;
+                // +N and -N change the funds, N sets them
+                let gold = if v.starts_with(['+', '-']) {
+                    self.ch.gold() + n
+                } else {
+                    n
+                };
+                self.checkpoint();
+                self.ch.set_gold(gold);
+                changed(self, format!("gold is now {}", money_text(gold)))
+            }
+            "debt" => {
+                let on = match need(2)?.to_ascii_lowercase().as_str() {
+                    "on" | "yes" | "y" => true,
+                    "off" | "no" | "n" => false,
+                    other => {
+                        return Err(Error::Other(format!("debt is on or off, not '{}'", other)))
+                    }
+                };
+                self.checkpoint();
+                self.ch.set_flag("ALLOWDEBT", on);
+                changed(
+                    self,
+                    format!(
+                        "buying into debt is {}",
+                        if on { "allowed" } else { "refused" }
+                    ),
+                )
+            }
             "align" | "alignment" => {
                 let a = self.find(FileKind::Alignment, need(2)?)?;
                 let key = a.key.clone();
@@ -977,6 +1022,43 @@ impl Session {
                 changed(self, format!("{} is now '{}'", field, value))
             }
         }
+    }
+
+    /// Price of one of a data item.
+    fn price_of(&self, key: &str) -> f64 {
+        let mut c = self.calc();
+        c.run();
+        match self.ctx.dataset.get(FileKind::Equipment, key) {
+            Some(o) => EqItem::from_data(&c, o).cost(&c),
+            None => 0.0,
+        }
+    }
+
+    /// Price of one of an item the character has, as customized, and
+    /// whether it sells as cash (coins, gems and trade goods).
+    fn owned_price(&self, name: &str) -> (f64, bool) {
+        let mut c = self.calc();
+        c.run();
+        self.ch
+            .pcg
+            .lines_tagged("EQUIPNAME")
+            .find(|l| l.head().is_some_and(|h| h.value_text() == name))
+            .and_then(|l| EqItem::from_pcg(&c, l))
+            .map(|it| {
+                let cash = ["Coin", "Gem", "Trade"].iter().any(|t| it.is_type(&c, t));
+                (it.cost(&c), cash)
+            })
+            .unwrap_or((0.0, false))
+    }
+
+    /// Work out a kit's formula, rolling any dice in it.
+    fn kit_formula(&self, f: &str, rng: &mut Rng) -> f64 {
+        let f = statgen::roll_calls(f, rng);
+        f.trim().parse().unwrap_or_else(|_| {
+            let mut c = self.calc();
+            c.run();
+            c.eval_formula(&f)
+        })
     }
 
     /// Stats whose scores are generated (all but those with
@@ -1366,7 +1448,7 @@ impl Session {
             .get(2)
             .copied()
             .ok_or_else(|| Error::Other("missing item name".into()))?;
-        let resolved = if sub == "add" {
+        let resolved = if sub == "add" || sub == "buy" {
             name.to_string()
         } else {
             self.owned_item(name)
@@ -1380,6 +1462,66 @@ impl Session {
                 self.checkpoint();
                 self.ch.add_equipment(&key, qty);
                 changed(self, format!("acquired {} x{}", key, qty))
+            }
+            "buy" => {
+                let key = self.find(FileKind::Equipment, name)?.key.clone();
+                let qty: f64 = match w.get(3) {
+                    Some(q) => q
+                        .parse()
+                        .ok()
+                        .filter(|q: &f64| *q > 0.0)
+                        .ok_or_else(|| Error::Other(format!("bad quantity '{}'", q)))?,
+                    None => 1.0,
+                };
+                let cost = qty * self.price_of(&key) * BUY_RATE / 100.0;
+                let gold = self.ch.gold();
+                if cost > gold && !self.ch.flag("ALLOWDEBT", false) && !force {
+                    return Err(Error::Other(format!(
+                        "{} x{} costs {}, and the character has {} (use --force, or 'set debt on')",
+                        key,
+                        qty,
+                        money_text(cost),
+                        money_text(gold)
+                    )));
+                }
+                self.checkpoint();
+                self.ch.add_equipment(&key, qty);
+                self.ch.set_gold(gold - cost);
+                changed(
+                    self,
+                    format!("bought {} x{} for {}", key, qty, money_text(cost)),
+                )
+            }
+            "sell" => {
+                let Some(have) = self
+                    .ch
+                    .equipment()
+                    .into_iter()
+                    .find(|e| e.name == name)
+                    .map(|e| e.quantity)
+                else {
+                    return Err(Error::Other(format!("the character has no '{}'", name)));
+                };
+                let qty: f64 = match w.get(3).copied() {
+                    Some("all") => have,
+                    Some(q) => q
+                        .parse()
+                        .ok()
+                        .filter(|q: &f64| *q > 0.0)
+                        .ok_or_else(|| Error::Other(format!("bad quantity '{}'", q)))?,
+                    None => 1.0,
+                };
+                let (price, cash) = self.owned_price(name);
+                let rate = if cash { CASH_SELL_RATE } else { SELL_RATE };
+                self.checkpoint();
+                let sold = self.ch.reduce_equipment(name, qty);
+                let refund = sold * price * rate / 100.0;
+                let gold = self.ch.gold() + refund;
+                self.ch.set_gold(gold);
+                changed(
+                    self,
+                    format!("sold {} x{} for {}", name, sold, money_text(refund)),
+                )
             }
             "rm" | "remove" => {
                 self.checkpoint();
@@ -1635,10 +1777,28 @@ impl Session {
         Ok(())
     }
 
-    /// Apply a starting kit's lines: gear, stats, abilities, skills,
-    /// languages, templates, deity, alignment and class levels.
+    /// Apply a starting kit's lines: funds, gear, stats, abilities,
+    /// skills, languages, templates, deity, alignment and class levels.
+    /// Gear is paid for at the kit's rate (EQUIPBUY, the full price by
+    /// default), as much of it as the funds allow, unless the kit has
+    /// one price (TOTALCOST), paid first.  A kit applied at once
+    /// (APPLY:INSTANT) is not recorded.
     fn apply_kit(&mut self, kit: &Object) -> Result<String> {
         let mut done = Vec::new();
+        let mut short = Vec::new();
+        let mut rng = Rng::from_time();
+        let formula = |v: &str| v.split('|').next().unwrap_or("").to_string();
+        let mut rate = match kit.get("EQUIPBUY") {
+            Some(f) => self.kit_formula(&formula(f), &mut rng),
+            None => BUY_RATE,
+        };
+        if let Some(t) = kit.get("TOTALCOST") {
+            let charge = (self.kit_formula(&formula(t), &mut rng) * BUY_RATE / 100.0).floor();
+            let gold = self.ch.gold();
+            self.ch.set_gold(gold - charge);
+            done.push(format!("paid {}", money_text(charge)));
+            rate = 0.0;
+        }
         for sl in &kit.sublines {
             let val = sl.value.as_str();
             let tok = |t: &str| {
@@ -1647,10 +1807,57 @@ impl Session {
                     .find(|x| x.tag == t)
                     .map(|x| x.value.clone())
             };
+            // a line applies only if the character meets its
+            // prerequisites
+            let prereqs: Vec<Prereq> = sl
+                .tokens
+                .iter()
+                .filter(|t| t.tag.starts_with("PRE") || t.tag.starts_with("!PRE"))
+                .filter_map(|t| Prereq::from_token(&t.tag, &t.value).ok())
+                .collect();
+            if !prereqs.is_empty() {
+                let mut c = self.calc();
+                c.run();
+                if !prereqs.iter().all(|p| c.passes(p, None)) {
+                    continue;
+                }
+            }
             match sl.tag.as_str() {
+                "FUNDS" => {
+                    let n = match tok("QTY") {
+                        Some(f) => self.kit_formula(&f, &mut rng),
+                        None => 0.0,
+                    };
+                    let gold = self.ch.gold();
+                    self.ch.set_gold(gold + n);
+                    done.push(format!("{} {}", money_text(n), val));
+                }
                 "GEAR" => {
-                    let qty: f64 = tok("QTY").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                    let want = match tok("QTY") {
+                        Some(f) => self.kit_formula(&f, &mut rng).floor(),
+                        None => 1.0,
+                    };
                     let key = self.find(FileKind::Equipment, val)?.key.clone();
+                    // as many as the funds pay for (never into debt)
+                    let mut qty = want;
+                    if rate != 0.0 {
+                        let price = self.price_of(&key) * rate / 100.0;
+                        let gold = self.ch.gold();
+                        while qty > 0.0 && price * qty > gold {
+                            qty -= 1.0;
+                        }
+                        if qty < want {
+                            short.push(format!(
+                                "could not buy {} {}: not enough funds",
+                                want - qty,
+                                key
+                            ));
+                        }
+                        self.ch.set_gold(gold - price * qty.max(0.0));
+                    }
+                    if qty <= 0.0 {
+                        continue;
+                    }
                     self.ch.add_equipment(&key, qty);
                     done.push(format!("{} x{}", key, qty));
                 }
@@ -1731,8 +1938,19 @@ impl Session {
                 _ => {}
             }
         }
-        self.ch.add_kit(&kit.key);
-        Ok(format!("applied kit {}: {}", kit.key, done.join(", ")))
+        if !kit
+            .get("APPLY")
+            .is_some_and(|a| a.trim().eq_ignore_ascii_case("INSTANT"))
+        {
+            self.ch.add_kit(&kit.key);
+        }
+        let short: String = short.iter().map(|s| format!("\n{}", s)).collect();
+        Ok(format!(
+            "applied kit {}: {}{}",
+            kit.key,
+            done.join(", "),
+            short
+        ))
     }
 
     /// `equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE`
@@ -1837,8 +2055,15 @@ impl Session {
                 points.push(format!("{} skill points {}", x.name, left));
             }
         }
+        let currency = self
+            .ctx
+            .gamemode
+            .as_ref()
+            .and_then(|g| g.misc("CURRENCYUNITABBREV"))
+            .map(|c| format!(" {}", c))
+            .unwrap_or_default();
         format!(
-            "{}\n  game mode:  {}\n  campaigns:  {}\n  race:       {}\n  alignment:  {}\n  classes:    {}\n  stats:      {}\n  abilities:  {}\n  equipment:  {}\n  pools:      {}\n  {}",
+            "{}\n  game mode:  {}\n  campaigns:  {}\n  race:       {}\n  alignment:  {}\n  classes:    {}\n  stats:      {}\n  abilities:  {}\n  equipment:  {}\n  gold:       {}{}\n  pools:      {}\n  {}",
             c.name().unwrap_or_default(),
             c.gamemode().unwrap_or_default(),
             c.campaigns().join("; "),
@@ -1848,6 +2073,8 @@ impl Session {
             stats.join(", "),
             abilities.join(", "),
             items.join(", "),
+            money_text(c.gold()),
+            currency,
             points.join(", "),
             self.summary()
         )

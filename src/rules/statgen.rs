@@ -346,9 +346,43 @@ pub fn roll(expr: &str, rng: &mut Rng) -> Option<i64> {
     Some(total)
 }
 
+/// Replace each `roll("dice")` in a formula with a roll of the dice
+/// (0 if they cannot be read).
+pub fn roll_calls(formula: &str, rng: &mut Rng) -> String {
+    let mut out = String::new();
+    let mut rest = formula;
+    while let Some(i) = rest.find("roll(\"") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 6..];
+        let Some(j) = after.find("\")") else {
+            out.push_str(&rest[i..]);
+            rest = "";
+            break;
+        };
+        out.push_str(&roll(&after[..j], rng).unwrap_or(0).to_string());
+        rest = &after[j + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolls_inside_formulas() {
+        let mut rng = Rng::new(1);
+        assert_eq!(roll_calls("2*roll(\"1d1\")+23", &mut rng), "2*1+23");
+        assert_eq!(roll_calls("roll(\"2d1\")+roll(\"3\")", &mut rng), "2+3");
+        assert_eq!(roll_calls("10", &mut rng), "10");
+        assert_eq!(roll_calls("roll(\"x\")", &mut rng), "0");
+        assert_eq!(roll_calls("roll(\"1d6", &mut rng), "roll(\"1d6");
+        let v: i64 = roll_calls("10*roll(\"5d4\")", &mut rng)[3..]
+            .parse()
+            .unwrap();
+        assert!((5..=20).contains(&v));
+    }
 
     fn table(rows: &[(i64, i64)]) -> PointBuy {
         PointBuy {

@@ -560,3 +560,19 @@ class add Fighter
 class add Fighter
 class add Fighter --stat STR
 class add Fighter
+
+== gear_buyer_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 15
+set stat CON 14
+race Human
+set align LG
+class add Fighter
+kit apply "Starting Gold CRB ~ Maximum"
+equip buy "Chain Shirt"
+equip wear "Chain Shirt"
+equip buy Longsword
+equip wear Longsword
+equip buy Torch 5
+equip sell Torch 2

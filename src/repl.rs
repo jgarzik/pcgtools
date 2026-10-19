@@ -170,6 +170,19 @@ impl Session {
         }
     }
 
+    /// The saved name of an item the character has, given as saved or
+    /// by anything `find` accepts for the data item (a display name).
+    fn owned_item(&self, name: &str) -> String {
+        let owned = self.ch.equipment();
+        if owned.iter().any(|e| e.name.eq_ignore_ascii_case(name)) {
+            return name.to_string();
+        }
+        match self.find(FileKind::Equipment, name) {
+            Ok(o) if owned.iter().any(|e| e.name == o.key) => o.key.clone(),
+            _ => name.to_string(),
+        }
+    }
+
     /// The character's class (and the level of it) that grants domains:
     /// the first with a BONUS:DOMAIN|NUMBER on its class line or on a
     /// level line the character has reached.
@@ -839,6 +852,12 @@ impl Session {
             .get(2)
             .copied()
             .ok_or_else(|| Error::Other("missing item name".into()))?;
+        let resolved = if sub == "add" {
+            name.to_string()
+        } else {
+            self.owned_item(name)
+        };
+        let name = resolved.as_str();
         match sub {
             "add" => {
                 let o = self.find(FileKind::Equipment, name)?;
@@ -1060,10 +1079,10 @@ impl Session {
         w: &[&str],
         changed: impl Fn(&Session, String) -> Result<Outcome>,
     ) -> Result<Outcome> {
-        let name = w
-            .get(2)
-            .ok_or_else(|| Error::Other("missing item name".into()))?
-            .to_string();
+        let name = self.owned_item(
+            w.get(2)
+                .ok_or_else(|| Error::Other("missing item name".into()))?,
+        );
         let change = w
             .get(3)
             .ok_or_else(|| Error::Other("missing change (+MOD, -MOD or size SIZE)".into()))?;

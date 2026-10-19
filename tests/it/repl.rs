@@ -349,3 +349,15 @@ fn domains_record_the_class_granting_them() {
         "DOMAIN:Cogs|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]"
     );
 }
+
+#[test]
+fn equipment_commands_accept_display_names() {
+    // "Copper Pot" is the display name of the item keyed "Pot (Copper)"
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "equip add \"Copper Pot\"");
+    ok(&mut s, "equip wear \"Copper Pot\" Carried");
+    assert_eq!(s.ch.equipped()[0].item.as_deref(), Some("Pot (Copper)"));
+    ok(&mut s, "equip unwear \"Copper Pot\"");
+    ok(&mut s, "equip rm \"Copper Pot\"");
+    assert!(s.ch.equipment().is_empty());
+}

@@ -203,6 +203,21 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
             mi.weight_mod = 0.0;
             let mut ti = mi.clone();
             ti.output_name = None;
+            // the thrown copy is not a melee weapon, for prerequisites too
+            for t in ti
+                .data
+                .to_mut()
+                .tokens
+                .iter_mut()
+                .filter(|t| t.tag == "TYPE")
+            {
+                t.value = t
+                    .value
+                    .split('.')
+                    .filter(|x| !x.eq_ignore_ascii_case("Melee"))
+                    .collect::<Vec<_>>()
+                    .join(".");
+            }
             out.push(Weapon {
                 name: p.item.name.clone(),
                 item: mi,

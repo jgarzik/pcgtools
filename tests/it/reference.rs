@@ -4,7 +4,8 @@
 // of editor commands.  The character is built and saved with the
 // editor, its sheet is exported by a PCGen build, and every value of
 // that sheet must match the sheet pcgtools builds from the saved file.
-// PCGen complaints about loading the saved file also fail the test.
+// PCGen complaints about loading the saved file also fail the test,
+// apart from those it also makes about a bare new character.
 //
 // Runs only when PCGEN_ROOT names the data checkouts and PCGEN_REF a
 // built PCGen tree (with build/libs, and JavaFX jars in mods/lib).
@@ -114,6 +115,8 @@ fn pcgen_sheet(
         .lines()
         .skip_while(|l| !l.contains("Loaded character"))
         .filter(|l| l.contains(" SEVERE ") || l.contains(" WARNING "))
+        // reports on the data's own syntax, not on the character
+        .filter(|l| !l.contains(" PreTypeTester:") && !l.contains(" LoggingProviderImpl:"))
         .map(|l| l.split_once(' ').map_or(l, |(_, r)| r).to_string())
         .collect();
     let xml = std::fs::read_to_string(&out).map_err(|_| {
@@ -153,7 +156,24 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
             return (problems, 0, 0);
         }
     };
-    problems.extend(complaints.into_iter().map(|c| format!("PCGen: {}", c)));
+    // PCGen also complains about its own data; only what it does not
+    // say about a bare new character of the same setup is ours
+    let bare = work.join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    let bare_pcg = bare.join("bare.pcg");
+    let mut b = Session::create(&s.gamemode, &s.campaigns, "bare", dirs.clone());
+    let baseline = match b.exec(&format!("save \"{}\"", bare_pcg.display())) {
+        Ok(_) => pcgen_sheet(reference, &root.join("pcgen/data"), &bare_pcg, &bare)
+            .map(|(_, c)| c)
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    problems.extend(
+        complaints
+            .into_iter()
+            .filter(|c| !baseline.contains(c))
+            .map(|c| format!("PCGen: {}", c)),
+    );
     // our sheet is built from the saved file, as PCGen's is
     let ch = Character::read(&pcg).unwrap();
     let ctx = Context::for_character(&ch, dirs);

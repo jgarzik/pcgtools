@@ -730,6 +730,39 @@ impl Character {
         self.insert_ordered("DOMAIN", PcgLine::new(vec![Elem::text("DOMAIN", name)]));
     }
 
+    /// Add a domain granted by a class at one of its levels.
+    pub fn add_class_domain(&mut self, name: &str, class: &str, level: u32) {
+        self.insert_ordered(
+            "DOMAIN",
+            PcgLine::new(vec![
+                Elem::text("DOMAIN", name),
+                Elem::list(
+                    "SOURCE",
+                    vec![
+                        Elem::raw("TYPE", "PCClass"),
+                        Elem::text("NAME", class),
+                        Elem::raw("LEVEL", &level.to_string()),
+                    ],
+                ),
+            ]),
+        );
+    }
+
+    /// Domains a class granted (their SOURCE names a class).
+    pub fn class_domains(&self) -> Vec<String> {
+        self.pcg
+            .lines_tagged("DOMAIN")
+            .filter(|l| {
+                l.get("SOURCE").is_some_and(|src| {
+                    src.children()
+                        .iter()
+                        .any(|c| c.tag == "TYPE" && c.value_text().eq_ignore_ascii_case("PCClass"))
+                })
+            })
+            .filter_map(|l| l.head().map(Elem::value_text))
+            .collect()
+    }
+
     /// Add equipment (or increase its quantity).
     pub fn add_equipment(&mut self, name: &str, qty: f64) {
         let idx = self.pcg.indices("EQUIPNAME").into_iter().find(|&i| {

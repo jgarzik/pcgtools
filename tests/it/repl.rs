@@ -325,3 +325,27 @@ fn worn_items_go_to_game_mode_slots() {
     ok(&mut s, "equip wear \"Tin Shield\" \"Off Hand\"");
     assert_eq!(s.ch.equipped()[0].location, "Off Hand");
 }
+
+#[test]
+fn domains_record_the_class_granting_them() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    // no class grants domains yet
+    ok(&mut s, "domain add Cogs");
+    let line = |s: &Session| {
+        String::from_utf8(s.ch.pcg.encode())
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with("DOMAIN:"))
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(line(&s), "DOMAIN:Cogs");
+    ok(&mut s, "undo");
+    // a Tinker gains a domain at level 1
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "domain add Cogs");
+    assert_eq!(
+        line(&s),
+        "DOMAIN:Cogs|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]"
+    );
+}

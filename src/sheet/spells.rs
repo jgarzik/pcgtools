@@ -126,7 +126,8 @@ impl Ctx<'_, '_> {
                 }
             }
         }
-        for d in self.s.ch.domains() {
+        // only domains a class granted add their spell levels
+        for d in self.s.ch.class_domains() {
             for l in self.sp.levels_on('D', &d, spell) {
                 out.push(format!("{}{}", d, l));
             }

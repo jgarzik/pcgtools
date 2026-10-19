@@ -190,3 +190,29 @@ fn automatic_languages() {
     s.exec("lang add \"Trade Tongue\"").unwrap();
     assert_eq!(langs(&s), (both.clone(), both));
 }
+
+#[test]
+fn domain_spell_levels_need_a_granting_class() {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let spark = |s: &pcgtools::repl::Session| {
+        let m: HashMap<String, String> =
+            sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect();
+        m.iter()
+            .find(|(k, _)| k.contains("spell[Spark]") && k.ends_with("sourcelevel[0]"))
+            .map(|(_, v)| v.clone())
+            .unwrap()
+    };
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    s.exec("class add Tinker").unwrap();
+    s.exec("spell add Tinker Spark").unwrap();
+    // a domain held without a class to grant it adds no spell levels
+    s.ch.add_domain("Cogs");
+    assert_eq!(spark(&s), "Tnk0");
+    s.ch.pcg.lines.retain(|l| l.tag() != Some("DOMAIN"));
+    s.exec("domain add Cogs").unwrap();
+    assert_eq!(spark(&s), "Cogs1, Tnk0");
+}

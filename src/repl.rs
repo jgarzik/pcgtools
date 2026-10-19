@@ -170,6 +170,35 @@ impl Session {
         }
     }
 
+    /// The character's class (and the level of it) that grants domains:
+    /// the first with a BONUS:DOMAIN|NUMBER on its class line or on a
+    /// level line the character has reached.
+    fn domain_grant(&self) -> Option<(String, u32)> {
+        let grants = |t: &crate::dataset::Tok| {
+            t.tag == "BONUS" && t.value.to_ascii_uppercase().starts_with("DOMAIN|NUMBER")
+        };
+        for x in self.ch.classes() {
+            let Some(o) = self.ctx.dataset.get(FileKind::Class, &x.name) else {
+                continue;
+            };
+            if o.tokens.iter().any(grants) {
+                return Some((o.key.clone(), 1));
+            }
+            for sl in o.sublines.iter().filter(|sl| sl.tag == "LEVEL") {
+                let n: u32 = sl
+                    .value
+                    .split(':')
+                    .next()
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if n >= 1 && n <= x.level && sl.tokens.iter().any(grants) {
+                    return Some((o.key.clone(), n));
+                }
+            }
+        }
+        None
+    }
+
     fn calc(&self) -> Calc<'_> {
         Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &self.ch)
     }
@@ -435,8 +464,12 @@ impl Session {
             "domain" if w.get(1) == Some(&"add") => {
                 let o = self.find(FileKind::Domain, arg(2)?)?;
                 let key = o.key.clone();
+                let grant = self.domain_grant();
                 self.checkpoint();
-                self.ch.add_domain(&key);
+                match grant {
+                    Some((class, level)) => self.ch.add_class_domain(&key, &class, level),
+                    None => self.ch.add_domain(&key),
+                }
                 changed(self, format!("added domain {}", key))
             }
             "class" => match arg(1)? {

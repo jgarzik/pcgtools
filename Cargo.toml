@@ -9,7 +9,7 @@ description = "pcgtools: tools for reading PCgen PCC and LST data files"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11"
 globset = "0.4.20"
 log = "0.4"

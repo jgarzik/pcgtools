@@ -37,3 +37,54 @@ fn corpus_lst_roundtrip() {
     }
     eprintln!("lst roundtrip: {} files, {} continuation lines", n, cont);
 }
+
+#[test]
+fn corpus_campaigns() {
+    use pcgtools::campaign::{LoadPlan, Registry};
+    use pcgtools::pcc::resolve::DataDirs;
+    use pcgtools::{Diagnostics, Severity};
+
+    for rel in ["pcgen", "pcgen-newsources"] {
+        let Some(root) = common::corpus_path(rel) else {
+            continue;
+        };
+        let mut dirs = DataDirs::from_install(&root);
+        if rel == "pcgen-newsources" {
+            // newsources references both its own tree and the main data
+            dirs.data = common::corpus_path("pcgen/data");
+            dirs.vendor = Some(root.clone());
+        }
+        let mut reg = Registry::new(dirs);
+        let mut diags = Diagnostics::default();
+        let scan_root = if rel == "pcgen" {
+            root.join("data")
+        } else {
+            root
+        };
+        let all = reg.scan(&scan_root, &mut diags);
+        assert!(diags.is_empty(), "{:?}", diags.items.first());
+
+        let mut missing = 0;
+        let mut errors = 0;
+        let mut files = 0;
+        for p in &all {
+            let plan = LoadPlan::build(&mut reg, std::slice::from_ref(p));
+            files += plan.ordered().count();
+            missing += plan
+                .diags
+                .items
+                .iter()
+                .filter(|d| d.message.starts_with("referenced file not found"))
+                .count();
+            errors += plan.diags.count(Severity::Error);
+        }
+        eprintln!(
+            "{}: {} campaigns, {} planned files, {} missing refs, {} errors",
+            rel,
+            all.len(),
+            files,
+            missing,
+            errors
+        );
+    }
+}

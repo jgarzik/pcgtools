@@ -11,7 +11,7 @@ Contents:
 1. [Overview](#1-overview)
 2. [Text encoding and lines](#2-text-encoding-and-lines)
 3. [LST data files](#3-lst-data-files)
-4. PCC campaign files (TBD)
+4. [PCC campaign files](#4-pcc-campaign-files)
 5. Per-file-type structure (TBD)
 6. Token value syntax (TBD)
 7. Game mode files (TBD)
@@ -209,3 +209,161 @@ Continuations are preserved as separate physical lines when writing.
 plus the line's terminator and encoding flag. Editing replaces,
 inserts, or removes individual cells, so the bytes of untouched lines
 and cells — including alignment TABs and comments — are preserved.
+
+---
+
+## 4. PCC campaign files
+
+A PCC file describes one *campaign* — usually one published book, or a
+bundle of books. It has two jobs: carry metadata about the book, and
+list the data files the book contributes.
+
+### 4.1 Line syntax
+
+Each non-comment line holds exactly one tag. Lines are **not** split on
+TAB; leading and trailing whitespace (including stray TABs) is trimmed.
+The tag ends at the first colon:
+
+```
+pcc-line = [ "!" ] tag ":" value ;
+```
+
+A leading `!` negates prerequisite tags (`!PRECAMPAIGN:...`). Tags may
+repeat; how repeats combine depends on the tag (lists accumulate,
+single values are replaced).
+
+### 4.2 Metadata tags
+
+| Tag | Value |
+|---|---|
+| `CAMPAIGN` | display name; also the campaign's key unless `KEY` is given |
+| `KEY` | stable identity used by `PRECAMPAIGN` and character files |
+| `GAMEMODE` | `|`-separated list of game modes the campaign supports |
+| `BOOKTYPE` | `|`-separated list (e.g. core rules, supplement, adventure) |
+| `RANK` | integer load priority; default 9 |
+| `TYPE` | `.`-separated classification used by the UI |
+| `SETTING`, `GENRE`, `STATUS` | free text for filtering in the UI |
+| `PUBNAMELONG`, `PUBNAMESHORT`, `PUBNAMEWEB` | publisher |
+| `SOURCELONG`, `SOURCESHORT`, `SOURCEWEB`, `SOURCEDATE` | the book itself; `SOURCEDATE` is `YYYY-MM` or `YYYY-MM-DD` |
+| `DESC`, `INFOTEXT` | descriptive text (may repeat) |
+| `COPYRIGHT`, `LICENSE` | license text, one line per tag |
+| `ISOGL`, `ISLICENSED`, `ISMATURE` | `YES`/`NO` flags |
+| `SHOWINMENU` | `YES` to list the campaign in quick-load menus |
+| `COVER`, `LOGO`, `URL`, `HELP` | images and links (`URL` is `KIND|address|text`) |
+| `HIDETYPE` | `KIND|Type|Type...`: types hidden from the UI |
+| `COMPANIONLIST` | `Name|Race,Race...`: allowed companion types |
+| `FORWARDREF` | `KIND|Key,Key`: objects to be defined later, to silence missing-reference errors |
+| `ALLOWDUPES` | object kinds in which duplicate keys are permitted |
+| `OPTION` | `name|value` preference applied while the campaign is loaded |
+| `PRECAMPAIGN` | campaign-level prerequisite (4.6) |
+
+Any global object tag (such as `BONUS` or `DEFINE`) may also appear; it
+applies to the campaign as an object.
+
+### 4.3 File reference tags
+
+Each of the following tags names one data file of the corresponding
+kind (see chapter 5). They may appear any number of times.
+
+`DATACONTROL`, `DATATABLE`, `VARIABLE`, `DYNAMIC`, `GLOBALMODIFIER`,
+`ABILITYCATEGORY`, `SIZE`, `STAT`, `SAVE`, `ALIGNMENT`, `WEAPONPROF`,
+`ARMORPROF`, `SHIELDPROF`, `SKILL`, `LANGUAGE`, `FEAT`, `ABILITY`,
+`RACE`, `DOMAIN`, `SPELL`, `DEITY`, `CLASS`, `TEMPLATE`, `EQUIPMOD`,
+`EQUIPMENT`, `COMPANIONMOD`, `KIT`, `BIOSET`.
+
+In addition:
+
+| Tag | Meaning |
+|---|---|
+| `PCC` | include another campaign file (4.5) |
+| `LSTEXCLUDE` | `|`-separated files that must not be loaded, by any campaign |
+
+The value of a file reference is a path, optionally followed by
+`|`-separated suffixes:
+
+```
+fileref  = path { "|" suffix } ;
+suffix   = "(INCLUDE:" items ")" | "(EXCLUDE:" items ")"
+         | [ "!" ] "PRE" name ":" body ;
+items    = item { "|" item } ;
+item     = key | "CATEGORY=" category { "," key } ;
+```
+
+Separators inside parentheses do not split the value, so keys that
+themselves contain `|` or parentheses survive:
+`equip.lst|(INCLUDE:Sword (Bastard)|Lantern)`.
+
+* `INCLUDE` loads only the named objects from the file; `EXCLUDE` loads
+  all but the named objects. Ability files group keys by category.
+  Only one of the two may be used per reference.
+* A prerequisite suffix (in practice `PRECAMPAIGN`) makes the reference
+  conditional on which other campaigns are selected.
+* The kinds `DATACONTROL`, `DATATABLE`, `VARIABLE`, `DYNAMIC`,
+  `GLOBALMODIFIER`, `COMPANIONMOD` and `BIOSET` accept no suffixes.
+
+### 4.4 Path resolution
+
+Paths use `/` as separator; `\` is accepted and converted. The first
+character selects the base directory:
+
+| Prefix | Resolved against |
+|---|---|
+| `@` | the data directory |
+| `&` | the vendor data directory |
+| `$` | the homebrew data directory |
+| `*` | the first of homebrew, vendor, data in which the file exists |
+| `scheme:` | an absolute URI (`file:`, or `http:` when network loading is enabled) |
+| `data/` or `/data/` | legacy form: the data directory |
+| anything else | the directory containing the PCC file (`..` allowed) |
+
+A single `/` after a prefix character is optional (`@/x.lst` and
+`@x.lst` are the same). File names are case-sensitive on most
+filesystems, but data authored on Windows or macOS sometimes gets case
+wrong; `pcgtools` falls back to a case-insensitive match.
+
+### 4.5 Campaign includes
+
+`PCC:` names another campaign file. Selecting a campaign implicitly
+selects everything it includes, transitively; each campaign is loaded
+once even if included several times. Every file list of an included
+campaign is appended to the including campaign's lists.
+
+### 4.6 PRECAMPAIGN
+
+```
+PRECAMPAIGN:count,item{,item}
+```
+
+passes when at least `count` items match. Items:
+
+| Item | Matches when |
+|---|---|
+| `Key` | a campaign with that key is directly selected |
+| `INCLUDES=Key` | that campaign is selected or included by a selected campaign |
+| `BOOKTYPE=Type` | a directly selected campaign has that book type |
+| `INCLUDESBOOKTYPE=Type` | a selected or included campaign has that book type |
+| `[item]` | the item does *not* match |
+
+`!PRECAMPAIGN` inverts the result. On a file reference, a failing
+prerequisite drops that file. Other prerequisite kinds on file
+references cannot be evaluated without a character and are ignored.
+
+### 4.7 Selection and load order
+
+Given the set of campaigns the user selected:
+
+1. Selected campaigns are ordered by `RANK`, highest value first
+   (ties keep selection order).
+2. For each selected campaign, its own file references and then those
+   of its included campaigns are collected per kind, skipping
+   references whose prerequisites fail and exact duplicates.
+3. Files named by any `LSTEXCLUDE` are removed.
+4. Files are loaded kind by kind, in this fixed order:
+
+   `DATACONTROL`, `DATATABLE`, `VARIABLE`, `DYNAMIC`, `GLOBALMODIFIER`,
+   `ABILITYCATEGORY`, `SIZE`, `STAT`, `SAVE`, `ALIGNMENT`, `WEAPONPROF`,
+   `ARMORPROF`, `SHIELDPROF`, `SKILL`, `LANGUAGE`, `FEAT`, `ABILITY`,
+   `RACE`, `DOMAIN`, `SPELL`, `DEITY`, `CLASS`, `TEMPLATE`, `EQUIPMOD`,
+   `EQUIPMENT`, `COMPANIONMOD`, `KIT`, `BIOSET`.
+
+   Within a kind, files load in the collected order.

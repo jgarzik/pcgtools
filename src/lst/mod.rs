@@ -8,6 +8,8 @@
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
 
+pub mod kind;
 pub mod line;
 
+pub use kind::FileKind;
 pub use line::{Head, HeadOp, LineKind, LstFile, LstLine, Record};

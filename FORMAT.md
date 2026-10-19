@@ -1308,7 +1308,9 @@ merged by name. An item typed both melee and ranged is split into a
 melee copy and a thrown copy (`Name (Thrown)`), shown together in one
 `weapon`: `melee` rows from the first, `ranges` from the second. The
 thrown copy's range is `RANGE` + `EQMWEAPON.RANGEADD`. Double, natural
-and non-standard weapons get a single `simple` row instead.
+and non-standard weapons get a single `simple` row instead. `type`
+lists damage type abbreviations; a double weapon adds those of its
+second head (`ALTTYPE`) after a `/`.
 
 | Value | Rule |
 |---|---|

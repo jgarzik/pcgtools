@@ -388,3 +388,21 @@ fn wield_category_bonuses() {
     s.exec("feat add \"Axe Grip\"").unwrap();
     assert_eq!(one_handed(&s), ("+0".into(), "1d10".into()));
 }
+
+#[test]
+fn double_weapon_in_one_hand() {
+    let mut s = nova();
+    s.exec("equip add \"Twin Staff\"").unwrap();
+    s.exec("equip wear \"Twin Staff\"").unwrap();
+    let m = sheet_of(&s);
+    let w = "weapons[0]/weapon[0]";
+    assert_eq!(
+        at(&m, &format!("{}/common[*Twin Staff]/hand[0]", w)),
+        "Primary"
+    );
+    // both heads' damage types
+    assert_eq!(at(&m, &format!("{}/common[*Twin Staff]/type[0]", w)), "B/S");
+    // a two-handed weapon held in one hand cannot be used
+    assert_eq!(at(&m, &format!("{}/simple[0]/to_hit[0]", w)), "N/A");
+    assert_eq!(at(&m, &format!("{}/simple[0]/damage[0]", w)), "N/A");
+}

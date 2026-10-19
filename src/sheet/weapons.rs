@@ -758,6 +758,9 @@ fn damage(
             Dmg::Basic
         } else if w.hand == Hand::Secondary && w.name == w.item.name {
             Dmg::OffHand
+        } else if w.hand == Hand::Primary {
+            // held in one hand, however big
+            Dmg::Basic
         } else if w.hand == Hand::Both || two {
             Dmg::TwoHands
         } else {
@@ -993,23 +996,34 @@ fn crit_mult(s: &SheetCtx, w: &Weapon) -> String {
     (m + weapon_prof_bonus(s, w, "CRITMULTADD", &all) as i64).to_string()
 }
 
+/// Damage type abbreviations; a double weapon adds its second head's
+/// (from `ALTTYPE`) after a `/`.
 fn type_abbrevs(s: &SheetCtx, w: &Weapon) -> String {
-    let mut out: Vec<String> = s
-        .ctx
-        .gamemode
-        .as_ref()
-        .map(|g| {
-            g.lines("miscinfo.lst", "WEAPONTYPE")
-                .filter_map(|l| {
-                    let (name, abb) = l.value.split_once('|')?;
-                    w.is(name).then(|| abb.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort();
-    out.dedup();
-    out.concat()
+    let abbrevs = |is: &dyn Fn(&str) -> bool| {
+        let mut out: Vec<String> = s
+            .ctx
+            .gamemode
+            .as_ref()
+            .map(|g| {
+                g.lines("miscinfo.lst", "WEAPONTYPE")
+                    .filter_map(|l| {
+                        let (name, abb) = l.value.split_once('|')?;
+                        is(name).then(|| abb.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out.dedup();
+        out.concat()
+    };
+    let mut out = abbrevs(&|t| w.is(t));
+    if w.is("Double") {
+        let alt = w.item.data.get("ALTTYPE").unwrap_or("");
+        out.push('/');
+        out += &abbrevs(&|t| alt.split('.').any(|x| x.eq_ignore_ascii_case(t)));
+    }
+    out
 }
 
 /// Whether attacks follow the attack bonus progression, and how many

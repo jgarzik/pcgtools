@@ -27,6 +27,8 @@ struct Scenario {
     gamemode: String,
     campaigns: Vec<String>,
     commands: Vec<String>,
+    /// sheet paths where PCGen is known to differ, with the reason
+    differs: Vec<(String, String)>,
 }
 
 /// Parse the scenario file: `== name` starts a scenario, `gamemode`
@@ -43,6 +45,7 @@ fn scenarios(text: &str) -> Vec<Scenario> {
                 gamemode: String::new(),
                 campaigns: Vec::new(),
                 commands: Vec::new(),
+                differs: Vec::new(),
             });
             continue;
         }
@@ -51,6 +54,10 @@ fn scenarios(text: &str) -> Vec<Scenario> {
             s.gamemode = g.trim().to_string();
         } else if let Some(c) = line.strip_prefix("campaign ") {
             s.campaigns.push(c.trim().to_string());
+        } else if let Some(d) = line.strip_prefix("differs ") {
+            let (path, why) = d.split_once(" -- ").unwrap_or((d, ""));
+            s.differs
+                .push((path.trim().to_string(), why.trim().to_string()));
         } else {
             s.commands.push(line.to_string());
         }
@@ -179,7 +186,18 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
     let ctx = Context::for_character(&ch, dirs);
     let diff = sheet::compare(&expected, &sheet::build(&ch, &ctx));
     for (p, want, got) in &diff.mismatches {
-        problems.push(format!("{} want {:?} got {:?}", p, want, got));
+        if !s.differs.iter().any(|(d, _)| d == p) {
+            problems.push(format!("{} want {:?} got {:?}", p, want, got));
+        }
+    }
+    // a known difference that no longer differs should be removed
+    for (d, _) in &s.differs {
+        if !diff.mismatches.iter().any(|(p, _, _)| p == d) {
+            problems.push(format!(
+                "{} no longer differs; remove its 'differs' line",
+                d
+            ));
+        }
     }
     (problems, diff.matched(), diff.total)
 }

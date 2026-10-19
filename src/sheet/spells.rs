@@ -347,7 +347,10 @@ pub fn build(s: &SheetCtx) -> Element {
             let kn = known_at(c, cls, lvl, granted);
             let cast = cast_per_day(c, cls, lvl, false);
             let mut bonus = String::new();
-            if cast_per_day(c, cls, lvl, true) > 0
+            let specialist = !crate::rules::spells::specialties(c, cls).is_empty();
+            if cast_per_day(c, cls, lvl, true) > 0 && specialist {
+                bonus = format!("+{}", Spells::specialty_known(c, cls, lvl));
+            } else if cast_per_day(c, cls, lvl, true) > 0
                 && lvl > 0
                 && spell_type(cls).is_some_and(|t| t.eq_ignore_ascii_case("Divine"))
                 && domains_here

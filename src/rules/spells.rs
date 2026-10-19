@@ -188,6 +188,7 @@ impl<'a> Spells<'a> {
         }
         s.load_saved(calc);
         s.auto_known(calc);
+        s.granted(calc);
         for v in &mut s.by_caster {
             v.sort_by(compare);
         }
@@ -558,6 +559,144 @@ impl<'a> Spells<'a> {
                 }
             }
         }
+    }
+
+    /// Spells granted to class lists (SPELLKNOWN:CLASS|Class=1|Spell)
+    /// and domains' spell-like abilities, which their class also
+    /// holds at level 1.
+    fn granted(&mut self, calc: &Calc<'a>) {
+        let classes: Vec<&'a Object> = self
+            .casters
+            .iter()
+            .filter_map(|c| match c {
+                Caster::Class(o) => Some(*o),
+                _ => None,
+            })
+            .collect();
+        for src in &calc.sources {
+            for t in src.tokens.iter().filter(|t| t.tag == "SPELLKNOWN") {
+                let mut parts = t.value.split('|');
+                if !parts
+                    .next()
+                    .is_some_and(|k| k.eq_ignore_ascii_case("CLASS"))
+                {
+                    continue;
+                }
+                let rest: Vec<&str> = parts.collect();
+                for pair in rest.chunks(2) {
+                    let [lv, names] = pair else { continue };
+                    let Some((list, lvl)) = lv.rsplit_once('=') else {
+                        continue;
+                    };
+                    let Ok(lvl) = lvl.parse::<i64>() else {
+                        continue;
+                    };
+                    let Some(cls) = classes.iter().find(|c| {
+                        self.class_lists(calc, c)
+                            .iter()
+                            .any(|l| l.eq_ignore_ascii_case(list))
+                    }) else {
+                        continue;
+                    };
+                    let ci = self.caster_index(cls).unwrap_or(0);
+                    for n in names.split(',') {
+                        if let Some(sp) = calc.ds.get(FileKind::Spell, n.trim()) {
+                            // the spell is on the class's list as well
+                            let on = self
+                                .lists
+                                .entry(('C', lower(list)))
+                                .or_default()
+                                .entry(lvl)
+                                .or_default();
+                            if !on.iter().any(|x| std::ptr::eq(*x, sp)) {
+                                on.push(sp);
+                            }
+                            self.add_info(
+                                ci,
+                                sp,
+                                Owner::Class(cls),
+                                SpellInfo {
+                                    book: KNOWN_BOOK.into(),
+                                    level: lvl,
+                                    times: 1,
+                                    unit: "Day".into(),
+                                    fixed_dc: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            if src.kind != super::calc::SrcKind::Domain {
+                continue;
+            }
+            let Some(cls) = src.class.as_deref().and_then(|k| {
+                classes
+                    .iter()
+                    .find(|c| c.key.eq_ignore_ascii_case(k))
+                    .copied()
+            }) else {
+                continue;
+            };
+            let ci = self.caster_index(cls).unwrap_or(0);
+            for t in src.tokens.iter().filter(|t| t.tag == "SPELLS") {
+                let parts: Vec<&str> = t.value.split('|').collect();
+                let Some(book) = parts.first() else { continue };
+                let mut times = 1;
+                let mut spells = Vec::new();
+                for p in &parts[1..] {
+                    if let Some(v) = p.strip_prefix("TIMES=") {
+                        times = if v.eq_ignore_ascii_case("ATWILL") {
+                            -1
+                        } else {
+                            calc.eval_formula(v) as i64
+                        };
+                    } else if !p.contains('=')
+                        && !Prereq::is_pre_tag(p.split(':').next().unwrap_or(""))
+                    {
+                        spells.push(p.split(',').next().unwrap_or(p));
+                    }
+                }
+                for n in spells {
+                    if let Some(sp) = calc.ds.get(FileKind::Spell, n) {
+                        self.add_info(
+                            ci,
+                            sp,
+                            Owner::Domain(src.obj, Some(cls.key.clone())),
+                            SpellInfo {
+                                book: book.to_string(),
+                                level: 1,
+                                times,
+                                unit: "Day".into(),
+                                fixed_dc: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Specialty spells known per day at a level: the subclass's or
+    /// class's KNOWNSPELLSFROMSPECIALTY plus bonuses.
+    pub fn specialty_known(calc: &Calc, cls: &Object, level: i64) -> i64 {
+        let from = calc
+            .subclass_of(cls)
+            .and_then(|s| s.get("KNOWNSPELLSFROMSPECIALTY"))
+            .or_else(|| cls.get("KNOWNSPELLSFROMSPECIALTY"))
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        let mut b = calc.bonus.total(
+            "SPECIALTYSPELLKNOWN",
+            &format!("CLASS.{};LEVEL.{}", cls.key, level),
+        );
+        if let Some(t) = spell_type(cls) {
+            b += calc.bonus.total(
+                "SPECIALTYSPELLKNOWN",
+                &format!("TYPE.{};LEVEL.{}", t, level),
+            );
+        }
+        from + b as i64
     }
 
     /// Spells of a caster in a book at a level (`None` for any level).

@@ -160,6 +160,8 @@ pub struct Calc<'a> {
     /// set while proficiencies are worked out, so prerequisites on
     /// proficiency grants do not ask for proficiencies again
     in_profs: std::cell::Cell<bool>,
+    /// set while judging a PREDR (DR tokens may carry PREDR themselves)
+    in_dr: std::cell::Cell<bool>,
     class_skills: HashSet<String>,
     cross_class_skills: HashSet<String>,
     rules: HashMap<String, bool>,
@@ -220,6 +222,7 @@ impl<'a> Calc<'a> {
             defined: HashSet::new(),
             unknown: RefCell::new(BTreeMap::new()),
             in_profs: std::cell::Cell::new(false),
+            in_dr: std::cell::Cell::new(false),
             class_skills: HashSet::new(),
             cross_class_skills: HashSet::new(),
             rules: HashMap::new(),
@@ -1082,6 +1085,52 @@ impl<'a> Calc<'a> {
 
     /// Damage reduction, e.g. `10/magic; 5/-`: the best value per
     /// bypass type from DR tokens, plus BONUS:DR|type bonuses.
+    /// Damage reduction against one bypass, as DR prerequisites judge
+    /// it: the best DR with that bypass (bypasses joined by "and" each
+    /// get the value; those joined by "or" count whole, unless one of
+    /// them already has as much), plus DR bonuses to it.
+    pub fn dr_value(&self, bypass: &str) -> f64 {
+        let mut best: HashMap<String, f64> = HashMap::new();
+        let mut alternatives: Vec<(String, f64)> = Vec::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "DR") {
+                let mut parts = t.value.split('|');
+                let Some((v, kind)) = parts.next().and_then(|d| d.split_once('/')) else {
+                    continue;
+                };
+                let pres: Vec<Prereq> = parts.filter_map(|p| Prereq::parse(p).ok()).collect();
+                if !pres.iter().all(|p| self.passes(p, Some(s))) {
+                    continue;
+                }
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                let v = eval_str(v, &env);
+                let kind = lower(kind.trim());
+                if kind.contains(" or ") {
+                    alternatives.push((kind, v));
+                    continue;
+                }
+                for k in kind.split(" and ") {
+                    let e = best.entry(k.trim().to_string()).or_insert(0.0);
+                    *e = e.max(v);
+                }
+            }
+        }
+        for (kind, v) in alternatives {
+            let covered = kind
+                .split(" or ")
+                .any(|k| best.get(k.trim()).is_some_and(|b| *b >= v));
+            if !covered {
+                let e = best.entry(kind).or_insert(0.0);
+                *e = e.max(v);
+            }
+        }
+        let key = lower(bypass.trim());
+        best.get(&key).copied().unwrap_or(0.0) + self.bonus.total("DR", &key)
+    }
+
     pub fn damage_reduction(&self) -> String {
         let mut best: BTreeMap<String, (String, f64)> = BTreeMap::new();
         for s in &self.sources {
@@ -2725,6 +2774,35 @@ impl<'a> Calc<'a> {
                     false
                 }
             }),
+            // damage reduction against bypasses: how many items reach
+            // their value (0 always does)
+            "DR" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<(String, f64)> = args
+                    .iter()
+                    .skip(1)
+                    .map(|a| {
+                        let a = a.trim();
+                        match a.rfind(['=', '.']) {
+                            Some(i) => (a[..i].to_string(), num(&a[i + 1..])),
+                            None => (a.to_string(), 0.0),
+                        }
+                    })
+                    .collect();
+                if items.iter().all(|(_, v)| *v <= 0.0) {
+                    return true;
+                }
+                if self.in_dr.get() {
+                    return true;
+                }
+                self.in_dr.set(true);
+                let held = items
+                    .iter()
+                    .filter(|(k, v)| *v <= 0.0 || self.dr_value(k) >= *v)
+                    .count() as f64;
+                self.in_dr.set(false);
+                held >= n.max(1.0)
+            }
             // the character's spells (entries at each level, those on
             // its domains' lists and those its race grants), by name
             "SPELL" => {

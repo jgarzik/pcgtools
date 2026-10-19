@@ -347,3 +347,23 @@ fn spell_list_prerequisites() {
     assert!(!meets(&chanter, "PRESPELLDESCRIPTOR:2,Fire=0"));
     assert!(!meets(&chanter, "!PRESPELLDESCRIPTOR:1,Fire=0"));
 }
+
+#[test]
+fn damage_reduction_prerequisites() {
+    let tall = ["set align LG", "race Tallfolk"];
+    assert!(meets(&tall, "PREDR:1,Silver=5"));
+    assert!(!meets(&tall, "PREDR:1,Silver=6"));
+    // bypasses joined by "and" each get the value
+    assert!(meets(&tall, "PREDR:1,Cold Iron=2"));
+    assert!(meets(&tall, "PREDR:1,Cold Iron.2"));
+    // those joined by "or" stay whole
+    assert!(meets(&tall, "PREDR:1,Magic or Good=3"));
+    assert!(!meets(&tall, "PREDR:1,Magic=1"));
+    // the count is how many items must hold
+    assert!(meets(&tall, "PREDR:2,Silver=5,Cold Iron=1"));
+    assert!(!meets(&tall, "PREDR:2,Silver=5,-=1"));
+    // a value of 0 always holds
+    assert!(meets(&[], "PREDR:1,Piercing=0"));
+    assert!(!meets(&[], "!PREDR:1,Piercing=0"));
+    assert!(!meets(&[], "PREDR:1,-=1"));
+}

@@ -3,13 +3,13 @@
 //
 // Copyright (c) 2024 Jeff Garzik
 //
-// This file is part of the pcgtoolssoftware project covered under
+// This file is part of the pcgtools software project covered under
 // the MIT License.  For the full license text, please see the LICENSE
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
 
 //! Edits change individual cells of a record and leave every other
-//! byte of the file alone.  [`format`] produces the canonical layout
+//! byte of the file alone.  [`format()`] produces the canonical layout
 //! instead.
 
 use super::line::{split_token, Head, HeadOp, LineKind, LstFile, LstLine};

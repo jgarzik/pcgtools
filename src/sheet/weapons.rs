@@ -10,7 +10,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::combat::{bab_sequence, bab_sequence_for};
-use super::gear::{merged_by, placed, Placed};
+use super::gear::{merged_by, placed, Placed, TEMP_BONUS_PLACE};
 use super::units::{pattern, Units};
 use super::{signed, Element, SheetCtx};
 use crate::dataset::Object;
@@ -31,6 +31,8 @@ enum Hand {
     Equipped,
     Carried,
     NotCarried,
+    /// a copy of an unworn weapon carrying temporary bonuses
+    TempBonus,
 }
 
 impl Hand {
@@ -43,6 +45,7 @@ impl Hand {
             Hand::Equipped => "Equipped",
             Hand::Carried => "Carried",
             Hand::NotCarried => "Not Carried",
+            Hand::TempBonus => TEMP_BONUS_PLACE,
         }
     }
 }
@@ -136,7 +139,9 @@ fn hand_of(p: &Placed, items: &[Placed]) -> Hand {
         }
         None => p.root.to_lowercase(),
     };
-    if root.starts_with("not carried") {
+    if p.parent.is_none() && p.root == TEMP_BONUS_PLACE {
+        Hand::TempBonus
+    } else if root.starts_with("not carried") {
         Hand::NotCarried
     } else if root.starts_with("carried") {
         Hand::Carried

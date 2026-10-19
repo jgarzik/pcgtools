@@ -795,6 +795,26 @@ fn temporary_bonus_on_armor() {
 }
 
 #[test]
+fn temporary_copy_of_armor_loses_its_check_penalty() {
+    // PCGen leaves copies carrying temporary bonuses out of the check
+    // penalty, and the copy has taken the armor's place
+    let cmds = ["equip add \"Scale Coat\"", "equip wear \"Scale Coat\""];
+    let penalty =
+        |m: &HashMap<String, String>| at(m, "armor_class[0]/check_penalty[0]").to_string();
+    assert_eq!(penalty(&new_sheet(&cmds)), "-4");
+    let m = with_lines(
+        &cmds,
+        "TEMPBONUS:SPELL=Spark|TBTARGET:Scale Coat|TBBONUS:COMBAT&pipe;AC&pipe;1\n",
+    );
+    assert_eq!(penalty(&m), "+0");
+    // its own entry still shows it
+    assert_eq!(
+        at(&m, "protection[0]/armor[*Scale Coat [Spark]]/accheck[0]"),
+        "-4"
+    );
+}
+
+#[test]
 fn temporary_bonus_on_unworn_weapon() {
     let m = with_lines(
         &[
@@ -816,6 +836,13 @@ fn temporary_bonus_on_unworn_weapon() {
         .collect();
     both.sort();
     assert_eq!(both, [("N", "0"), ("N", "1")]);
+    // and held nowhere, but as a temporary bonus
+    let hand: Vec<&String> = m
+        .iter()
+        .filter(|(k, _)| k.ends_with("/common[Throwing Cog [Spark]]/hand[0]"))
+        .map(|(_, v)| v)
+        .collect();
+    assert_eq!(hand, ["Temp Bonus"]);
 }
 
 #[test]

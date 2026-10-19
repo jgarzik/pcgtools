@@ -14,3 +14,4 @@ Linen Shirt	TYPE:Goods.Clothing	COST:1	WT:5
 Dented Vest	TYPE:Armor.Light.Suit	COST:5	WT:5	EQMOD:DENT|-1	BONUS:COMBAT|AC|0|TYPE=Armor
 Ruby	TYPE:Gem	COST:50	WT:0
 Notebook	TYPE:Goods.Spellbook	COST:3	WT:1	NUMPAGES:10	PAGEUSAGE:max(2*SPELLLEVEL,1)
+Scale Coat	TYPE:Armor.Medium.Suit	COST:50	WT:3	ACCHECK:-4	BONUS:COMBAT|AC|4|TYPE=Armor

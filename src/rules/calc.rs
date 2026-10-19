@@ -1414,7 +1414,25 @@ impl<'a> Calc<'a> {
     /// MISC|ACCHECK bonuses.
     pub fn check_penalty(&self) -> i64 {
         let mut acp = 0.0;
+        // a worn item other than a weapon gives way to a copy carrying
+        // temporary bonuses, and such copies are not counted
+        let temps = if self.ch.use_temp_mods() {
+            self.ch.temp_bonuses()
+        } else {
+            Vec::new()
+        };
+        let replaced = |i: usize| {
+            !self.item_is_type(i, "WEAPON")
+                && temps.iter().any(|t| {
+                    !t.on_pc()
+                        && t.target.eq_ignore_ascii_case(&self.items[i].name)
+                        && t.loads(self.ch)
+                })
+        };
         for (i, it) in self.items.iter().enumerate() {
+            if replaced(i) {
+                continue;
+            }
             let base: f64 = it
                 .obj
                 .get("ACCHECK")

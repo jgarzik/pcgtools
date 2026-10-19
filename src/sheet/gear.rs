@@ -34,6 +34,9 @@ pub fn weight_allowance(s: &SheetCtx) -> Element {
     e
 }
 
+/// Where a copy of an unworn item carrying temporary bonuses is.
+pub(super) const TEMP_BONUS_PLACE: &str = "Temp Bonus";
+
 /// An item placed in the character's equipment set.
 pub(super) struct Placed<'a> {
     pub item: EqItem<'a>,
@@ -185,7 +188,7 @@ fn placed_in<'a>(s: &SheetCtx<'a>, set: &str, temp: bool) -> (Vec<EqItem<'a>>, V
                 out.push(Placed {
                     item: p.item.temporary_copy(&source, bonuses),
                     id,
-                    root: String::new(),
+                    root: TEMP_BONUS_PLACE.into(),
                     parent: None,
                     equipped: false,
                     carried: p.carried,

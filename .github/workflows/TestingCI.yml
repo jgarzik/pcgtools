@@ -29,6 +29,23 @@ jobs:
     - name: Package
       run: cargo package --locked
 
+  # Build and test on the other desktop platforms.
+  platforms:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose --locked
+    - name: Run tests
+      run: cargo test --verbose --locked
+
   # The oldest Rust release supported (rust-version in Cargo.toml).
   msrv:
 

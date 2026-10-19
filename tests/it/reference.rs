@@ -30,6 +30,8 @@ struct Scenario {
     commands: Vec<String>,
     /// sheet paths where PCGen is known to differ, with the reason
     differs: Vec<(String, String)>,
+    /// sheet paths where PCGen's own value changes from run to run
+    varies: Vec<String>,
 }
 
 /// Parse the scenario file: `== name` starts a scenario, `gamemode`
@@ -47,6 +49,7 @@ fn scenarios(text: &str) -> Vec<Scenario> {
                 campaigns: Vec::new(),
                 commands: Vec::new(),
                 differs: Vec::new(),
+                varies: Vec::new(),
             });
             continue;
         }
@@ -59,6 +62,9 @@ fn scenarios(text: &str) -> Vec<Scenario> {
             let (path, why) = d.split_once(" -- ").unwrap_or((d, ""));
             s.differs
                 .push((path.trim().to_string(), why.trim().to_string()));
+        } else if let Some(v) = line.strip_prefix("varies ") {
+            let path = v.split_once(" -- ").map_or(v, |(p, _)| p);
+            s.varies.push(path.trim().to_string());
         } else {
             s.commands.push(line.to_string());
         }
@@ -201,7 +207,7 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
     let ctx = Context::for_character(&ch, dirs);
     let diff = sheet::compare(&expected, &sheet::build(&ch, &ctx));
     for (p, want, got) in &diff.mismatches {
-        if !s.differs.iter().any(|(d, _)| d == p) {
+        if !s.differs.iter().any(|(d, _)| d == p) && !s.varies.contains(p) {
             problems.push(format!("{} want {:?} got {:?}", p, want, got));
         }
     }

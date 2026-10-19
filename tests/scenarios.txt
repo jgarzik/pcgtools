@@ -5,6 +5,7 @@
 # gamemode MODE      game mode of the new character
 # campaign KEY       a campaign to use (repeatable)
 # differs PATH -- WHY  a sheet value where PCGen is known to be wrong
+# varies PATH -- WHY   one where PCGen is only sometimes wrong
 # anything else      an editor command, as typed in `pcgtools repl`
 
 == fighter_35e
@@ -161,7 +162,7 @@ class add Explorer
 == gunslinger_gaslight
 gamemode Gaslight
 campaign BPI ~ Gaslight
-differs character/skills[0]/max_class_skill_level[0] -- PCGen evaluates the bare variable named by CSKILLMAX before its stat bonus applies (14 with it, as MaxRank+0 also gives)
+varies character/skills[0]/max_class_skill_level[0] -- PCGen sometimes evaluates the bare variable named by CSKILLMAX before its stat bonus applies (14 with it, as MaxRank+0 also gives); which it does changes between runs
 race Human
 class add Gunslinger
 
@@ -462,7 +463,7 @@ equip wear "Kevlar vest"
 == arcane_gaslight
 gamemode Gaslight
 campaign BPI ~ Gaslight
-differs character/skills[0]/max_class_skill_level[0] -- PCGen evaluates the bare variable named by CSKILLMAX before its stat bonus applies (16 with it, as MaxRank+0 also gives)
+varies character/skills[0]/max_class_skill_level[0] -- PCGen sometimes evaluates the bare variable named by CSKILLMAX before its stat bonus applies (16 with it, as MaxRank+0 also gives); which it does changes between runs
 set stat INT 16
 race Human
 class add Apprentice

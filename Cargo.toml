@@ -13,6 +13,7 @@ clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11"
 globset = "0.4.20"
 log = "0.4"
+quick-xml = "0.37"
 regex = "1.13.1"
 rustyline = "15"
 serde = { version = "1.0", features = ["derive"] }

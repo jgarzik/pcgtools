@@ -87,6 +87,17 @@ enum PcgCommand {
         file: PathBuf,
     },
 
+    /// Build the full character sheet (XML or JSON), optionally
+    /// comparing it with an expected sheet
+    Sheet {
+        /// PCG file
+        file: PathBuf,
+
+        /// Compare with this expected sheet (XML) and list differences
+        #[arg(long)]
+        compare: Option<PathBuf>,
+    },
+
     /// Compute derived statistics
     Stats {
         /// PCG file
@@ -447,6 +458,7 @@ fn main() -> ExitCode {
         Command::Pcg { cmd } => match cmd {
             PcgCommand::Show { file } => cmd::pcg::show(o, file),
             PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
+            PcgCommand::Sheet { file, compare } => cmd::pcg::sheet(o, file, compare.as_deref()),
             PcgCommand::Stats {
                 file,
                 verbose,

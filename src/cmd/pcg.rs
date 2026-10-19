@@ -163,3 +163,26 @@ pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> 
     }
     Ok(true)
 }
+
+pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>) -> CmdResult {
+    let c = Character::read(file)?;
+    let ctx = Context::for_character(&c, o.dirs(None));
+    report(&ctx.diags);
+    let sheet = pcgtools::sheet::build(&c, &ctx);
+    let Some(exp_path) = compare else {
+        if o.json {
+            print_json(&sheet);
+        } else {
+            print!("{}", sheet.to_xml());
+        }
+        return Ok(true);
+    };
+    let text = std::fs::read_to_string(exp_path).map_err(|e| pcgtools::Error::io(exp_path, e))?;
+    let expected = pcgtools::sheet::Element::parse_xml(&text)?;
+    let d = pcgtools::sheet::compare(&expected, &sheet);
+    for (p, want, got) in &d.mismatches {
+        println!("{}\n  want {:?}\n  got  {:?}", p, want, got);
+    }
+    println!("{}/{} values match", d.matched(), d.total);
+    Ok(d.mismatches.is_empty())
+}

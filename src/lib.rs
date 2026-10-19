@@ -27,6 +27,7 @@ pub mod pcg;
 pub mod query;
 pub mod repl;
 pub mod rules;
+pub mod sheet;
 pub mod text;
 pub mod token;
 

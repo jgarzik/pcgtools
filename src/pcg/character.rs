@@ -116,7 +116,8 @@ pub struct SkillEntry {
     pub name: String,
     /// ranks bought, per class
     pub ranks: Vec<(String, f64)>,
-    /// sub-choice (e.g. a language for a linguistics skill)
+    /// sub-choices (e.g. languages for a linguistics skill), sorted
+    /// and joined with ", "
     pub associated: Option<String>,
 }
 
@@ -318,7 +319,15 @@ impl Character {
                 Some(SkillEntry {
                     name: l.head()?.value_text(),
                     ranks,
-                    associated: l.text("ASSOCIATEDDATA"),
+                    associated: {
+                        let mut all: Vec<String> = elems
+                            .iter()
+                            .filter(|e| e.tag == "ASSOCIATEDDATA")
+                            .map(Elem::value_text)
+                            .collect();
+                        all.sort();
+                        (!all.is_empty()).then(|| all.join(", "))
+                    },
                 })
             })
             .collect()

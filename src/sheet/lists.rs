@@ -605,6 +605,7 @@ pub fn languages(s: &SheetCtx) -> Element {
     let mut langs: Vec<(String, String)> =
         s.ch.languages()
             .into_iter()
+            .chain(s.calc.auto_languages())
             .map(|k| {
                 let name = ds
                     .get(FileKind::Language, &k)

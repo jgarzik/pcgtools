@@ -2644,6 +2644,56 @@ impl<'a> Calc<'a> {
         out
     }
 
+    /// Languages granted by AUTO:LANG on active objects whose trailing
+    /// prerequisites pass: names, TYPE=t (every language of the type)
+    /// and %LIST (the object's choices).
+    pub fn auto_languages(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut add = |k: &str| {
+            if !k.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+                out.push(k.to_string());
+            }
+        };
+        let is_pre = |i: &str| {
+            Prereq::is_pre_tag(i.split(':').next().unwrap_or("")) || i.starts_with("!PRE")
+        };
+        for src in &self.sources {
+            for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
+                let Some(rest) = t.value.strip_prefix("LANG|") else {
+                    continue;
+                };
+                let items: Vec<&str> = rest.split('|').collect();
+                let ok = items
+                    .iter()
+                    .filter(|i| is_pre(i))
+                    .filter_map(|i| Prereq::parse(i).ok())
+                    .all(|p| self.passes(&p, Some(src)));
+                if !ok {
+                    continue;
+                }
+                for item in items.iter().filter(|i| !is_pre(i)) {
+                    if let Some(ty) = item
+                        .strip_prefix("TYPE=")
+                        .or_else(|| item.strip_prefix("TYPE."))
+                    {
+                        for o in self.ds.objects(FileKind::Language) {
+                            if ty.split('.').all(|x| o.is_type(x)) {
+                                add(&o.key);
+                            }
+                        }
+                    } else if *item == "%LIST" {
+                        for c in &src.choices {
+                            add(c);
+                        }
+                    } else {
+                        add(item);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The character's type: the saved one if the game mode lists it,
     /// else the first type the game mode lists ("Default" if none).
     pub fn character_type(&self) -> String {

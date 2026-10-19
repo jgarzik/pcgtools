@@ -163,3 +163,30 @@ fn defaults_for_missing_values() {
         "Default Set"
     );
 }
+
+#[test]
+fn automatic_languages() {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs);
+    s.exec("race Gearling").unwrap();
+    let langs = |s: &pcgtools::repl::Session| {
+        let m: HashMap<String, String> =
+            sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect();
+        (
+            at(&m, "basics[Nova]/languages[0]/all[0]").to_string(),
+            at(&m, "languages[0]").to_string(),
+        )
+    };
+    // granted by the race; the second only for neutral characters
+    assert_eq!(langs(&s), ("Old Script".into(), "Old Script".into()));
+    s.exec("set align TN").unwrap();
+    let both = "Old Script, Trade Tongue".to_string();
+    assert_eq!(langs(&s), (both.clone(), both.clone()));
+    // a language also chosen is listed once
+    s.exec("lang add \"Trade Tongue\"").unwrap();
+    assert_eq!(langs(&s), (both.clone(), both));
+}

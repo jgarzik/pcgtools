@@ -82,3 +82,33 @@ jobs:
           code/testsuite
     - name: Run tests with data
       run: cargo test --release
+
+  # Characters built with the editor, checked against sheets that PCGen
+  # itself exports for them.  PCGen is built from the same pinned
+  # revision; nothing from it is copied into this repository.
+  reference:
+
+    runs-on: ubuntu-latest
+
+    env:
+      PCGEN_ROOT: ${{ github.workspace }}/corpus
+      PCGEN_REF: ${{ github.workspace }}/corpus/pcgen
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Fetch PCGen
+      uses: actions/checkout@v4
+      with:
+        repository: PCGen/pcgen
+        ref: 6de48a9292cbdcc64ebd181d1707b67699da1e82
+        path: corpus/pcgen
+    - name: Install Java 25
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '25'
+    - name: Build PCGen
+      working-directory: corpus/pcgen
+      run: ./gradlew --no-daemon -q jar copyToLibs
+    - name: Run reference checks
+      run: cargo test --release --test it reference

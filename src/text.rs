@@ -76,9 +76,10 @@ impl TextFile {
             None => (false, bytes),
         };
 
-        let mut lines = Vec::new();
+        // one line per newline (plus a last unterminated one)
+        let mut lines = Vec::with_capacity(memchr::memchr_iter(b'\n', rest).count() + 1);
         while !rest.is_empty() {
-            let pos = rest.iter().position(|&b| b == b'\n' || b == b'\r');
+            let pos = memchr::memchr2(b'\n', b'\r', rest);
             let (body, eol, adv) = match pos {
                 None => (rest, Eol::None, rest.len()),
                 Some(i) if rest[i] == b'\n' => (&rest[..i], Eol::Lf, i + 1),

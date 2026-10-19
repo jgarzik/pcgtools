@@ -346,6 +346,7 @@ dependencies = [
  "env_logger",
  "globset",
  "log",
+ "memchr",
  "quick-xml",
  "regex",
  "rustyline",

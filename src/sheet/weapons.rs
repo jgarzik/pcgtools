@@ -9,7 +9,7 @@
 // file in the root directory of this project.
 // SPDX-License-Identifier: MIT
 
-use super::combat::bab_sequence;
+use super::combat::{bab_sequence, bab_sequence_for};
 use super::gear::{merged_by, placed, Placed};
 use super::units::{pattern, Units};
 use super::{signed, Element, SheetCtx};
@@ -161,7 +161,16 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
             continue;
         }
         let types = p.item.types(c);
-        let hand = hand_of(p, &items);
+        // merged items show where the last of them is
+        let last = items
+            .iter()
+            .rev()
+            .find(|x| {
+                x.item.long_name() == p.item.long_name()
+                    && x.item.temporary.is_none() == p.item.temporary.is_none()
+            })
+            .unwrap_or(p);
+        let hand = hand_of(last, &items);
         let range = p
             .item
             .data
@@ -395,7 +404,11 @@ fn to_hit(s: &SheetCtx, w: &Weapon, all_w: &[Weapon], mode: Mode, distance: Opti
     }
     let mode = resolve_mode(w, all_w, mode);
     let bonus = to_hit_bonus(s, w, distance) + mode_bonus(s, w, mode, distance.is_some());
-    let seq = bab_sequence(s);
+    let seq = if w.is("Unarmed") {
+        bab_sequence_for(s, Some("UAB"))
+    } else {
+        bab_sequence(s)
+    };
     let first = seq.first().copied().unwrap_or(0);
     let (progress, extra) = attacks(s, w);
     // counts come from data files: keep them sane
@@ -628,8 +641,10 @@ fn damage(
     }
 }
 
-/// Unarmed damage dice: the best of 1d2, class unarmed damage and the
-/// race's (1d3 at medium size, scaled by size).
+/// Unarmed damage dice: the best of 1d2, the classes' unarmed damage
+/// (UDAM on level lines), unarmed damage from the race, templates and
+/// abilities (UDAM lists by size), and the race's (1d3 at medium size,
+/// scaled by size).
 fn unarmed_dice(s: &SheetCtx) -> String {
     let c = &s.calc;
     let sizes: Vec<String> =
@@ -655,6 +670,7 @@ fn unarmed_dice(s: &SheetCtx) -> String {
         .unwrap_or_else(|| medium.clone());
     let pc_size = c.size_key();
     let apply = race_size.eq_ignore_ascii_case(&pc_size);
+    let size_at = pos(&pc_size).max(0) as usize;
     let sides = |d: &str| {
         d.split('d')
             .nth(1)
@@ -662,20 +678,46 @@ fn unarmed_dice(s: &SheetCtx) -> String {
             .unwrap_or(0)
     };
     let mut best = "1d2".to_string();
-    let race_die = adjust_dice(s, "1d3", pos(&race_size) - pos(&medium));
-    if sides(&race_die) > sides(&best) {
-        best = race_die;
-    }
+    let mut consider = |d: &str| {
+        if sides(d) > sides(&best) {
+            best = d.to_string();
+        }
+    };
     for (cls, lvl) in c.classes() {
-        if let Some(u) = cls.get("UDAM") {
-            let list: Vec<&str> = u.split(',').collect();
-            if let Some(d) = list.get((*lvl as usize).saturating_sub(1)).or(list.last()) {
-                if sides(d) > sides(&best) {
-                    best = d.to_string();
-                }
+        // the last level line at or below the class level with UDAM
+        let line = cls
+            .sublines
+            .iter()
+            .filter(|sl| sl.tag == "LEVEL")
+            .filter(|sl| {
+                sl.value
+                    .split(':')
+                    .next()
+                    .and_then(|x| x.trim().parse::<u32>().ok())
+                    .is_some_and(|n| n > 0 && n <= *lvl)
+            })
+            .filter_map(|sl| sl.tokens.iter().find(|t| t.tag == "UDAM"))
+            .next_back();
+        if let Some(t) = line {
+            let list: Vec<&str> = t.value.split(',').collect();
+            if let Some(d) = list.get(size_at) {
+                consider(d);
             }
         }
     }
+    for src in &c.sources {
+        if src.kind == crate::rules::calc::SrcKind::Class {
+            continue;
+        }
+        if let Some(u) = src.obj.get("UDAM") {
+            let list: Vec<&str> = u.split(',').collect();
+            if let Some(d) = list.get(size_at) {
+                consider(d);
+            }
+        }
+    }
+    let race_die = adjust_dice(s, "1d3", pos(&race_size) - pos(&medium));
+    consider(&race_die);
     let from = if apply { pos(&race_size) } else { pos(&medium) };
     adjust_dice(s, &best, pos(&pc_size) - from)
 }
@@ -733,7 +775,7 @@ fn crit_range(s: &SheetCtx, w: &Weapon) -> String {
         .data
         .get("CRITRANGE")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(0);
     if r == 0 {
         return "none".into();
     }
@@ -751,8 +793,8 @@ fn crit_range(s: &SheetCtx, w: &Weapon) -> String {
 }
 
 fn crit_mult(s: &SheetCtx, w: &Weapon) -> String {
-    let m = w.item.data.get("CRITMULT").unwrap_or("x2");
-    let m: i64 = m.trim_start_matches('x').parse().unwrap_or(2);
+    let m = w.item.data.get("CRITMULT").unwrap_or("0");
+    let m: i64 = m.trim_start_matches('x').parse().unwrap_or(0);
     let prof = prof_of(s, w);
     (m + prof_bonus(s, prof, "CRITMULTADD", &all) as i64).to_string()
 }

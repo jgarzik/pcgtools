@@ -269,6 +269,12 @@ fn saving_throws(s: &SheetCtx) -> Element {
 /// Base attack bonus of each attack in a full attack: BAB, then
 /// lower by the attack cycle while attacks remain.
 pub fn bab_sequence(s: &SheetCtx) -> Vec<i64> {
+    bab_sequence_for(s, None)
+}
+
+/// [`bab_sequence`] for an attack kind whose classes may attack on a
+/// shorter cycle (ATTACKCYCLE:UAB|3 for unarmed attacks).
+pub fn bab_sequence_for(s: &SheetCtx, kind: Option<&str>) -> Vec<i64> {
     let c = &s.calc;
     let bab = c.bonus.total("COMBAT", "BASEAB") as i64;
     let max_attacks: i64 = s
@@ -279,23 +285,62 @@ pub fn bab_sequence(s: &SheetCtx) -> Vec<i64> {
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(4)
         .clamp(1, 50);
-    let cycle: i64 = s
+    let default_cycle: i64 = s
         .ctx
         .gamemode
         .as_ref()
         .and_then(|g| g.misc("BABATTCYC"))
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(5)
-        .max(1);
-    let mut class_bab = 0i64;
+        .clamp(1, 20);
+    // each class's attack bonus, by the cycle it attacks on
+    let mut by_cycle: std::collections::BTreeMap<i64, i64> = Default::default();
+    let mut other = 0;
     for (cls, _) in c.classes() {
-        class_bab += c.bonus.total_where("COMBAT", "BASEAB", |src| {
+        let part = c.bonus.total_where("COMBAT", "BASEAB", |src| {
             src.kind == "Class" && src.key == cls.key
         }) as i64;
+        let cycle = kind
+            .and_then(|k| {
+                cls.values("ATTACKCYCLE").find_map(|v| {
+                    let mut it = v.split('|');
+                    while let (Some(t), Some(n)) = (it.next(), it.next()) {
+                        if t.eq_ignore_ascii_case(k) {
+                            return n.parse::<i64>().ok();
+                        }
+                    }
+                    None
+                })
+            })
+            .unwrap_or(default_cycle)
+            .clamp(1, 20);
+        *by_cycle.entry(cycle).or_default() += part;
+        if cycle != 3 {
+            other += part;
+        }
+    }
+    // the cycle giving the most attacks
+    let mut cycle = default_cycle;
+    let mut best = 0;
+    for (cy, ab) in &by_cycle {
+        if ab / cy > best {
+            best = ab / cy;
+            cycle = *cy;
+        }
     }
     let mut working = bab;
-    let mut attack_total = class_bab;
     let mut sub_total = bab;
+    if by_cycle.get(&cycle).copied().unwrap_or(0) == 0 {
+        cycle = default_cycle;
+    } else if cycle != default_cycle {
+        if best < bab / default_cycle {
+            cycle = default_cycle;
+        } else {
+            working -= other;
+            sub_total -= other;
+        }
+    }
+    let mut attack_total = by_cycle.get(&cycle).copied().unwrap_or(0);
     let mut left = max_attacks;
     let mut out = Vec::new();
     loop {

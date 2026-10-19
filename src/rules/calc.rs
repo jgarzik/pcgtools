@@ -743,6 +743,41 @@ impl<'a> Calc<'a> {
         Some(eval_str(&f, &env))
     }
 
+    /// A level-table value as shown on sheets: from the level's own
+    /// row, else the `LEVEL:LEVEL` row, a field the row leaves out
+    /// being zero; None when the table has neither row.
+    pub fn level_row_value(
+        &self,
+        level: u32,
+        field: impl Fn(&crate::gamemode::LevelRow) -> String,
+    ) -> Option<f64> {
+        let gm = self.gm?;
+        if level < 1 {
+            return None;
+        }
+        let table = self.ch.pcg.value("EXPERIENCETABLE");
+        let mut rows = gm.level_table(table.as_deref());
+        if rows.is_empty() {
+            rows = gm.level_table(None);
+        }
+        let row = rows
+            .iter()
+            .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
+            .or_else(|| {
+                rows.iter()
+                    .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
+            })?;
+        let f = field(row);
+        if f.trim().is_empty() {
+            return Some(0.0);
+        }
+        let env = LevelEnv {
+            calc: self,
+            level: level as f64,
+        };
+        Some(eval_str(&f, &env))
+    }
+
     /// The ability category an ability pool draws from (pools are
     /// declared by ABILITYCATEGORY objects; a category is its own pool).
     fn pool_category(&self, pool: &str) -> String {
@@ -3883,6 +3918,10 @@ impl Env for LevelEnv<'_, '_> {
         } else {
             self.calc.var_value(name, None)
         }
+    }
+
+    fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
+        self.calc.call(name, args, None)
     }
 }
 

@@ -210,13 +210,13 @@ pub fn build(s: &SheetCtx) -> Element {
     let level = c.total_level();
     skills.add(
         "max_class_skill_level",
-        c.level_value(level, |r| r.class_skill_max.clone())
+        c.level_row_value(level, |r| r.class_skill_max.clone())
             .map(|v| v as i64)
             .unwrap_or(0),
     );
     skills.add(
         "max_cross_class_skill_level",
-        c.level_value(level, |r| r.cross_class_skill_max.clone())
+        c.level_row_value(level, |r| r.cross_class_skill_max.clone())
             .map(float_text)
             .unwrap_or_else(|| "0".into()),
     );

@@ -108,6 +108,15 @@ fn skills_list() {
 }
 
 #[test]
+fn skill_level_maximums() {
+    let m = tess();
+    // the level 2 row's formula, which reads a variable
+    assert_eq!(at(&m, "skills[0]/max_class_skill_level[0]"), "6");
+    // the row has no cross-class maximum: zero, not the LEVEL row's
+    assert_eq!(at(&m, "skills[0]/max_cross_class_skill_level[0]"), "0.0");
+}
+
+#[test]
 fn skills_shown_by_misc_bonus() {
     let m = tess();
     // shown only while Tinkering's bonuses beyond ranks and stat

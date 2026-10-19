@@ -302,3 +302,25 @@ fn equipment_customization() {
     assert!(err(&mut s, "equip customize Lantern +SHARP").contains("has no 'Lantern'"));
     assert!(err(&mut s, "equip customize \"Wooden Spoon\" +NOPE").contains("no EQUIPMOD named"));
 }
+
+#[test]
+fn new_character_records_game_mode_key() {
+    // a mode may be named by an alias; the file must name its key
+    let s = Session::create("TM", &["TB".into()], "Nova", dirs());
+    assert_eq!(s.ch.gamemode().as_deref(), Some("Testmode"));
+}
+
+#[test]
+fn worn_items_go_to_game_mode_slots() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "equip add \"Tin Shield\"");
+    ok(&mut s, "equip wear \"Tin Shield\"");
+    // the slot whose CONTAINS lists the item's type
+    let placed = s.ch.equipped();
+    assert_eq!(placed.len(), 1);
+    assert_eq!(placed[0].location, "Arm");
+    // an explicit location still wins
+    ok(&mut s, "equip unwear \"Tin Shield\"");
+    ok(&mut s, "equip wear \"Tin Shield\" \"Off Hand\"");
+    assert_eq!(s.ch.equipped()[0].location, "Off Hand");
+}

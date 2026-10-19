@@ -16,6 +16,7 @@
 use crate::context::Context;
 use crate::dataset::Object;
 use crate::error::{Error, Result};
+use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
 use crate::pcc::resolve::DataDirs;
 use crate::pcg::character::Character;
@@ -152,6 +153,10 @@ impl Session {
     pub fn create(gamemode: &str, campaigns: &[String], name: &str, dirs: DataDirs) -> Session {
         let mut ch = Character::new(gamemode, campaigns, name);
         let ctx = Context::for_character(&ch, dirs);
+        // the file names the mode by its key, whatever it was called here
+        if let Some(gm) = &ctx.gamemode {
+            ch.set_field("GAMEMODE", &gm.key);
+        }
         // start with every stat at the usual average
         for st in ctx.dataset.objects(FileKind::Stat) {
             ch.set_stat(&st.key, 10);
@@ -836,7 +841,7 @@ impl Session {
                 );
                 let loc = match w.get(3) {
                     Some(l) => l.to_string(),
-                    None => default_location(obj),
+                    None => default_location(obj, self.ctx.gamemode.as_ref()),
                 };
                 let warn = match obj {
                     Some(o) => self.check_prereqs(o, force)?,
@@ -1168,11 +1173,30 @@ impl Session {
     }
 }
 
-/// Default equipment-set location for an item, by its type.
-fn default_location(obj: Option<&Object>) -> String {
+/// Default equipment-set location for an item, by its type: weapons
+/// in the primary hand, other items in the first of the game mode's
+/// body slots (EQSLOT) whose CONTAINS lists one of the item's types.
+fn default_location(obj: Option<&Object>, gm: Option<&GameMode>) -> String {
     let Some(o) = obj else {
         return "Carried".into();
     };
+    if o.is_type("Weapon") {
+        return "Primary Hand".into();
+    }
+    if let Some(g) = gm {
+        for l in g.lines("equipmentslots.lst", "EQSLOT") {
+            let holds = l
+                .tokens
+                .iter()
+                .filter(|(t, _)| t == "CONTAINS")
+                .flat_map(|(_, v)| v.split('=').next().unwrap_or("").split(','))
+                .any(|t| o.is_type(t.trim()));
+            if holds {
+                return l.value.clone();
+            }
+        }
+    }
+    // without slots in the game mode
     for (t, loc) in [
         ("Armor", "Armor"),
         ("Shield", "Shield"),
@@ -1238,6 +1262,6 @@ mod tests {
 
     #[test]
     fn locations() {
-        assert_eq!(default_location(None), "Carried");
+        assert_eq!(default_location(None, None), "Carried");
     }
 }

@@ -9,6 +9,7 @@
 // SPDX-License-Identifier: MIT
 
 pub mod bonus;
+pub mod choice;
 pub mod formula;
 pub mod pre;
 pub mod split;

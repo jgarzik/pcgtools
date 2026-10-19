@@ -249,3 +249,39 @@ fn corpus_lint_unknown_tags() {
         tokens
     );
 }
+
+/// Every CHOOSE, ADD and AUTO value in the data prints back exactly.
+#[test]
+fn corpus_choice_syntax() {
+    use pcgtools::lst::{LineKind, LstFile};
+    use pcgtools::token::choice::SubToken;
+
+    let mut n = 0;
+    let mut fails: Vec<String> = Vec::new();
+    for dir in common::data_dirs() {
+        for f in common::files_with_ext(&dir, &["lst"]) {
+            let lf = LstFile::read(&f).unwrap();
+            for l in &lf.lines {
+                if !matches!(l.kind, LineKind::Record | LineKind::Continuation) {
+                    continue;
+                }
+                for t in l.tokens() {
+                    if !matches!(t.tag, "CHOOSE" | "ADD" | "AUTO") {
+                        continue;
+                    }
+                    let v = t.value.unwrap_or("");
+                    n += 1;
+                    let back = SubToken::parse(v).to_string();
+                    if back != v {
+                        fails.push(format!("{}:{} => {}", t.tag, v, back));
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("CHOOSE/ADD/AUTO: {}/{} round-trip", n - fails.len(), n);
+    for f in fails.iter().take(20) {
+        eprintln!("  {}", f);
+    }
+    assert!(fails.is_empty(), "{} values do not round-trip", fails.len());
+}

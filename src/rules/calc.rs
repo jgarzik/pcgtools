@@ -3430,32 +3430,20 @@ fn skill_list_has(ds: &Dataset, list: &str, sk: &Object, choices: &[String]) -> 
 /// names are checked; lists with types, wildcards or formulas offer
 /// anything.
 pub fn choose_allows(obj: &Object, choice: &str) -> bool {
+    use crate::token::choice::{Item, SubToken};
     let Some(v) = obj.get("CHOOSE") else {
         return true;
     };
-    let mut parts = v.split('|');
-    let kind = parts.next().unwrap_or("");
-    if !kind.eq_ignore_ascii_case("SKILL") {
+    let t = SubToken::parse(v);
+    if !t.kind.eq_ignore_ascii_case("SKILL") {
         return true;
     }
-    let items: Vec<&str> = parts
-        .filter(|p| {
-            !p.starts_with("TITLE=")
-                && !p.starts_with("NUMCHOICES=")
-                && !p.starts_with("PRE")
-                && !p.starts_with("!PRE")
-        })
-        .collect();
-    let open = items.is_empty()
-        || items.iter().any(|i| {
-            i.contains('=')
-                || i.contains('.')
-                || i.contains('%')
-                || i.contains('[')
-                // keywords: ALL, ANY, CLASS, CROSSCLASS, EXCLUSIVE, ...
-                || i.chars().all(|c| c.is_ascii_uppercase())
-        });
-    open || items.iter().any(|i| i.eq_ignore_ascii_case(choice))
+    let items = t.selection();
+    // types, keywords and formulas offer anything
+    let open = items.is_empty() || items.iter().any(|i| !matches!(i, Item::Name(_)));
+    open || items
+        .iter()
+        .any(|i| matches!(i, Item::Name(n) if n.eq_ignore_ascii_case(choice)))
 }
 
 /// The nature an ability is held with: NORMAL, AUTOMATIC or VIRTUAL.

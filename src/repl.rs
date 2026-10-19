@@ -1174,13 +1174,14 @@ impl Session {
 }
 
 /// Default equipment-set location for an item, by its type: weapons
-/// in the primary hand, other items in the first of the game mode's
-/// body slots (EQSLOT) whose CONTAINS lists one of the item's types.
+/// in the primary hand, other items (shields too, though they are also
+/// weapons) in the first of the game mode's body slots (EQSLOT) whose
+/// CONTAINS lists one of the item's types.
 fn default_location(obj: Option<&Object>, gm: Option<&GameMode>) -> String {
     let Some(o) = obj else {
         return "Carried".into();
     };
-    if o.is_type("Weapon") {
+    if o.is_type("Weapon") && !o.is_type("Shield") {
         return "Primary Hand".into();
     }
     if let Some(g) = gm {

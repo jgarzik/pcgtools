@@ -315,7 +315,8 @@ fn worn_items_go_to_game_mode_slots() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     ok(&mut s, "equip add \"Tin Shield\"");
     ok(&mut s, "equip wear \"Tin Shield\"");
-    // the slot whose CONTAINS lists the item's type
+    // the slot whose CONTAINS lists the item's type, even for a shield
+    // that is also a weapon (for bashing)
     let placed = s.ch.equipped();
     assert_eq!(placed.len(), 1);
     assert_eq!(placed[0].location, "Arm");

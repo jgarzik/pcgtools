@@ -78,7 +78,7 @@ Commands (names may be quoted; most accept --force to skip checks):
   set FIELD VALUE              name, player, age, gender, city, bio, ...
   race KEY                     set race
   deity KEY | deity none       set or clear deity
-  domain add KEY               add a domain
+  domain add KEY               add a domain (up to the number allowed)
   class add KEY [HP] [--subclass SUB] [--choose CHOICE]... [--stat ABB]...
                                gain a level (HP: the highest roll allowed
                                by the hit die and HD bonuses, by default);
@@ -89,7 +89,8 @@ Commands (names may be quoted; most accept --force to skip checks):
   ability add [CATEGORY|]KEY [CHOICE...]   add an ability (feat by default)
   ability rm [CATEGORY|]KEY    remove an ability
   skill KEY RANKS [CLASS]      set ranks bought in a skill
-  lang add KEY                 add a language
+  lang add KEY                 add a bonus language (from those offered,
+                               up to the number allowed)
   template add KEY             apply a template
   equip add NAME [QTY]         acquire equipment
   equip rm NAME                discard equipment
@@ -264,6 +265,62 @@ impl Session {
             }
         }
         None
+    }
+
+    /// May the character choose language `key`?  One it does not have
+    /// already, or by AUTO:LANG, must be among its bonus languages
+    /// (LANGBONUS), and fewer than the number allowed taken, counting
+    /// those not chosen through an ADD:LANGUAGE.  PCGen drops a
+    /// language it cannot account for when it loads a character.  As
+    /// in PCGen, bonus languages are chosen at first level only, unless
+    /// the game mode's INTBONUSLANG rule allows them later.
+    fn check_bonus_language(&self, key: &str) -> Result<()> {
+        let mut c = self.calc();
+        c.run();
+        let has = |list: &[String], k: &str| list.iter().any(|x| x.eq_ignore_ascii_case(k));
+        let known = self.ch.languages();
+        let auto = c.auto_languages();
+        if has(&known, key) || has(&auto, key) {
+            return Ok(());
+        }
+        let offered = c.bonus_language_choices();
+        if !has(&offered, key) {
+            return Err(Error::Other(format!(
+                "{} is not a bonus language for the character (use --force)",
+                key
+            )));
+        }
+        // languages chosen through ADD tokens
+        let mut added: Vec<String> = Vec::new();
+        for l in &self.ch.pcg.lines {
+            for e in l.elems.iter().flatten().filter(|e| e.tag == "ADD") {
+                let kids = e.children();
+                if kids.iter().any(|k| k.tag == "LANGUAGE") {
+                    added.extend(
+                        kids.iter()
+                            .filter(|k| k.tag == "CHOICE")
+                            .map(|k| k.value_text()),
+                    );
+                }
+            }
+        }
+        let taken = known
+            .iter()
+            .filter(|l| has(&offered, l) && !has(&auto, l) && !has(&added, l))
+            .count() as i64;
+        let allowed = if c.rule("INTBONUSLANG") || self.ch.total_level() <= 1 {
+            c.bonus_language_count()
+        } else {
+            0
+        };
+        if taken >= allowed {
+            return Err(Error::Other(format!(
+                "the character may choose {} bonus language{} now (use --force)",
+                allowed.max(0),
+                if allowed == 1 { "" } else { "s" }
+            )));
+        }
+        Ok(())
     }
 
     /// The range a hit point roll for a new level of `cls` may take:
@@ -587,6 +644,23 @@ impl Session {
             "domain" if w.get(1) == Some(&"add") => {
                 let o = self.find(FileKind::Domain, arg(2)?)?;
                 let key = o.key.clone();
+                let have = self.ch.domains();
+                if have.iter().any(|d| d.eq_ignore_ascii_case(&key)) {
+                    return Err(Error::Other(format!("the character already has {}", key)));
+                }
+                // no more than BONUS:DOMAIN|NUMBER allows
+                let max = {
+                    let mut c = self.calc();
+                    c.run();
+                    c.max_domains()
+                };
+                if have.len() as i64 >= max && !force {
+                    return Err(Error::Other(format!(
+                        "the character may have {} domain{} (use --force)",
+                        max,
+                        if max == 1 { "" } else { "s" }
+                    )));
+                }
                 let grant = self.domain_grant();
                 self.checkpoint();
                 match grant {
@@ -881,6 +955,9 @@ impl Session {
             "lang" | "language" if w.get(1) == Some(&"add") => {
                 let o = self.find(FileKind::Language, arg(2)?)?;
                 let key = o.key.clone();
+                if !force {
+                    self.check_bonus_language(&key)?;
+                }
                 self.checkpoint();
                 self.ch.add_language(&key);
                 changed(self, format!("added language {}", key))

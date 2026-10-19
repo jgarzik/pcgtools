@@ -876,3 +876,13 @@ deity Sarish
 class add "Holy Champion (Inner Demon)"
 class add "Holy Champion (Inner Demon)"
 class add "Holy Champion (Inner Demon)" 3
+
+== bonus_languages_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 14
+race Human
+set align NG
+class add Wizard
+lang add Elven
+lang add Dwarven

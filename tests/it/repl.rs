@@ -90,7 +90,7 @@ fn edits_and_undo() {
     ok(&mut s, "equip add \"Wooden Spoon\" 3");
     assert!(ok(&mut s, "equip unwear \"Tin Shield\"").contains("AC 15"));
     ok(&mut s, "equip wear \"Tin Shield\"");
-    ok(&mut s, "lang add \"Old Script\"");
+    ok(&mut s, "lang add \"Old Script\" --force");
     ok(&mut s, "set city \"New Gearton\"");
     ok(&mut s, "set align TN");
     assert_eq!(s.ch.pcg.value("CITY").as_deref(), Some("New Gearton"));
@@ -362,7 +362,8 @@ fn worn_items_go_to_game_mode_slots() {
 fn domains_record_the_class_granting_them() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     // no class grants domains yet
-    ok(&mut s, "domain add Cogs");
+    assert!(err(&mut s, "domain add Cogs").contains("may have 0 domains"));
+    ok(&mut s, "domain add Cogs --force");
     let line = |s: &Session| {
         String::from_utf8(s.ch.pcg.encode())
             .unwrap()
@@ -380,6 +381,40 @@ fn domains_record_the_class_granting_them() {
         line(&s),
         "DOMAIN:Cogs|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]"
     );
+    // BONUS:DOMAIN|NUMBER allows that one
+    assert!(err(&mut s, "domain add Cogs").contains("already has"));
+    assert!(err(&mut s, "domain add Sparks").contains("may have 1 domain "));
+    ok(&mut s, "domain add Sparks --force");
+}
+
+#[test]
+fn bonus_languages_limited() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Lin", dirs());
+    ok(&mut s, "race Driftborn");
+    // the race offers Trade Tongue (had already) and Gear Cant; Old
+    // Script was cleared from its list by its .MOD
+    let e = err(&mut s, "lang add \"Old Script\"");
+    assert!(e.contains("not a bonus language"), "{}", e);
+    // as many as the Grace modifier allows
+    let e = err(&mut s, "lang add \"Gear Cant\"");
+    assert!(e.contains("may choose 0 bonus languages"), "{}", e);
+    ok(&mut s, "set stat GRC 12");
+    ok(&mut s, "lang add \"Gear Cant\"");
+    ok(&mut s, "lang add \"Trade Tongue\"");
+    ok(&mut s, "lang add \"Old Script\" --force");
+    assert_eq!(
+        lines(&s, "LANGUAGE"),
+        ["LANGUAGE:Gear Cant|LANGUAGE:Trade Tongue|LANGUAGE:Old Script"]
+    );
+    for _ in 0..3 {
+        ok(&mut s, "undo");
+    }
+    assert!(lines(&s, "LANGUAGE").is_empty());
+    // after first level, only if the game mode's rule allows
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "set stat GRC 16");
+    assert!(err(&mut s, "lang add \"Gear Cant\"").contains("may choose 0"));
 }
 
 #[test]

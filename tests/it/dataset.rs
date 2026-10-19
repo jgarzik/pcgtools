@@ -97,7 +97,7 @@ fn objects_and_operations() {
     assert_eq!(tags, vec!["REGION", "FUNDS", "FUNDS", "GEAR", "STAT"]);
 
     // included campaign's languages
-    assert_eq!(ds.objects(FileKind::Language).len(), 2);
+    assert_eq!(ds.objects(FileKind::Language).len(), 3);
 
     // tables
     assert_eq!(ds.tables.len(), 1);

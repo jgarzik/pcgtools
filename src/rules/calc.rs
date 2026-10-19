@@ -1561,6 +1561,61 @@ impl<'a> Calc<'a> {
         self.bonus.total_where("HP", "BONUS", |s| s.kind == "Stat") as i64
     }
 
+    /// How many domains the character may have (BONUS:DOMAIN|NUMBER).
+    pub fn max_domains(&self) -> i64 {
+        self.bonus.total("DOMAIN", "NUMBER") as i64
+    }
+
+    /// How many bonus languages the character may choose from its
+    /// LANGBONUS lists: BONUS:LANG|BONUS from stats (at least 0) plus
+    /// BONUS:LANGUAGES|NUMBER.
+    pub fn bonus_language_count(&self) -> i64 {
+        let stat = self
+            .bonus
+            .total_where("LANG", "BONUS", |s| s.kind == "Stat")
+            .max(0.0);
+        (stat as i64) + self.bonus.total("LANGUAGES", "NUMBER") as i64
+    }
+
+    /// The languages offered as bonus languages: LANGBONUS of the race,
+    /// templates and classes (names, TYPE=t, ALL).
+    pub fn bonus_language_choices(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let langs = self.ds.objects(FileKind::Language);
+        for src in self
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SrcKind::Race | SrcKind::Template | SrcKind::Class))
+        {
+            let mut own: Vec<&str> = Vec::new();
+            for t in src.tokens.iter().filter(|t| t.tag == "LANGBONUS") {
+                for item in t.value.split(',').map(str::trim) {
+                    if item == "ALL" {
+                        own.extend(langs.iter().map(|o| o.key.as_str()));
+                    } else if let Some(ty) = item
+                        .strip_prefix("TYPE=")
+                        .or_else(|| item.strip_prefix("TYPE."))
+                    {
+                        own.extend(
+                            langs
+                                .iter()
+                                .filter(|o| ty.split('.').all(|x| o.is_type(x)))
+                                .map(|o| o.key.as_str()),
+                        );
+                    } else if !item.is_empty() {
+                        own.push(item);
+                    }
+                }
+            }
+            for k in own {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+                    out.push(k.to_string());
+                }
+            }
+        }
+        out
+    }
+
     /// Armor check penalty as shown on the sheet: the equipped
     /// armor's penalties, or the load penalty if worse, plus
     /// MISC|ACCHECK bonuses.

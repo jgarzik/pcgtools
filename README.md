@@ -13,7 +13,7 @@ A Rust library and command line tool for the data files of the
 Files are read and written losslessly: unmodified bytes (alignment
 TABs, comments, line endings, odd encodings) survive a round trip.
 
-[docs/FORMAT.md](docs/FORMAT.md) describes all of these formats.
+[FORMAT.md](FORMAT.md) describes all of these formats.
 [CHANGELOG.md](CHANGELOG.md) lists what each release brings.
 
 pcgtools is an independent project, not affiliated with or endorsed
@@ -212,7 +212,7 @@ and print the differences.
 Continuous integration runs both: the plain test suite, and the corpus
 tests against PCGen data checked out at a pinned revision.
 
-`tools/gen_catalog.py PCGEN_ROOT > src/catalog/tags.tsv` regenerates
+`python3 gen_catalog.py PCGEN_ROOT > src/catalog/tags.tsv` regenerates
 the tag catalog. It records facts only: tag names, where they are
 valid, and whether they are deprecated.
 

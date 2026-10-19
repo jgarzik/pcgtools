@@ -14,9 +14,9 @@ categories = ["command-line-utilities", "parser-implementations", "games"]
 include = [
     "/src",
     "/tests",
-    "/docs",
-    "/tools",
     "/README.md",
+    "/FORMAT.md",
+    "/gen_catalog.py",
     "/CHANGELOG.md",
     "/LICENSE",
 ]

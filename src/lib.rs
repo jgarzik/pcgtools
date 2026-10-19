@@ -15,7 +15,7 @@
 //!
 //! Files are read and written losslessly: unmodified bytes survive a
 //! round trip.  The formats themselves are described in
-//! [docs/FORMAT.md](https://github.com/jgarzik/pcgtools/blob/main/docs/FORMAT.md).
+//! [FORMAT.md](https://github.com/jgarzik/pcgtools/blob/main/FORMAT.md).
 //!
 //! # Characters
 //!

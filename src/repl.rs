@@ -162,10 +162,12 @@ impl Session {
         }
         // a file without an age gets a random one each time PCGen loads it
         ch.set_field("AGE", "0");
-        // start with every stat at the usual average
+        // start with every stat at the usual average, as PCGen's
+        // all-the-same method does
         for st in ctx.dataset.objects(FileKind::Stat) {
             ch.set_stat(&st.key, 10);
         }
+        ch.set_roll_method(1, "10");
         Session {
             ch,
             ctx,

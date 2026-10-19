@@ -510,3 +510,63 @@ fn level_choices_from_add_tokens() {
         lvl
     );
 }
+
+#[test]
+fn new_characters_carry_pcgen_defaults() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "equip add \"Wooden Spoon\"");
+    let text = String::from_utf8(s.ch.pcg.encode()).unwrap();
+    let wanted = [
+        "VERSION",
+        "ROLLMETHOD",
+        "PURCHASEPOINTS",
+        "POOLPOINTS",
+        "POOLPOINTSAVAIL",
+        "GAMEMODE",
+        "IGNORECOST",
+        "ALLOWDEBT",
+        "AUTORESIZEGEAR",
+        "CHARACTERNAME",
+        "STAT",
+        "MONEY",
+        "EQUIPNAME",
+    ];
+    let tags: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.split(':').next())
+        .filter(|t| wanted.contains(t))
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            "VERSION",
+            "ROLLMETHOD",
+            "PURCHASEPOINTS",
+            "POOLPOINTS",
+            "POOLPOINTSAVAIL",
+            "GAMEMODE",
+            "IGNORECOST",
+            "ALLOWDEBT",
+            "AUTORESIZEGEAR",
+            "CHARACTERNAME",
+            "STAT",
+            "STAT",
+            "MONEY",
+            "EQUIPNAME"
+        ],
+        "{}",
+        text
+    );
+    // every stat starts at 10, as the all-the-same method gives
+    assert_eq!(lines(&s, "ROLLMETHOD"), ["ROLLMETHOD:1|EXPRESSION:10"]);
+    assert_eq!(lines(&s, "PURCHASEPOINTS"), ["PURCHASEPOINTS:N"]);
+    assert_eq!(
+        lines(&s, "POOLPOINTS"),
+        ["POOLPOINTS:0", "POOLPOINTSAVAIL:-1"]
+    );
+    assert_eq!(lines(&s, "MONEY"), ["MONEY:0"]);
+    assert_eq!(lines(&s, "IGNORECOST"), ["IGNORECOST:N"]);
+    assert_eq!(lines(&s, "ALLOWDEBT"), ["ALLOWDEBT:N"]);
+    assert_eq!(lines(&s, "AUTORESIZEGEAR"), ["AUTORESIZEGEAR:Y"]);
+}

@@ -26,6 +26,8 @@ const ORDER: &[&str] = &[
     "VERSION",
     "ROLLMETHOD",
     "PURCHASEPOINTS",
+    "CHARACTERTYPE",
+    "PREVIEWSHEET",
     "POOLPOINTS",
     "POOLPOINTSAVAIL",
     "GAMEMODE",
@@ -211,12 +213,27 @@ impl Character {
             ));
         }
         l.push(PcgLine::new(vec![Elem::raw("VERSION", "6.09.00")]));
+        // what PCGen writes for a character it has just made: no
+        // point buy, no stat increases pending, no budget set
+        l.push(PcgLine::new(vec![Elem::raw("PURCHASEPOINTS", "N")]));
+        l.push(PcgLine::new(vec![Elem::raw("POOLPOINTS", "0")]));
+        l.push(PcgLine::new(vec![Elem::raw("POOLPOINTSAVAIL", "-1")]));
         l.push(PcgLine::new(vec![Elem::text("GAMEMODE", gamemode)]));
+        for (tag, v) in [
+            ("IGNORECOST", "N"),
+            ("ALLOWDEBT", "N"),
+            ("AUTORESIZEGEAR", "Y"),
+        ] {
+            l.push(PcgLine::new(vec![Elem::raw(tag, v)]));
+        }
         l.push(PcgLine::blank());
         l.push(PcgLine::comment("Character Bio"));
         l.push(PcgLine::new(vec![Elem::text("CHARACTERNAME", name)]));
         l.push(PcgLine::blank());
         l.push(PcgLine::comment("Character Attributes"));
+        l.push(PcgLine::blank());
+        l.push(PcgLine::comment("Character Equipment"));
+        l.push(PcgLine::new(vec![Elem::raw("MONEY", "0")]));
         Character { pcg }
     }
 
@@ -529,6 +546,27 @@ impl Character {
                 self.insert_ordered("STAT", line);
             }
         }
+    }
+
+    /// Record how the stats were generated (ROLLMETHOD:code with its
+    /// EXPRESSION) and, for point buy, the method (PURCHASEPOINTS).
+    pub fn set_roll_method(&mut self, code: u32, expression: &str) {
+        self.put(
+            "ROLLMETHOD",
+            vec![
+                Elem::raw("ROLLMETHOD", &code.to_string()),
+                Elem::raw("EXPRESSION", expression),
+            ],
+        );
+        let purchase = if code == 2 {
+            vec![
+                Elem::raw("PURCHASEPOINTS", "Y"),
+                Elem::raw("TYPE", expression),
+            ]
+        } else {
+            vec![Elem::raw("PURCHASEPOINTS", "N")]
+        };
+        self.put("PURCHASEPOINTS", purchase);
     }
 
     pub fn set_race(&mut self, race: &str) {

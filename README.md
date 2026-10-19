@@ -75,10 +75,21 @@ modifications of missing objects, duplicates, and unknown game modes.
     pcgtools pcg show HERO.pcg
     pcgtools pcg lint HERO.pcg       # check the character against its data
     pcgtools pcg stats HERO.pcg [-v] [-e SKILL.Stealth -e COMBAT.AC]
+    pcgtools pcg sheet HERO.pcg [--compare EXPECTED.xml]
+    pcgtools pcg vars HERO.pcg [-s PC.STAT]
 
 `pcg stats` computes ability scores, base attack bonus, saves, hit
 points, armor class and skill totals. `-e CATEGORY.TARGET` explains a
 total by listing every bonus that contributes to it.
+
+`pcg sheet` builds the full character sheet as XML (or JSON with
+`--json`): abilities, hit points, armor class, initiative, saves,
+skills, attacks, weapons with to-hit and damage per mode and range,
+protection, equipment and load, feats and special abilities,
+proficiencies, languages, class features, domains, companions and
+spells. `--compare` lists every value that differs from an expected
+sheet. `pcg vars` shows the variables the data declares and their
+values, by scope.
 
 ### Character editor
 
@@ -94,21 +105,28 @@ command and saves the file if it changed.
 
 Commands (`help` in the editor lists them):
 
-    info | stats [-v] | explain CATEGORY.TARGET
+    info | stats [-v] | explain CATEGORY.TARGET | vars [SCOPE]
     ls KIND [GLOB] [COND...] | show KIND KEY | prereq KIND KEY
     set stat ABB SCORE | set xp N | set align ABB | set FIELD VALUE
     race KEY | deity KEY|none | domain add KEY
-    class add KEY [HP] | class rm
+    class add KEY [HP] [--subclass SUB] | class rm | class subclass KEY SUB
     ability add [CATEGORY|]KEY [CHOICE...] | ability rm [CATEGORY|]KEY
-    feat add KEY | feat rm KEY
+    feat add KEY [CHOICE...] | feat rm KEY
     skill KEY RANKS [CLASS]
-    lang add KEY | template add KEY
+    lang add KEY | template add KEY | kit apply KEY
     equip add NAME [QTY] | equip rm NAME | equip wear NAME [LOCATION] | equip unwear NAME
+    equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
+    spell add CLASS SPELL [LEVEL] [BOOK] | spell rm CLASS SPELL [BOOK]
+    follower add NAME TYPE RACE [FILE] | follower rm NAME | follower ls
     undo | save [PATH] | quit
 
 Names are checked against the loaded data. Prerequisites are enforced
-for races, classes, abilities, templates and equipment, and skill
-ranks are capped at the level maximum; `--force` overrides. After
+for races, classes, abilities, templates and equipment; an ability's
+choices must be ones its `CHOOSE` offers; abilities are paid for from
+their category's pool (bonus pools, the race's starting feats and the
+game mode's feat schedule); skill ranks are capped at the level
+maximum and paid for with the class's skill points. `info` shows the
+pools and skill points left. `--force` overrides the checks. After
 each change the editor shows the updated level, attack bonus, hit
 points, armor class and saves.
 
@@ -140,7 +158,8 @@ The crate exposes the same functionality:
 | `gamemode` | game mode files and key migration |
 | `catalog`, `lint`, `query` | tag catalog, checks, object filters |
 | `pcg` | PCG files and the typed `Character` view |
-| `context`, `rules` | loading a character's data; derived statistics |
+| `context`, `rules` | loading a character's data; derived statistics, variables, equipment, spells, pools |
+| `sheet` | the full character sheet |
 | `repl` | the editing session and command language |
 
 ## Testing
@@ -155,11 +174,13 @@ checkouts when `PCGEN_ROOT` names a directory containing `pcgen/`
     PCGEN_ROOT=~/src/pcg cargo test --release
 
 They round-trip every data and character file, load every campaign,
-check prerequisite and bonus syntax across the data, and compare
-derived statistics with the expected character sheets in PCGen's test
-suite. In every game mode, the core values (attack bonus, saves, hit
-points, armor class, skills) must match; match counts for every other
-section of the sheet are reported per game mode.
+check prerequisite, bonus and choice syntax across the data, run
+editor sessions on real data, and compare full character sheets with
+the expected sheets in PCGen's test suite: every value of every
+expected sheet must match, in every game mode. Match counts are
+reported per game mode and sheet section; `ORACLE_ONLY=name`,
+`ORACLE_SECTION=section` and `ORACLE_VERBOSE=1` narrow the comparison
+and print the differences.
 
 Continuous integration runs both: the plain test suite, and the corpus
 tests against PCGen data checked out at a pinned revision.
@@ -170,10 +191,5 @@ valid, and whether they are deprecated.
 
 ## Limitations
 
-* Derived statistics follow the classic bonus model. Data that relies
-  on the newer `MODIFY`/declared-variable system for core values is
-  only partly supported.
-* Spells, attacks, weapon damage and companion statistics are not
-  computed.
 * Version 1 character files (from very old releases) are not read.
 * Network (`http:`) file references are not fetched.

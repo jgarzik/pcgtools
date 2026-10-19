@@ -17,6 +17,7 @@ Contents:
 7. [Game mode files](#7-game-mode-files)
 8. [PCG character files](#8-pcg-character-files)
 9. [Derived values](#9-derived-values)
+10. [Character sheets](#10-character-sheets)
 
 Appendices: [A. A complete small example](#appendix-a-a-complete-small-example),
 [B. Tag catalog](#appendix-b-tag-catalog)
@@ -394,8 +395,8 @@ Identity rules:
   Modification heads must name the category (`CATEGORY=FEAT|Key.MOD`).
 * Key comparison is case-insensitive.
 * Defining a key that already exists is an error; the later definition
-  is ignored. (Listing the same file twice, for example with different
-  INCLUDE filters, is not a duplicate.)
+  is ignored, except as described in 5.5. (Listing the same file twice,
+  for example with different INCLUDE filters, is not a duplicate.)
 
 ### 5.2 Structured kinds
 
@@ -461,6 +462,13 @@ ENDTABLE:
 
 Fields may be double-quoted (with `""` for a literal quote). Rows that
 are entirely empty, and lines starting with `#` or `"#`, are ignored.
+Cells are trimmed. Inside a table the first row names the columns, the
+second gives each column's format, and every further row is data;
+the first cell of `STARTTABLE:` and `ENDTABLE` lines is all that is
+read. A file may hold several tables. A `STARTTABLE` inside an open
+table, an `ENDTABLE` with none open, data outside a table and a
+missing `ENDTABLE` are errors (an unterminated table is still kept).
+Tables are read by the `lookup` function (6.6).
 
 ### 5.3 Modification order
 
@@ -482,11 +490,47 @@ Each pass processes operations in load order. Consequences:
 
 When a `.MOD` appends a token, the token is added after the object's
 existing tokens. Whether that replaces or adds to an earlier value
-depends on the tag: single-valued tags (such as `HD` or `COST`) take
-the last value, list-valued tags (such as `BONUS` or `ABILITY`)
-accumulate. The special value `.CLEAR` (as in `TYPE:.CLEAR`) removes
-all earlier values of that tag; several tags support further
-`.CLEAR.` variants inside their own value syntax (chapter 6).
+depends on the tag's cardinality. The same rules apply to tokens of
+repeated `CLASS:Name` lines (5.2) and to the tokens a `.COPY` line
+applies to its copy.
+
+**Single-valued tags.** A new value replaces every earlier value of
+the tag:
+
+`ABB`, `ACCHECK`, `ALTCRITMULT`, `ALTCRITRANGE`, `ALTDAMAGE`,
+`BASEITEM`, `BASEQTY`, `CHOOSE`, `CONTAINS`, `COST`, `CR`, `CRITMULT`,
+`CRITRANGE`, `DAMAGE`, `EDR`, `EXCLUSIVE`, `FACE`, `HANDS`, `HD`,
+`KEYSTAT`, `LEGS`, `LEVELADJUSTMENT`, `MAXDEX`, `MAXLEVEL`, `MEMORIZE`,
+`MULT`, `OUTPUTNAME`, `PROFICIENCY`, `RACETYPE`, `RANGE`, `RATEOFFIRE`,
+`REACH`, `REACHMULT`, `SELECT`, `SIZE`, `SLOTS`, `SORTKEY`,
+`SOURCEDATE`, `SOURCELINK`, `SOURCELONG`, `SOURCEPAGE`, `SOURCESHORT`,
+`SOURCEWEB`, `SPELLFAILURE`, `SPELLSTAT`, `STACK`, `STARTSKILLPTS`,
+`STATMOD`, `USEUNTRAINED`, `VISIBLE`, `WIELD`, `WT`,
+`XTRASKILLPTSPERLVL`.
+
+**List-valued tags.** Every other tag accumulates: each token is kept
+in order after the earlier ones.
+
+**Clear forms.** A token whose value has one of these forms removes
+earlier tokens before (or instead of) being added:
+
+| Token | Effect |
+|---|---|
+| `TAG:.CLEAR` | remove every earlier `TAG` token; nothing is added |
+| `TAG:.CLEARALL` | the same as `.CLEAR` |
+| `TAG:.CLEAR.x` | remove earlier `TAG` tokens matching *x*; nothing is added |
+| `TAG:.CLEAR|value` | remove every earlier `TAG` token, then add `TAG:value` |
+| `PRE:.CLEAR` | remove every earlier prerequisite token (`PRExxx` and `!PRExxx`) |
+
+For `.CLEAR.x`, an earlier value matches when it equals *x*, when one
+of its `|`-separated parts equals *x* (both ignoring case), or when *x*
+read as a regular expression matches somewhere in it. So after
+`CSKILL:Climb|Swim`, the token `CSKILL:.CLEAR.Swim` removes the whole
+`Climb|Swim` token, not only `Swim`.
+
+A `KEY` token changes the object's key; an `ABB` token does so for
+sizes, stats and alignments; a `CATEGORY` token changes an ability's
+category.
 
 ### 5.4 Source information
 
@@ -494,6 +538,32 @@ Each object records the source tags from the file's header line
 (`SOURCELONG`, `SOURCESHORT`, `SOURCEWEB`, `SOURCEDATE`) unless the
 object's own tokens supply them. `SOURCEPAGE` is normally given per
 object.
+
+### 5.5 Duplicate keys and load-plan options
+
+Several campaign tags (4.2) adjust loading for the whole load plan.
+They are collected once from every campaign involved, selected or
+included.
+
+| Tag | Effect |
+|---|---|
+| `RANK` | orders selected campaigns, highest first (4.7) |
+| `ALLOWDUPES:KIND` | objects of that kind may share a key: every definition is kept, and lookup by key finds the first loaded. One kind per tag. |
+| `SOURCEDATE` | the campaign's publication date, used to settle duplicates (below) |
+| `FORWARDREF:KIND|Key,Key` | declares objects the data refers to without defining them; a character's reference to one is not reported as missing |
+
+When a kind does not allow duplicates and a second definition of a key
+is loaded, the two are compared by *source date*: the object's own
+`SOURCEDATE`, else the one in its file's source header (3.4), else
+the `SOURCEDATE` of the campaign that listed the file. If both
+definitions have a date and the newer one's is later (compared as
+text, so `YYYY-MM` and `YYYY-MM-DD` order correctly), the new
+definition replaces the old one in place and an informational note is
+reported. Otherwise the new definition is ignored with a warning.
+Repeated `CLASS:Name` lines within one file are not duplicates (5.2).
+Lines of `DATACONTROL`, `VARIABLE`, `GLOBALMODIFIER`, `COMPANIONMOD`
+and `BIOSET` files are declarations whose heads repeat by design; they
+are never treated as duplicates.
 
 ---
 
@@ -586,6 +656,55 @@ Several tags select a sub-token by the first `|`-field of their value:
 `CHOOSE` may be prefixed with `NUMCHOICES=n|` to limit how many
 choices may be made.
 
+`CHOOSE`, `ADD` and `AUTO` values share one structure: a sub-token
+naming what is chosen or granted, then `|`-separated selection items.
+
+```
+value     = [ "NUMCHOICES=" n "|" ] kind { "|" item }
+          | kind "(" text ")" count ;          (* legacy: no "|" at all *)
+item      = prereq | selector { "," selector } | name ;
+selector  = primary [ "[" item { "|" item } "]" ] ;
+primary   = "!" primary
+          | "TYPE=" types | "TYPE." types
+          | KEYWORD "=" text
+          | KEYWORD
+          | name ;
+KEYWORD   = upper-case letters, digits and "_", at least one letter ;
+```
+
+| Item | Example | Selects |
+|---|---|---|
+| name | `Dodge`, `Charm, Psionic` | the object with that key |
+| type | `TYPE=Combat`, `TYPE.Craft` | objects having every `.`-separated type |
+| keyword | `ALL`, `ANY`, `PC`, `QUALIFIED`, `NOCHOICE`, `DEITYWEAPON` | a set named by the keyword |
+| pair | `CATEGORY=FEAT`, `CLASS=Wizard`, `TITLE=Pick one` | a qualifier or option |
+| negation | `!TYPE=Exotic` | everything the item does not select |
+| narrowed | `!PC[TYPE=Weapon Focus]` | the head item restricted by the bracketed items |
+| conjunction | `!PC,QUALIFIED` | what every comma-joined part selects |
+| prerequisite | `PRERACE:1,Human`, `!PREVARGT:X,1` | a condition on the whole token |
+
+Rules:
+
+* `,` joins selectors only when every part is a type, keyword, pair,
+  negation or narrowed item; otherwise the whole part is one name, so
+  names containing commas survive.
+* `|` separates independent items; `,` within one part requires all
+  of its parts.
+* A pair needs an upper-case key: `a=b` is a name.
+* A leading number is a count (`ADD:CLASSSKILLS|2|...`).
+* `TITLE=` (and a `NUMCHOICES=` written as an item) is an option, not
+  part of the selection.
+* The legacy form `ADD:FEAT(TYPE=Occupation)1` keeps its parenthesized
+  selection and count as written.
+* Values print back exactly as written.
+
+`pcgtools` enumerates a `CHOOSE` only when its items are names, `ALL`,
+`ANY` and type items over a kind it can list (skills, languages,
+proficiencies, classes, stats, domains, deities, races, templates,
+spells, equipment, alignments, sizes, saves); keywords such as `PC`,
+narrowed and combined items need the character's state and are
+treated as offering anything.
+
 ### 6.5 Formulas
 
 Formulas appear in `BONUS`, `DEFINE`, `PREVAR`, and many other places.
@@ -620,10 +739,87 @@ term    = name { "=" text | "[" text "]" } ;
   (`(x)MAX1` meaning the larger of x and 1); `pcgtools` accepts them.
 * Strings are double-quoted.
 
-Newer data also uses a separate typed formula language in `MODIFY`
-tokens and data control files: `MODIFY:var|operation|formula` with
-operations such as `SET`, `ADD`, `MULTIPLY`, `MAX`, `MIN`, and a
-`PRIORITY=n` option. Its expressions use the same operator grammar.
+Newer data also writes formulas in `MODIFY` tokens and data control
+files. They use the same grammar but a typed evaluation (6.6).
+
+### 6.6 Typed formulas
+
+Formulas in `MODIFY`, `MODIFYOTHER`, global modifier lines and
+data-defined `FUNCTION`s evaluate to typed values. Each declared
+variable has a *format*:
+
+| Format | Values | Default | Literal |
+|---|---|---|---|
+| `NUMBER` | integer or decimal | `0` | `3`, `2.5` |
+| `BOOLEAN` | true/false | false | `true`/`yes`, `false`/`no` |
+| `STRING` | text | empty | as written |
+| `ORDEREDPAIR` | two numbers | `0,0` | `5,5` |
+| `DICE` | a dice expression, kept as text | `0` | `1d6` |
+| `HANDED` | text | `Right` | as written |
+| any other name (`STAT`, `ALIGNMENT`, a dynamic scope, ...) | a reference to an object of that kind | none | its key |
+| `ARRAY[f]` | a list of *f* | empty | `a,b,c` |
+| `OPTIONAL[f]` | an *f* or nothing | nothing | empty or an *f* |
+
+Format names are case-insensitive and nest (`ARRAY[ARRAY[STRING]]`).
+The defaults may be overridden per format (9.5).
+
+Evaluation:
+
+* Integer arithmetic stays integral when exact (`6/3` is `2`, `7/2` is
+  `3.5`); division or remainder by zero gives 0; `^` is a power.
+* `+` of two strings concatenates.
+* Comparisons and `&&`, `||`, `!` yield booleans; `==` compares
+  numbers numerically and anything else as text ignoring case.
+  Booleans count as 1/0 in arithmetic; strings by their numeric
+  reading.
+* A bare name is a declared variable, looked up from the current scope
+  outward (9.5). An undeclared name is 0 and is recorded as unknown.
+* A quoted string where an object format is expected is a reference
+  to the object with that key.
+
+Built-in functions (names are case-insensitive):
+
+| Function | Result |
+|---|---|
+| `abs(x)`, `floor(x)`, `ceil(x)` | as usual; `floor`/`ceil` give integers |
+| `round(x)` | nearest integer, halves upward (`round(-2.5)` is `-2`) |
+| `max(a,b,...)`, `min(a,b,...)` | largest / smallest argument |
+| `if(c,t,e)` | *t* when *c* is true, else *e* |
+| `value()` | inside a modifier, the variable's value before this modifier |
+| `input("Name")` | the value of channel *Name* (9.5) |
+| `get("FORMAT","key")` | a reference to an object |
+| `key(x)` | the key of an object reference, as text |
+| `this()` | the object whose scope instance is evaluating |
+| `getOther("SCOPE",key,expr)` | *expr* evaluated in another instance's scope |
+| `getFact("KIND",obj,"Fact")` | the object's `FACT:Fact|value` value, as text |
+| `lookup("Table",key,"Column")` | a table cell (below) |
+| `length(a)`, `isEmpty(a)`, `slice(a,start[,end])` | array length, emptiness, sub-array |
+| `isPresent(o)`, `getOptional(o)` | whether an optional holds a value; that value |
+| `arg(n)` | inside a data-defined function, its *n*-th argument (from 0) |
+
+`listAll` and `group` are accepted but yield an empty array. Any other
+name is a data-defined function, declared in a data control file as
+`FUNCTION:Name<TAB>VALUE:formula`; its body sees the caller's scope
+and `arg(n)`. An unknown function yields 0 and is recorded.
+
+**Table lookup.** `lookup(table, key, column)` finds the `DATATABLE`
+table (5.2) whose name equals *table*, the column whose name equals
+*column*, and the first data row whose first cell equals *key* —
+ignoring case, or numerically when both read as numbers (`2` matches
+`2.0`). The cell is returned as a number when it reads as one, else as
+text. A missing table, column or row gives 0. The format row is not
+consulted.
+
+```
+STARTTABLE:Carry
+Strength,Light,Heavy
+NUMBER,NUMBER,NUMBER
+10,33,100
+11,38,115
+ENDTABLE:
+```
+
+With this table, `lookup("Carry",11,"Heavy")` is 115.
 
 ---
 
@@ -670,7 +866,7 @@ equals the mode's key or one of its allowed names (case-insensitive).
 | `sizeAdjustment.lst` | size categories (newer modes define sizes in data instead) | |
 | `rules.lst` | optional rules the user can toggle | `NAME` with `VAR`, `DEFAULT`, `EXCLUDE`, `DESC` |
 | `equipmentslots.lst` | where equipment can be worn | `NUMSLOTS`, `EQSLOT` with `CONTAINS`, `NUMBER` |
-| `codeControl.lst` | switches selecting engine behavior | `ALIGNMENTFEATURE`, `DOMAINFEATURE`, ... |
+| `codeControl.lst` | switches selecting engine behavior (7.4) | `ALIGNMENTFEATURE`, `DOMAINFEATURE`, ... |
 | `migration.lst` | renamed object keys, for loading old characters | `RACE:Old` with `NEWKEY`, `MAXVER` |
 | `pointbuymethods_system.lst` | point-buy stat generation | `METHOD`, `STAT` |
 | `bio/biosettings.lst` | default age/height/weight tables (as BIOSET, 5.2) | `AGESET`, `RACENAME` |
@@ -679,6 +875,23 @@ equals the mode's key or one of its allowed names (case-insensitive).
 
 `BONUSSTACKS` lists, separated by `.`, the bonus types that stack with
 themselves (see 6.3); the line may repeat.
+
+### 7.4 Code controls
+
+Each `codeControl.lst` line is `NAME:value`. Some controls switch a
+feature on or off; others name a declared variable (9.5) that takes
+over a core value. `pcgtools` reads these:
+
+| Control | Value | Effect |
+|---|---|---|
+| `ALIGNMENTFEATURE` | `YES`/`NO` | `NO` hides the character's alignment; absent means enabled |
+| `FACE` | variable name | declares a global `ORDEREDPAIR` variable of that name; its value, when set, is the character's face (width, depth) |
+| `PCREACH` | variable name | the character's reach is that global variable's value instead of the race/template value plus `COMBAT.REACH` bonuses |
+| `STATMODSAVE` | variable name | the stat part of a save is that variable in the save's scope instead of the bonuses on the save object |
+| `STATINPUT` | channel name | each stat's base score is supplied as that channel in the stat's scope |
+
+Control names are case-insensitive. Other controls (such as
+`DOMAINFEATURE`) are read but have no effect.
 
 ---
 
@@ -794,15 +1007,18 @@ major.minor series — and no older than `MINVER` if given.
 The formats above define *data*; the meaning of most of it is the
 bonus and variable model described here. It is how a character's
 attack bonus, saves, armor class, hit points and skill totals follow
-from the objects it has. (This chapter describes the classic model
-used by most shipped data. Newer data also uses `MODIFY` and declared
-variables; see 6.5.)
+from the objects it has. Sections 9.1–9.4 describe the classic model
+used by most shipped data. Declared variables changed by `MODIFY` are
+solved separately (9.5); they reach the classic results only through
+the code controls of 7.4.
 
 ### 9.1 Active objects
 
 An object contributes its tokens while it is *active*:
 
-* every stat, save and skill object;
+* every stat and save object;
+* skills with ranks, and, once the character has a class, every skill
+  usable untrained;
 * the character's alignment, race, and size category;
 * templates: those recorded in the character, plus those granted by
   `TEMPLATE:` tokens of active objects;
@@ -865,6 +1081,295 @@ bonuses once per time.
 | armor class of a type | per the game mode's `ACTYPE`: add the `COMBAT.AC` bonuses of the listed types (`TOTAL` means all), subtract the removed ones |
 | skill total | ranks + key stat modifier + `SKILL.name`, `SKILL.STAT.abb`, `SKILL.TYPE.t`, `SKILL.LIST`, `SKILL.ALL` + class/cross-class bonuses + armor check penalty for `ACHECK:YES` skills |
 | ranks | bought ranks + `SKILLRANK.name`, capped at the experience table's class or cross-class maximum for the character's level |
+
+### 9.5 Declared variables
+
+**Declarations.** `VARIABLE` files declare variables, one per line:
+
+```
+decl   = "GLOBAL:" fname | "LOCAL:" scope "|" fname | "CHANNEL:" scope "|" fname ;
+fname  = [ format "=" ] name ;       (* format defaults to NUMBER *)
+name   = letter { letter | digit | "_" } ;
+```
+
+A head with no tag counts as `GLOBAL`. A channel is stored under the
+name `CHANNEL*name`. Redeclaring a variable with the same format is
+harmless; with a different format, or with a name already declared in
+an enclosing scope, it is an error.
+
+**Scopes.** `PC` is the global scope. Local scopes are named
+`PC.X`, and a dotted scope draws on its parent (`PC.EQUIPMENT.PART`
+on `PC.EQUIPMENT`, which draws on `PC`). A local variable has one
+value per *instance*, that is per object of the scope:
+
+| Scope | Instances |
+|---|---|
+| `PC.STAT`, `PC.SAVE` | every stat and save in the data |
+| `PC.SKILL`, `PC.SIZE` | each active skill (9.1); the character's size |
+| `PC.EQUIPMENT` | each equipped item, keyed by the item's name |
+| `PC.EQUIPMENT.PART` | each active equipment modifier |
+| `PC.<category>` | each dynamic object granted by `GRANT:Category|Key{|Key}` on an active object |
+
+Objects of other kinds are in `PC`. A name is resolved from an
+instance by looking in its scope, then each enclosing scope.
+
+**Modifiers.**
+
+```
+MODIFY:var|op|value{|PRIORITY=n}
+MODIFYOTHER:scope|group|var|op|value{|PRIORITY=n}
+```
+
+`MODIFY` on an active object changes *var* as seen from that object's
+instance. `MODIFYOTHER` changes it on every instance of *scope*
+(written `PC.X` or just `X`) selected by *group*: `ALL`, an object key,
+or `GROUP=g` (objects whose `GROUP` token lists *g*); a trailing
+`[...]` on the group is ignored. Each line of a `GLOBALMODIFIER` file
+is a `MODIFY` applied in the global scope. A modifier naming an
+undeclared variable is reported and dropped.
+
+| Op | Result |
+|---|---|
+| `SET` | the value |
+| `MULTIPLY`, `DIVIDE`, `ADD` | previous × value, previous ÷ value, previous + value; `ADD` on an array appends items not already present |
+| `MAX`, `MIN` | the larger / smaller of previous and value |
+
+**Solving.** A variable's value starts at its format's default and
+passes through its modifiers sorted by `PRIORITY` (ascending, default
+0), then by operation in the order `SET`, `MULTIPLY`, `DIVIDE`, `ADD`,
+`MAX`, `MIN`, then by load order. For `BOOLEAN`, `STRING`,
+`ORDEREDPAIR` and `DICE` variables the value is a literal; otherwise
+it is a formula (6.6), evaluated in the carrier's instance for
+`MODIFY` and in the target instance for `MODIFYOTHER`, with `value()`
+the previous value. A variable that depends on itself is reported and
+takes its default.
+
+**Defaults.** `DEFAULTVARIABLEVALUE:FORMAT|value` lines in data control
+files set a format's starting value. If the data has none, those of
+the game mode's `default/compatibilityDataControl.lst` apply. The
+default for the `DEITY` format also names the deity of a character
+that has none.
+
+**Channels.** Channel values come from the character file and override
+any modifiers:
+
+| Channel | Scope | Source |
+|---|---|---|
+| (named by `STATINPUT`, 7.4) | each stat | base score |
+| `AGE`, `HEIGHT` | `PC` | biography numbers |
+| `GOLD` | `PC` | `MONEY` |
+| `HAIRCOLOR`, `HAIRSTYLE`, `SKINCOLOR`, `HANDED` | `PC` | biography text |
+| `ALIGNMENT`, `DEITY` | `PC` | the chosen object |
+
+**Listing.** `pcgtools pcg vars FILE [--scope S]` prints every declared
+variable's value per instance, grouped under `Scope` or `Scope:Key`
+headings as `name = value`, optionally limited to one scope; names that
+resolved to nothing are listed afterward. With `--json` the same map
+is printed as JSON.
+
+### 9.6 Ability pools and skill points
+
+**Ability pools.** Each ability category (from data and from the game
+mode, with `FEAT` always present) is a pool. Its size is the
+`ABILITYPOOL.<category>` bonus total; the `FEAT` pool adds the level
+feats below. Points spent are, over the abilities chosen (`NORMAL`)
+from that pool, the ability's `COST` (default 1) times its number of
+choices (at least 1). Level feats are:
+
+* the race's `STARTFEATS`;
+* for each class with `LEVELSPERFEAT:p` (p > 0), floor(level / p);
+  `LEVELSPERFEAT:0` gives none;
+* for each game mode `BONUSFEATLEVELSTARTINTERVAL:start|interval`, over
+  the levels of classes without `LEVELSPERFEAT`: none below *start*,
+  else (levels − start) / interval + 1 (just 1 when *interval* is 0).
+
+**Skill points per level** (for a class level gained at character
+level *n*):
+
+1. *sp* = the class's `STARTSKILLPTS` formula + `SKILLPOINTS.NUMBER`.
+2. Unless the class has `MODTOSKILLS:NO`, add the stats'
+   `MODSKILLPOINTS.NUMBER` bonuses; at least 1.
+3. Add the race's `XTRASKILLPTSPERLVL`; at least 1 if step 1 was
+   positive, else at least 0.
+4. If `MINCLASSSKILLPOINTS.NUMBER` is positive and the class and stat
+   part falls below it, raise that part to the minimum.
+5. Multiply by the race's `SKILLMULT` at level 1, else by the game
+   mode's `SKILLMULTIPLIER` entry for level *n* (default 1).
+
+---
+
+## 10. Character sheets
+
+`pcgtools pcg sheet FILE` computes a character and prints a *sheet*: a
+tree of named elements, as XML (tab-indented) or, with `--json`, as a
+generic `{tag, attrs, text, children}` tree. `--compare EXPECTED.xml`
+checks every leaf of an expected sheet against the computed one, prints
+each mismatch as path, wanted and got, and fails on any mismatch.
+Leaf paths key a repeated element by its `name` child
+(`skill[Climb]`, `[Name#2]` for a repeat) and an unnamed one by
+position (`para[0]`).
+
+### 10.1 Sections
+
+The root `character` holds these sections in order:
+
+| Section | Children |
+|---|---|
+| `basics` | name, biography fields, `alignment`, `bab`, `classes`, `deity` (when set), `experience`, `face`, `favoredlist`, `gender`, `height`, `hitdice`, `languages`, `move`, `race`, `reach`, `size`, `vision`, `weight`, `poolpoints`, `notes`, ... |
+| `abilities` | `ability` per stat: name, score, modifier, base, scores without equipment or temporary bonuses |
+| `hit_points` | points, alternate, die, damage reduction, `history` of rolls |
+| `armor_class` | total, flat, touch, base and per-type parts, max dex, spell failure, check penalty, spell resistance |
+| `initiative` | total, dex_mod, misc_mod |
+| `skills` | `skillpoints`, maximum ranks, then `skill` rows |
+| `saving_throws` | `saving_throw` per save |
+| `attack` | `melee`, `ranged`, `grapple` |
+| `weapons` | `unarmed`, then `weapon` rows |
+| `protection` | `armor`, `shield`, `item` rows |
+| `class_features` | turning, rage, lay on hands and similar, when present |
+| `equipment` | `item` rows, `total`, `equipmentsets` |
+| `weight_allowance` | light, medium, heavy, lift and push limits |
+| `special_abilities` | special ability texts, overall, racial and per class |
+| `feats` | `feat` rows |
+| `ability_objects` | `ability_object` rows of other categories |
+| `domains` | `domain` with power (when any) |
+| `weapon_proficiencies`, `languages` | comma-joined lists |
+| `templates` | visible templates (when any) |
+| `misc` | funds, companions and magic items as free text |
+| `companions` | companion placeholders by follower type |
+| `spells` | `spells_innate`, `known_spells`, `memorized_spells` |
+| `prohibited_schools` | when any |
+
+Numbers are written signed where the sheet shows modifiers. Distances,
+heights and weights follow the game mode's default unit set
+(`DEFAULTUNITSET`/`UNITSET`, default imperial feet and pounds).
+
+### 10.2 Basics, abilities and hit points
+
+| Value | Rule |
+|---|---|
+| `bab` | `COMBAT.BASEAB` |
+| `alignment` | blank when `ALIGNMENTFEATURE` is `NO` (7.4) |
+| `experience/next_level` | minimum experience for the next level |
+| `face` | the last race/template `FACE` (default 5), or the `FACE` control variable; squares by the game mode `SQUARESIZE` (default 5) |
+| `reach` | the last race/template `REACH` (default 5) + `COMBAT.REACH`, or the `PCREACH` control variable |
+| `move` | movement by type, walk first |
+| `vision` | per type, the longest distance plus `VISION` bonuses |
+| `hitdice` | `(LdHD)` per class, plus the hit point stat bonus and `HP.CURRENTMAX` |
+| ability `modifier` | the stat's `STATMOD` (default `floor(SCORE/2)-5`); a non-ability stat shows `*` |
+| `hit_points/points` | as 9.4 |
+| `hit_points/history` | per level: roll, stat bonus, their sum |
+
+### 10.3 Defense, initiative and saves
+
+| Value | Rule |
+|---|---|
+| armor class parts | each a game mode `ACTYPE` (9.4): Total, Flatfooted, Touch, Base, Armor, Shield, Ability, Size, NaturalArmor, ClassDefense, Dodge, Misc |
+| `max_dex` | the lowest of the load cap (medium 3, heavy 1, overloaded 0) and each equipped item's `MAXDEX` + `EQMARMOR.MAXDEX`, plus `MISC.MAXDEX`, within 0–100; blank at 100 |
+| `spell_failure` | items' `SPELLFAILURE` + `EQMARMOR.SPELLFAILURE` + `MISC.SPELLFAILURE` |
+| `check_penalty` | the lower of the items' (non-positive) `ACCHECK` sum and the load penalty (medium −3, heavy −6), + `MISC.ACCHECK` |
+| `initiative/total` | `COMBAT.INITIATIVE` + variable `INITCOMP` |
+| save `total` | as 9.4, split into base, ability, feat (ability sources of category `FEAT`), magic (equipment), race, epic and misc parts; the ability part is the `STATMODSAVE` variable when that control is set |
+
+### 10.4 Skills
+
+* Rows: skills with ranks, plus, once the character has a class,
+  skills usable untrained that are not exclusive (or are class or
+  cross-class skills), visible, and whose prerequisites pass. Rows sort
+  by name ignoring spaces.
+* `ranks` and totals as 9.4; `misc_mod` is the total less ranks and
+  key stat modifier. An `ACHECK` of `DOUBLE` doubles the armor check
+  penalty; `WEIGHT` subtracts one per 5 units carried.
+* `skillpoints/used` is ranks times cost per class: game mode
+  `SKILLCOST_CLASS` (default 1) for class skills, `SKILLCOST_EXCLUSIVE`
+  (default 0) for exclusive skills, else `SKILLCOST_CROSSCLASS`
+  (default 2). `unused` is the sum of the character file's remaining
+  skill points per class (adjusted per 9.6 under the `RETROSKILL`
+  rule); `total` is their sum.
+
+### 10.5 Attacks and weapons
+
+**Attack lines.** Each of melee, ranged and grapple totals
+`TOHIT.TOHIT`, `TOHIT.TYPE.x`, `COMBAT.TOHIT` and `COMBAT.TOHIT.x`
+over the base attack bonus, written as the iterative sequence: attacks
+every `BABATTCYC` (default 5) while the remainder is at least 1, at
+most `BABMAXATT` (default 4), joined with `/`. A class `ATTACKCYCLE`
+applies where it yields more attacks.
+
+**Weapon rows.** Weapons come from the calculation equipment set,
+merged by name. An item typed both melee and ranged is split into a
+melee copy and a thrown copy (`Name (Thrown)`), shown together in one
+`weapon`: `melee` rows from the first, `ranges` from the second. The
+thrown copy's range is `RANGE` + `EQMWEAPON.RANGEADD`. Double, natural
+and non-standard weapons get a single `simple` row instead.
+
+| Value | Rule |
+|---|---|
+| hand | from the equipment set location: primary, off-hand, both, two weapons, carried, equipped |
+| to-hit | attack bonus + type bonuses for the weapon's types (melee bonuses for melee use, ranged and thrown for ranged) + finesse bonus for light or finesseable melee weapons + the item's `WEAPON.TOHIT` + `WEAPONPROF=` bonuses |
+| non-proficient | `WEAPONNONPROFPENALTY` (default −4); unproficient worn armor and shields add their check penalty |
+| two-weapon | primary −6, off-hand −10, off-hand alone −4; `OFFHANDLIGHTBONUS` for a light off-hand weapon; natural secondary −5 |
+| damage dice | `DAMAGE`, stepped for size difference and `EQMWEAPON.DAMAGESIZE` along the game mode `BASEDICE` table |
+| damage bonus | `WEAPON.DAMAGE` + type damage bonuses; for melee use, a positive stat part is multiplied by the `COMBAT.DAMAGEMULT:h` total (plus proficiency and item `DAMAGEMULT:h`), where *h* is 1 one-handed, 0 off-hand, 2 two-handed (light weapons at most 1) |
+| critical | threat `21 − CRITRANGE × (doublings + 1) − additions`, shown `low-20`; multiplier `CRITMULT` + `CRITMULTADD` |
+| `num_attacks` | length of the attack sequence + natural extra attacks + `WEAPON.ATTACKS` |
+| `feat/hit`, `feat/damage` | weapon bonuses from feats; for a weapon with no proficiency object, also feat bonuses to `WEAPONPROF=` its name |
+| two-handed weapon not held in two hands | `N/A` |
+
+**Ranges.** A ranged weapon lists five range rows at multiples of its
+increment *r*; a 30-foot row is inserted before the first multiple
+above 30 unless 30 is itself a multiple (increment 20 gives 20, 30,
+40, 60, 80). Each row's to-hit adds the range penalty
+(`RANGEPENALTY`, default −2, plus `COMBAT.RANGEPENALTY`) per full
+increment beyond the first, and short-range bonuses within
+`SHORTRANGE` (default 30). A ranged weapon that holds ammunition
+(items placed inside it in the equipment set) repeats `ranges` once
+per distinct ammunition, naming it and adding its `WEAPON.TOHIT`.
+
+### 10.6 Protection and equipment
+
+| Value | Rule |
+|---|---|
+| `protection` | armor with an AC bonus, every shield, other items with an AC bonus: AC with and without modifiers, check penalty, max dex (armor), spell failure |
+| `equipment/item` | items of the calculation set; identical items in one place merge; `OUTPUTORDER:-1` hides; sorted by output order, then name |
+| `total/weight` | carried top-level items × quantity; containers add contents, scaled by a `CONTAINS` percentage or ignored with `*`; the first worn clothing item is free unless `CLOTHINGENCUMBRANCE` |
+| `total/value` | cost × quantity over the character's items, plus twice cost × quantity for each `AUTO:EQUIP` item whose prerequisites pass; with `CURRENCYUNITABBREV` (default `gp`) |
+| `total/load` | Light, Medium, Heavy or Overload by weight against `ENCUMBRANCE` fractions of the maximum load |
+| `weight_allowance` | maximum load × each `ENCUMBRANCE` fraction; the maximum load is the game mode `load.lst` `LOAD` row at the `LOADSCORE` variable (else Strength score), × `LOADMULT` (default 4) per 10 points above the table, × the size's `SIZEMULT` + `LOADMULT.TYPE=SIZE` bonuses |
+
+### 10.7 Abilities, proficiencies and languages
+
+* `feats` lists abilities of category `FEAT`; `ability_objects` the
+  categories Special Ability, Salient Divine Ability, Mutation, Talent
+  and Internal. Visible entries (`VISIBLE` `YES`/`EXPORT`) come first,
+  each group by nature (`NORMAL`, `AUTOMATIC`, `VIRTUAL`).
+* A row is `Name (choices)` with sorted choices; repeated choices
+  collapse unless `STACK:YES`. A chosen ability also granted
+  automatically with the same choices, from a pool that cannot be
+  edited, appears only as granted; a non-stacking ability's chosen
+  entry omits choices already granted.
+* `special_abilities` gathers `SAB` texts with `%` filled from
+  variables; texts whose variables are all zero are dropped and
+  duplicates shown as `text (n)`.
+* `weapon_proficiencies`: saved proficiencies, `AUTO:WEAPONPROF`
+  grants (names, `TYPE=`, `%LIST`, deity weapons; `CHANGEPROF` applied),
+  and natural weapons, by output name.
+* `languages`: the character's languages by name.
+
+### 10.8 Spells
+
+Casters are the race (when it has `SPELLS` tokens) and each class with
+a spell type. Spells come from the character file, `KNOWNSPELLS`
+automatic spells, domain lists and `SPELLKNOWN` grants.
+
+| Value | Rule |
+|---|---|
+| caster level | a fixed `CASTERLEVEL=` wins; else class level (unless a `CASTERLEVEL.<class>` bonus exists) + `PCLEVEL.<class>` + `PCLEVEL.TYPE.<type>`, plus positive `CASTERLEVEL` bonuses for the class, `ALLSPELLS`, spell type, spell, school, subschool, descriptor and domain; at least 1 |
+| cast per day | the class's `CAST` entry for the spell level at its caster class level (class level + `PCLEVEL` bonuses), + `SPELLCAST` bonuses for class or any class, level or all levels, and type, + bonus spells from the casting stat (`BONUSSPELLLEVEL`) |
+| known per day | the `KNOWN` entry likewise, + `SPELLKNOWN` bonuses |
+| stat limit | when the casting stat (`MAXLEVELSTAT`) is too low for a level, only bonuses count |
+| specialty / domain slot | `cast` shows `+N` for specialty spells, `+1` for a divine caster's domain slot |
+| DC | the game mode `SPELLBASEDC` (default `10+SPELLLEVEL+BASESPELLSTAT`) + `DC` bonuses (all spells, spell, class, domain, type, school, subschool, descriptor); blank when the spell allows no save |
+| range | the game mode `SPELLRANGE` formula at the caster level, as `Name (distance)` |
 
 ---
 

@@ -121,23 +121,65 @@ pub fn build(s: &SheetCtx) -> Element {
 
     let mut skills = Element::new("skills");
 
-    // skill points: what is left in each class's pool plus what the
-    // ranks bought cost
-    let unused: f64 =
-        s.ch.pcg
-            .lines_tagged("CLASS")
-            .filter_map(|l| l.text("SKILLPOOL"))
-            .filter_map(|v| v.trim().parse::<f64>().ok())
-            .map(|v| v.max(0.0))
-            .sum();
-    let (cc, xc) = (
+    // skill points: what is left from each class's levels plus what
+    // the ranks bought cost, at each class's cost for the skill
+    let mut pools: HashMap<String, f64> = HashMap::new();
+    let retro = c.rule("RETROSKILL");
+    let mut char_level = 0;
+    for l in s.ch.pcg.lines_tagged("CLASSABILITIESLEVEL") {
+        let Some(class) = l
+            .head()
+            .map(|h| h.value_text())
+            .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
+        else {
+            continue;
+        };
+        let mut left: f64 = l
+            .text("SKILLSREMAINING")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0.0);
+        char_level += 1;
+        // where changes to skill points apply retroactively, a level
+        // worth more (or less) now than when taken adjusts what is left
+        if retro && !c.classes().iter().any(|(o, _)| o.is_type("Monster")) {
+            let gained: Option<f64> = l.text("SKILLSGAINED").and_then(|v| v.trim().parse().ok());
+            let cls = c
+                .classes()
+                .iter()
+                .find(|(o, _)| o.key.eq_ignore_ascii_case(&class))
+                .map(|(o, _)| *o);
+            if let (Some(gained), Some(cls)) = (gained, cls) {
+                let raw = c.skill_points_for_level(cls, char_level);
+                if raw != gained {
+                    left += raw - gained;
+                }
+            }
+        }
+        *pools.entry(class.to_lowercase()).or_default() += left;
+    }
+    let unused: f64 = pools.values().map(|v| v.max(0.0)).sum();
+    let (cc, xc, ec) = (
         cost(s, "SKILLCOST_CLASS", 1.0),
         cost(s, "SKILLCOST_CROSSCLASS", 2.0),
+        cost(s, "SKILLCOST_EXCLUSIVE", 0.0),
     );
     let mut used = 0.0;
     for e in &entries {
-        let per = if c.is_class_skill(&e.name) { cc } else { xc };
-        used += e.total_ranks() * per;
+        let exclusive = ds
+            .get(FileKind::Skill, &e.name)
+            .and_then(|o| o.get("EXCLUSIVE"))
+            .is_some_and(|v| v.eq_ignore_ascii_case("YES"));
+        for (class, ranks) in &e.ranks {
+            let per = if !class.eq_ignore_ascii_case("None") && c.is_class_skill_for(&e.name, class)
+            {
+                cc
+            } else if exclusive && !c.is_cross_class_skill(&e.name) {
+                ec
+            } else {
+                xc
+            };
+            used += ranks * per;
+        }
     }
     let (unused, used) = (unused.trunc(), used.trunc());
     skills.push(

@@ -225,6 +225,43 @@ impl Controls {
     }
 }
 
+/// Default values of channels and variables (DEFAULTVARIABLEVALUE) from
+/// the data's data controls, or from the game modes' compatibility
+/// defaults when the data declares none; keys are upper case.
+pub fn data_defaults(ds: &Dataset, gm: Option<&GameMode>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for o in ds.objects(FileKind::DataControl) {
+        if o.head_tag.as_deref() == Some("DEFAULTVARIABLEVALUE") {
+            if let Some((f, v)) = o.name.split_once('|') {
+                out.insert(f.to_ascii_uppercase(), v.to_string());
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(path) = gm
+            .map(|g| {
+                g.dir
+                    .join("..")
+                    .join("default")
+                    .join("compatibilityDataControl.lst")
+            })
+            .filter(|p| p.is_file())
+        {
+            if let Ok(tf) = crate::text::TextFile::read(&path) {
+                for l in &tf.lines {
+                    if let Some(rest) = l.text.trim().strip_prefix("DEFAULTVARIABLEVALUE:") {
+                        if let Some((f, v)) = rest.split('\t').next().unwrap_or("").split_once('|')
+                        {
+                            out.insert(f.to_ascii_uppercase(), v.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The variable system for one character.
 pub struct VarSystem<'a> {
     pub ds: &'a Dataset,

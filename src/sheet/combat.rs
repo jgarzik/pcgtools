@@ -26,13 +26,7 @@ pub fn build_after_skills(s: &SheetCtx) -> Vec<Element> {
 
 /// Stats in display order.
 pub fn stats<'a>(s: &SheetCtx<'a>) -> Vec<&'a Object> {
-    let mut v: Vec<&Object> = s.ctx.dataset.objects(FileKind::Stat).iter().collect();
-    v.sort_by_key(|o| {
-        o.get("SORTKEY")
-            .and_then(|k| k.parse::<i64>().ok())
-            .unwrap_or(i64::MAX)
-    });
-    v
+    s.calc.stats_in_order()
 }
 
 fn stat_mod_at(s: &SheetCtx, i: usize) -> i64 {
@@ -54,11 +48,8 @@ fn abilities(s: &SheetCtx) -> Element {
         let k = &st.key;
         let base = c.stat_base(k);
         let score = c.stat_score(k);
-        let noequip = base
-            + c.bonus.total_where("STAT", k, |src| {
-                !from_equipment(src) && !equipment_ability(s, src)
-            });
-        let notemp = base + c.bonus.total_where("STAT", k, |src| !src.temp);
+        let noequip = c.stat_score_without(k, true, false);
+        let notemp = c.stat_score_without(k, false, true);
         let non = c.non_stat(k);
         let m = |v: f64| {
             if non {
@@ -91,19 +82,6 @@ fn abilities(s: &SheetCtx) -> Element {
         out.push(a);
     }
     out
-}
-
-/// An ability of type Equipment.
-fn equipment_ability(s: &SheetCtx, src: &Source) -> bool {
-    src.kind == "Ability"
-        && s.ctx
-            .dataset
-            .get_in(
-                FileKind::Ability,
-                src.category.as_deref().unwrap_or(""),
-                &src.key,
-            )
-            .is_some_and(|o| o.is_type("Equipment"))
 }
 
 fn hit_points(s: &SheetCtx) -> Element {

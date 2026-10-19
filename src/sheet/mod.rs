@@ -228,8 +228,13 @@ pub fn source_text(s: &SheetCtx, o: &Object) -> String {
                 .map(|(_, v)| v.clone())
         })
     };
+    // a later .MOD from another book makes that book the source
+    let modified = !o.history.is_empty();
     let src = |tag: &str| -> Option<String> {
         o.get(tag).map(str::to_string).or_else(|| {
+            if modified {
+                return None;
+            }
             o.source
                 .iter()
                 .find(|(t, _)| t == tag)

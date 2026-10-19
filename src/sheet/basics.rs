@@ -36,7 +36,7 @@ pub fn build(s: &SheetCtx) -> Element {
     b.add("birthplace", pcg("BIRTHPLACE"));
     b.add("catchphrase", pcg("CATCHPHRASE"));
     b.push(classes(s));
-    if let Some(d) = ch.deity().and_then(|d| ds.get(FileKind::Deity, &d)) {
+    if let Some(d) = c.deity() {
         b.push(deity(s, d));
     }
     b.push(paragraphs("description", &pcg("CHARACTERDESC")));
@@ -219,21 +219,25 @@ fn deity(s: &SheetCtx, d: &Object) -> Element {
     e.add("description", super::describe(s, d));
     let mut doms: Vec<String> = Vec::new();
     for v in d.values("DOMAINS") {
+        if v == ".CLEAR" {
+            doms.clear();
+            continue;
+        }
         let list = v.split('|').next().unwrap_or("");
         for k in list.split(',') {
-            if k.eq_ignore_ascii_case("ALL") || k.starts_with("PRE") {
+            if k.eq_ignore_ascii_case("ALL") || k.eq_ignore_ascii_case("ANY") {
+                doms.extend(ds.objects(FileKind::Domain).iter().map(|o| o.name.clone()));
                 continue;
             }
             let name = ds
                 .get(FileKind::Domain, k)
                 .map(|o| o.name.clone())
                 .unwrap_or_else(|| k.to_string());
-            if !doms.contains(&name) {
-                doms.push(name);
-            }
+            doms.push(name);
         }
     }
     doms.sort();
+    doms.dedup();
     e.add("domainlist", doms.join(", "));
     let weapons: Vec<String> = d
         .values("DEITYWEAP")
@@ -267,29 +271,26 @@ fn deity(s: &SheetCtx, d: &Object) -> Element {
     e
 }
 
-fn cr_text(s: &SheetCtx, cr: f64) -> String {
-    if cr >= 1.0 || cr <= 0.0 && s.calc.total_level() > 0 {
+fn cr_text(s: &SheetCtx, cr: Option<f64>) -> String {
+    let Some(cr) = cr else {
+        return "0".into();
+    };
+    if cr >= 1.0 {
         return (cr as i64).to_string();
     }
-    if cr <= 0.0 {
-        return "0".into();
-    }
-    // fractions are listed as CRSTEPS (1/2|1/3|...)
+    // zero and below are listed as CRSTEPS (1/2|1/3|...), from 0 down
     let steps = s
         .ctx
         .gamemode
         .as_ref()
         .and_then(|g| g.misc("CRSTEPS"))
         .unwrap_or("");
-    for st in steps.split('|').map(str::trim) {
-        if let Some((a, b)) = st.split_once('/') {
-            let v = a.parse::<f64>().unwrap_or(0.0) / b.parse::<f64>().unwrap_or(1.0);
-            if (v - cr).abs() < 1e-6 {
-                return st.to_string();
-            }
-        }
-    }
-    pattern(cr, "#.##")
+    steps
+        .split('|')
+        .map(str::trim)
+        .nth((-cr) as usize)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Face of the character's space, as (width, depth) in feet.
@@ -358,23 +359,58 @@ fn face(s: &SheetCtx, units: &Units) -> Element {
         .with(Element::leaf("squares", squares))
 }
 
+/// Favored classes from the race (FAVCLASS) and templates
+/// (FAVOREDCLASS): `Any` for HIGHESTLEVELCLASS, else the class keys
+/// in order, run together.
 fn favored(s: &SheetCtx) -> String {
-    let Some(race) =
-        s.ch.race()
-            .and_then(|r| s.ctx.dataset.get(FileKind::Race, &r))
-    else {
-        return String::new();
-    };
+    use crate::rules::calc::SrcKind;
+    let pcg = &s.ch.pcg;
     let mut keys: Vec<String> = Vec::new();
-    for v in race.values("FAVCLASS") {
-        for k in v.split('|') {
-            if k.eq_ignore_ascii_case("ANY") || k.eq_ignore_ascii_case("HIGHESTLEVELCLASS") {
-                return "Any".into();
+    for src in &s.calc.sources {
+        let tag = match src.kind {
+            SrcKind::Race => "FAVCLASS",
+            SrcKind::Template => "FAVOREDCLASS",
+            _ => continue,
+        };
+        // choices recorded for %LIST
+        let applied = || -> Vec<String> {
+            let found = match src.kind {
+                SrcKind::Race => pcg
+                    .lines_tagged("RACE")
+                    .next()
+                    .and_then(|l| l.text("APPLIEDTO")),
+                _ => pcg.lines_tagged("TEMPLATESAPPLIED").find_map(|l| {
+                    let h = l.head()?;
+                    let name = h.children().iter().find(|c| c.tag == "NAME")?.value_text();
+                    if !name.eq_ignore_ascii_case(&src.obj.key) {
+                        return None;
+                    }
+                    h.children()
+                        .iter()
+                        .find(|c| c.tag == "APPLIEDTO")
+                        .map(|c| c.value_text())
+                }),
+            };
+            found
+                .map(|v| v.split(',').map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+        for v in src.obj.values(tag) {
+            for k in v.split('|') {
+                if k.eq_ignore_ascii_case("HIGHESTLEVELCLASS") || k.eq_ignore_ascii_case("ANY") {
+                    return "Any".into();
+                }
+                if k == "%LIST" {
+                    keys.extend(applied());
+                } else {
+                    keys.push(k.to_string());
+                }
             }
-            keys.push(k.to_string());
         }
     }
-    keys.sort();
+    let sort_key = |k: &String| k.rsplit('.').next().unwrap_or(k).to_string();
+    keys.sort_by_key(sort_key);
+    keys.dedup();
     keys.concat()
 }
 
@@ -455,18 +491,7 @@ fn race_name(s: &SheetCtx) -> String {
 }
 
 fn race_type(s: &SheetCtx) -> String {
-    let mut t = None;
-    for src in s.calc.sources.iter().filter(|x| {
-        matches!(
-            x.kind,
-            crate::rules::calc::SrcKind::Race | crate::rules::calc::SrcKind::Template
-        )
-    }) {
-        if let Some(v) = src.obj.get("RACETYPE") {
-            t = Some(v.to_string());
-        }
-    }
-    t.unwrap_or_else(|| "None".into())
+    s.calc.race_type().unwrap_or_else(|| "None".into())
 }
 
 fn reach(s: &SheetCtx, units: &Units) -> Element {
@@ -520,10 +545,28 @@ fn vision(s: &SheetCtx, units: &Units) -> Element {
             }
         }
     }
+    // a VISION bonus creates the type or adds to it
+    for con in &c.bonus.log {
+        if let Some(t) = con.key.strip_prefix("VISION.") {
+            if !best.contains_key(&t.to_lowercase()) && c.bonus.total("VISION", t) > 0.0 {
+                let name =
+                    c.ds.objects(FileKind::Ability)
+                        .iter()
+                        .flat_map(|o| o.values("VISION"))
+                        .flat_map(|v| v.split('|'))
+                        .map(|p| p.split('(').next().unwrap_or("").trim())
+                        .find(|n| n.eq_ignore_ascii_case(t))
+                        .unwrap_or(t)
+                        .to_string();
+                best.insert(t.to_lowercase(), (name, 0.0));
+            }
+        }
+    }
     let mut items: Vec<(String, String)> = best
         .values()
         .map(|(n, d)| {
-            let d = d + c.bonus.total("VISION", n);
+            let b = c.bonus.total("VISION", n);
+            let d = (*d as i64) as f64 + if b > 0.0 { b } else { 0.0 };
             let key = if d > 0.0 {
                 format!("{} ({}')", n, d as i64)
             } else {

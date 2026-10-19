@@ -469,14 +469,13 @@ impl<'a> Calc<'a> {
     }
 
     /// Speed for a movement type, with MOVEADD bonuses.
+    /// Final speed for a movement type (0 if the character has none).
     pub fn move_speed(&self, mtype: &str) -> f64 {
-        let base = self.movement().get(&lower(mtype)).copied().unwrap_or(0.0);
-        if base <= 0.0 {
-            return 0.0;
-        }
-        base + self.bonus.total("MOVEADD", &format!("TYPE.{}", mtype))
-            + self.bonus.total("MOVEADD", &format!("TYPE={}", mtype))
-            + self.bonus.total("MOVEADD", "ALL")
+        self.movement_named()
+            .into_iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(mtype))
+            .map(|(_, v)| v)
+            .unwrap_or(0.0)
     }
 
     /// Equipped items.
@@ -517,27 +516,149 @@ impl<'a> Calc<'a> {
         m
     }
 
-    /// Movement types with their speeds (after MOVEADD bonuses), named
-    /// as first written.
+    /// Movement types with their final speeds, named as first written:
+    /// the best MOVE per type (none at all unless the race has MOVE),
+    /// MOVECLONE copies, types created by MOVEADD bonuses, then
+    /// MOVEADD, MOVEMULT and POSTMOVEADD bonuses and the slowing of
+    /// medium or heavy armor and load.
     pub fn movement_named(&self) -> Vec<(String, f64)> {
-        let mut names: Vec<String> = Vec::new();
+        let Some(race) = self.race() else {
+            return Vec::new();
+        };
+        if !race.has("MOVE") {
+            return Vec::new();
+        }
+        let mut table: Vec<(String, f64)> = Vec::new();
+        let find =
+            |t: &Vec<(String, f64)>, n: &str| t.iter().position(|(k, _)| k.eq_ignore_ascii_case(n));
         for s in &self.sources {
             for t in s.tokens.iter().filter(|t| t.tag == "MOVE") {
-                for ty in t.value.split(',').step_by(2) {
-                    let ty = ty.trim();
-                    if !ty.is_empty() && !names.iter().any(|n| n.eq_ignore_ascii_case(ty)) {
-                        names.push(ty.to_string());
+                let parts: Vec<&str> = t.value.split(',').collect();
+                for pair in parts.chunks(2) {
+                    if let [ty, sp] = pair {
+                        let ty = ty.trim();
+                        let sp: f64 = sp.trim().parse().unwrap_or(0.0);
+                        match find(&table, ty) {
+                            Some(i) => table[i].1 = table[i].1.max(sp),
+                            None => table.push((ty.to_string(), sp)),
+                        }
                     }
                 }
             }
         }
-        names
+        let raw = table.clone();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "MOVECLONE") {
+                let parts: Vec<&str> = t.value.split(',').map(str::trim).collect();
+                let [src, dst, f] = parts[..] else { continue };
+                let Some(base) = find(&raw, src).map(|i| raw[i].1) else {
+                    continue;
+                };
+                let num = |x: &str| -> f64 {
+                    match x.split_once('/') {
+                        Some((a, b)) => {
+                            a.parse::<f64>().unwrap_or(0.0) / b.parse::<f64>().unwrap_or(1.0)
+                        }
+                        None => x.parse().unwrap_or(0.0),
+                    }
+                };
+                let v = if let Some(n) = f.strip_prefix('/') {
+                    base / num(n)
+                } else if let Some(n) = f.strip_prefix('*') {
+                    base * num(n)
+                } else {
+                    base + num(f.trim_start_matches('+'))
+                };
+                match find(&table, dst) {
+                    Some(i) => table[i].1 = v,
+                    None => table.push((dst.to_string(), v)),
+                }
+            }
+        }
+        // types named only by a MOVEADD bonus start at 0
+        for c in &self.bonus.log {
+            let Some(t) = c
+                .key
+                .strip_prefix("MOVEADD.TYPE.")
+                .or_else(|| c.key.strip_prefix("MOVEADD.TYPE="))
+            else {
+                continue;
+            };
+            if t == "ALL" || find(&table, t).is_some() {
+                continue;
+            }
+            let mut name: String = t.to_lowercase();
+            if let Some(f) = name.get(0..1) {
+                name = f.to_uppercase() + &name[1..];
+            }
+            table.push((name, 0.0));
+        }
+        let bonus = |cat: &str, t: &str| {
+            self.bonus.total(cat, &format!("TYPE.{}", t))
+                + self.bonus.total(cat, &format!("TYPE={}", t))
+                + self.bonus.total(cat, "TYPE.ALL")
+                + self.bonus.total(cat, "TYPE=ALL")
+                + self.bonus.total(cat, "ALL")
+        };
+        // slowest of armor worn and load carried, unless ignored
+        let rank = |v: &str| match v.to_ascii_uppercase().as_str() {
+            "LIGHTLOAD" => 0,
+            "MEDIUMLOAD" | "MEDIUMARMOR" => 1,
+            "HEAVYLOAD" => 2,
+            "OVERLOAD" | "HEAVYARMOR" => 3,
+            _ => -1,
+        };
+        let mut unencumbered = -1;
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "UNENCUMBEREDMOVE") {
+                for v in t.value.split('|') {
+                    unencumbered = unencumbered.max(rank(v));
+                }
+            }
+        }
+        let checks = self.rule("SYS_LDPACSK") || !self.rules.contains_key("SYS_LDPACSK");
+        let mut armor = 0;
+        if checks {
+            for it in &self.items {
+                if !it.obj.is_type("Armor") || it.obj.is_type("Shield") {
+                    continue;
+                }
+                if it.obj.is_type("Heavy") && unencumbered < 3 {
+                    armor = armor.max(2);
+                } else if it.obj.is_type("Medium") && unencumbered < 1 {
+                    armor = armor.max(1);
+                }
+            }
+        }
+        let load = self.encumbrance() as i32;
+        let load = if load as i64 <= unencumbered as i64 {
+            0
+        } else {
+            load
+        };
+        let slow = |load: i32, m: f64| -> f64 {
+            match load {
+                0 => m,
+                1 | 2 => {
+                    if m == 5.0 || m == 10.0 {
+                        5.0
+                    } else {
+                        (m / 15.0).floor() * 10.0 + (m as i64 % 15) as f64
+                    }
+                }
+                _ => 0.0,
+            }
+        };
+        table
             .into_iter()
-            .map(|n| {
-                let v = self.move_speed(&n);
+            .map(|(n, base)| {
+                let m = base + bonus("MOVEADD", &n);
+                let mult = bonus("MOVEMULT", &n);
+                let calc = if mult > 0.0 { (m * mult).trunc() } else { m };
+                let m = calc.max(calc + bonus("POSTMOVEADD", &n));
+                let v = slow(armor, m).min(slow(load, m));
                 (n, v)
             })
-            .filter(|(_, v)| *v > 0.0)
             .collect()
     }
 
@@ -661,82 +782,214 @@ impl<'a> Calc<'a> {
         &self.classes
     }
 
-    /// Challenge rating: class levels (by each class type's CR
-    /// formula and modifier) or the race's CR for creatures with
-    /// racial hit dice, plus templates and MISC|CR bonuses.
-    pub fn challenge_rating(&self) -> f64 {
-        let frac = |v: &str| -> f64 {
-            match v.split_once('/') {
-                Some((a, b)) => {
-                    a.trim().parse::<f64>().unwrap_or(0.0) / b.trim().parse::<f64>().unwrap_or(1.0)
-                }
-                None => v.trim().parse().unwrap_or(0.0),
-            }
-        };
-        let class_type = |cls: &Object| {
-            self.gm.and_then(|g| {
-                g.lines("miscinfo.lst", "CLASSTYPE")
-                    .find(|l| cls.is_type(&l.value))
+    /// The game-mode class type row of a class (FACT:ClassType, else
+    /// its TYPE values matched against CLASSTYPE rows).
+    fn class_type(&self, cls: &Object) -> Option<&'a crate::gamemode::GmLine> {
+        let g = self.gm?;
+        let rows = || g.lines("miscinfo.lst", "CLASSTYPE");
+        if let Some(t) = cls.values("FACT").find_map(|v| {
+            let (k, val) = v.split_once('|')?;
+            k.eq_ignore_ascii_case("ClassType").then_some(val)
+        }) {
+            return rows().find(|l| l.value.eq_ignore_ascii_case(t));
+        }
+        cls.types()
+            .iter()
+            .find_map(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
+    }
+
+    /// Is the class a monster (racial hit dice) class?
+    pub fn is_monster_class(&self, cls: &Object) -> bool {
+        cls.get("ISMONSTER")
+            .map(|v| v.eq_ignore_ascii_case("YES"))
+            .unwrap_or_else(|| {
+                self.class_type(cls)
+                    .and_then(|l| l.get("ISMONSTER"))
+                    .is_some_and(|v| v.eq_ignore_ascii_case("YES"))
             })
-        };
-        let monster = |cls: &Object| {
-            class_type(cls)
-                .and_then(|l| l.get("ISMONSTER"))
-                .is_some_and(|v| v.eq_ignore_ascii_case("YES"))
-        };
-        let race = self.sources.iter().find(|s| s.kind == SrcKind::Race);
-        let racial_hd = race.is_some_and(|r| r.obj.has("MONSTERCLASS"))
-            || self.classes.iter().any(|(c, l)| *l > 0 && monster(c));
-        let mut cr = 0.0;
-        if racial_hd {
-            cr += race.and_then(|r| r.obj.get("CR")).map(frac).unwrap_or(0.0);
-            for (c, l) in &self.classes {
-                if !monster(c) {
-                    cr += *l as f64;
-                }
+    }
+
+    /// Challenge rating, or None when it is undefined (no levels).
+    /// Without racial hit dice: the classes' CR formulas plus the
+    /// modifier of the highest-priority class type.  With them: the
+    /// race's CR plus key-role classes and halved other levels.  Then
+    /// templates (including level- and hit-dice-based parts) and
+    /// MISC|CR bonuses.
+    pub fn challenge_rating(&self) -> Option<f64> {
+        let steps: Vec<String> = self
+            .gm
+            .and_then(|g| g.misc("CRSTEPS"))
+            .unwrap_or("")
+            .split('|')
+            .map(|x| x.trim().to_string())
+            .collect();
+        let monster_levels: u32 = self
+            .classes
+            .iter()
+            .filter(|(c, _)| self.is_monster_class(c))
+            .map(|(_, l)| l)
+            .sum();
+        let other_levels = self.total_level() - monster_levels;
+        let class_cr = |c: &Object, level: u32| -> Option<f64> {
+            let line = self.class_type(c);
+            let formula = c
+                .get("CRFORMULA")
+                .or_else(|| line.and_then(|l| l.get("CRFORMULA")));
+            let Some(formula) = formula else {
+                return Some(0.0);
+            };
+            if formula.eq_ignore_ascii_case("NONE") {
+                return None;
             }
-        } else {
+            if formula == "0" {
+                return Some(0.0);
+            }
+            if formula.eq_ignore_ascii_case("CL") {
+                return Some(level as f64);
+            }
+            let env = LevelEnv {
+                calc: self,
+                level: level as f64,
+            };
+            Some(eval_str(formula, &env))
+        };
+        let race = self.race();
+        let mut cr;
+        if monster_levels == 0 {
+            if other_levels == 0 {
+                return None;
+            }
+            cr = 0.0;
             let mut best: Option<(i64, f64)> = None;
             for (c, l) in &self.classes {
-                let line = class_type(c);
-                let formula = c
-                    .get("CRFORMULA")
-                    .or_else(|| line.and_then(|l| l.get("CRFORMULA")))
-                    .unwrap_or("CL");
-                if formula.eq_ignore_ascii_case("NONE") {
-                    continue;
-                }
-                let env = LevelEnv {
-                    calc: self,
-                    level: *l as f64,
-                };
-                cr += if formula.eq_ignore_ascii_case("CL") {
-                    *l as f64
-                } else {
-                    eval_str(formula, &env)
-                };
-                if let Some(line) = line {
+                cr += class_cr(c, *l).unwrap_or(0.0);
+                if let Some(line) = self.class_type(c) {
                     let prio: i64 = line
                         .get("CRMODPRIORITY")
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(0);
-                    let m: f64 = line
-                        .get("CRMOD")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(0.0);
-                    if prio > 0 && best.is_none_or(|(p, _)| prio < p) {
-                        best = Some((prio, m));
+                    if prio != 0 && best.is_none_or(|(p, _)| prio < p) {
+                        let m: f64 = line
+                            .get("CRMOD")
+                            .map(|f| {
+                                eval_str(
+                                    f,
+                                    &Ctx {
+                                        calc: self,
+                                        src: None,
+                                    },
+                                )
+                            })
+                            .unwrap_or(0.0);
+                        best = Some((prio, m.min(0.0)));
                     }
                 }
             }
             cr += best.map(|(_, m)| m).unwrap_or(0.0);
+        } else {
+            let race_roles: Vec<String> = race
+                .and_then(|r| r.get("ROLE"))
+                .or_else(|| self.gm.and_then(|g| g.misc("MONSTERROLEDEFAULT")))
+                .unwrap_or("")
+                .split('.')
+                .map(|x| x.to_lowercase())
+                .collect();
+            let (mut key, mut non_key) = (0.0, 0.0);
+            for (c, l) in &self.classes {
+                let v = class_cr(c, *l)?;
+                let shares = c
+                    .get("ROLE")
+                    .is_some_and(|r| r.split('.').any(|x| race_roles.contains(&x.to_lowercase())));
+                if shares {
+                    key += v;
+                } else {
+                    non_key += v;
+                }
+            }
+            let threshold = self
+                .gm
+                .and_then(|g| g.misc("CRTHRESHOLD"))
+                .map(|f| {
+                    eval_str(
+                        f,
+                        &Ctx {
+                            calc: self,
+                            src: None,
+                        },
+                    )
+                })
+                .unwrap_or(0.0);
+            let mut converted = 0.0;
+            let mut c = 0.0;
+            while non_key > 1.0 {
+                c += 1.0;
+                non_key -= 2.0;
+                converted += 2.0;
+                if converted >= threshold {
+                    break;
+                }
+            }
+            if converted > 0.0 {
+                c += non_key;
+            }
+            let race_cr = race
+                .and_then(|r| r.get("CR"))
+                .map(|v| match v.split_once('/') {
+                    Some(_) => steps
+                        .iter()
+                        .position(|x| x == v.trim())
+                        .map(|i| -(i as f64))
+                        .unwrap_or(0.0),
+                    None => v.trim().parse().unwrap_or(0.0),
+                })
+                .or_else(|| {
+                    race.and_then(|r| r.get("LEVELADJUSTMENT"))
+                        .and_then(|v| v.trim().parse::<f64>().ok())
+                        .filter(|v| *v != 0.0)
+                })
+                .unwrap_or(0.0);
+            cr = race_cr + c + key;
         }
+        let total = self.total_level();
         for s in self.sources.iter().filter(|s| s.kind == SrcKind::Template) {
-            if let Some(v) = s.obj.get("CR") {
-                cr += frac(v);
+            for t in &s.tokens {
+                let v = match t.tag.as_str() {
+                    "CR" => t.value.trim().parse::<f64>().ok(),
+                    "LEVEL" | "REPEATLEVEL" => {
+                        let mut p = t.value.splitn(3, ':');
+                        let n: u32 = p.next().and_then(|x| x.parse().ok()).unwrap_or(u32::MAX);
+                        match (p.next(), p.next()) {
+                            (Some("CR"), Some(x)) if n <= total => x.trim().parse().ok(),
+                            _ => None,
+                        }
+                    }
+                    "HD" => {
+                        let mut p = t.value.splitn(3, ':');
+                        let range = p.next().unwrap_or("");
+                        let (lo, hi) = range.split_once('-').unwrap_or((range, range));
+                        let lo: u32 = lo.parse().unwrap_or(0);
+                        let hi: u32 = if hi.ends_with('+') {
+                            u32::MAX
+                        } else {
+                            hi.parse().unwrap_or(u32::MAX)
+                        };
+                        match (p.next(), p.next()) {
+                            (Some("CR"), Some(x))
+                                if lo <= monster_levels && monster_levels <= hi =>
+                            {
+                                x.trim().parse().ok()
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(v) = v {
+                    cr += (v as i64) as f64;
+                }
             }
         }
-        cr + self.bonus.total("MISC", "CR")
+        Some(cr + self.bonus.total("MISC", "CR").trunc())
     }
 
     /// Damage reduction, e.g. `10/magic; 5/-`: the best value per
@@ -997,6 +1250,225 @@ impl<'a> Calc<'a> {
         })
     }
 
+    /// The character's race type: the race's RACETYPE, replaced by
+    /// that of the last template that sets one.
+    pub fn race_type(&self) -> Option<String> {
+        let mut t = self
+            .race()
+            .and_then(|r| r.get("RACETYPE"))
+            .map(str::to_string);
+        for s in self.sources.iter().filter(|s| s.kind == SrcKind::Template) {
+            if let Some(v) = s.obj.get("RACETYPE") {
+                t = Some(v.to_string());
+            }
+        }
+        t
+    }
+
+    /// Stats in display (SORTKEY) order.
+    pub fn stats_in_order(&self) -> Vec<&'a Object> {
+        let mut v: Vec<&Object> = self.ds.objects(FileKind::Stat).iter().collect();
+        v.sort_by_key(|o| {
+            o.get("SORTKEY")
+                .and_then(|k| k.parse::<i64>().ok())
+                .unwrap_or(i64::MAX)
+        });
+        v
+    }
+
+    /// A stat score with only some bonuses: without those from
+    /// equipment, and/or without temporary ones.
+    pub fn stat_score_without(&self, abb: &str, equipment: bool, temporary: bool) -> f64 {
+        let k = upper(abb);
+        self.stat_base(&k)
+            + self.bonus.total_where("STAT", &k, |src| {
+                let eq = matches!(src.kind.as_str(), "Equipment" | "EquipMod")
+                    || src.kind == "Ability"
+                        && self
+                            .ds
+                            .get_in(
+                                FileKind::Ability,
+                                src.category.as_deref().unwrap_or(""),
+                                &src.key,
+                            )
+                            .is_some_and(|o| o.is_type("Equipment"));
+                !(equipment && eq) && !(temporary && src.temp)
+            })
+    }
+
+    /// `STAT.n[.MOD][.BASE][.NOEQUIP][.NOTEMP]` terms.
+    fn stat_term(&self, u: &str) -> Option<f64> {
+        let rest = u.strip_prefix("STAT.")?;
+        let mut parts = rest.split('.');
+        let idx: usize = parts.next()?.parse().ok()?;
+        let stat = self.stats_in_order().get(idx).copied()?;
+        let (mut m, mut base, mut noequip, mut notemp) = (false, false, false, false);
+        for p in parts {
+            match p {
+                "MOD" => m = true,
+                "BASE" => base = true,
+                "BASEMOD" => {
+                    m = true;
+                    base = true
+                }
+                "NOEQUIP" => noequip = true,
+                "NOTEMP" => notemp = true,
+                "NOTEMPMOD" => {
+                    m = true;
+                    notemp = true
+                }
+                _ => return None,
+            }
+        }
+        let score = if base {
+            self.stat_base(&stat.key)
+        } else {
+            self.stat_score_without(&stat.key, noequip, notemp)
+        };
+        Some(if m {
+            self.stat_mod_for(&stat.key, score)
+        } else {
+            score
+        })
+    }
+
+    /// Is a game-mode rule (rules.lst PARM/VAR) on?
+    pub fn rule(&self, name: &str) -> bool {
+        self.rules.get(&upper(name)).copied().unwrap_or(false)
+    }
+
+    /// Skill points a level of a class is worth now, at a given
+    /// character level: the class's base points, bonus points, the
+    /// stat's points (at least 1), race extras and the level's
+    /// multiplier.
+    pub fn skill_points_for_level(&self, cls: &'a Object, char_level: u32) -> f64 {
+        let env = Ctx {
+            calc: self,
+            src: self.sources.iter().find(|x| std::ptr::eq(x.obj, cls)),
+        };
+        let class_sp = cls
+            .get("STARTSKILLPTS")
+            .map(|f| eval_str(f, &env))
+            .unwrap_or(0.0);
+        let mut sp = class_sp + self.bonus.total("SKILLPOINTS", "NUMBER");
+        let race_sp = sp - class_sp;
+        let skill_min = if sp > 0.0 { 1.0 } else { 0.0 };
+        let mod_to_skills = !cls
+            .get("MODTOSKILLS")
+            .is_some_and(|v| v.eq_ignore_ascii_case("NO"));
+        if mod_to_skills {
+            sp += self
+                .bonus
+                .total_where("MODSKILLPOINTS", "NUMBER", |s| s.kind == "Stat");
+            sp = sp.max(1.0);
+        }
+        if let Some(r) = self.race() {
+            if let Some(f) = r.get("XTRASKILLPTSPERLVL") {
+                sp += eval_str(f, &env);
+            }
+        }
+        sp = sp.max(skill_min);
+        let min = self.bonus.total("MINCLASSSKILLPOINTS", "NUMBER");
+        let other = sp - class_sp - race_sp;
+        if min > 0.0 && class_sp + other < min {
+            sp = min.max(class_sp + other) + race_sp;
+        }
+        let mults: Vec<f64> = self
+            .gm
+            .and_then(|g| g.misc("SKILLMULTIPLIER"))
+            .unwrap_or("1")
+            .split('|')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
+        let mult = if char_level == 1 {
+            self.race()
+                .and_then(|r| r.get("SKILLMULT"))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| mults.first().copied().unwrap_or(1.0))
+        } else {
+            mults.get(char_level as usize - 1).copied().unwrap_or(1.0)
+        };
+        sp * mult
+    }
+
+    /// The character's deity: the one named in the character file, else
+    /// the data's default deity (DEFAULTVARIABLEVALUE:DEITY|key).
+    pub fn deity(&self) -> Option<&'a Object> {
+        if let Some(d) = self.ch.deity() {
+            if let Some(o) = self.ds.get(FileKind::Deity, &d) {
+                return Some(o);
+            }
+        }
+        let def = crate::rules::vars::system::data_defaults(self.ds, self.gm);
+        let key = def.get("DEITY")?;
+        self.ds.get(FileKind::Deity, key)
+    }
+
+    /// Is the skill a class skill for the given class?  Class skills
+    /// from a class (and its levels, subclass and domains) count for
+    /// that class only; those from races, templates, abilities and the
+    /// like count for every class.
+    pub fn is_class_skill_for(&self, skill: &str, class: &str) -> bool {
+        let Some(sk) = self.ds.get(FileKind::Skill, skill) else {
+            return false;
+        };
+        let cls = self
+            .classes
+            .iter()
+            .find(|(o, _)| o.key.eq_ignore_ascii_case(class) || o.name.eq_ignore_ascii_case(class))
+            .map(|(o, _)| *o);
+        let monster = cls.is_some_and(|c| c.is_type("Monster"));
+        for src in &self.sources {
+            let for_class = match src.kind {
+                SrcKind::Class => src.obj.key.eq_ignore_ascii_case(class),
+                SrcKind::Domain => src
+                    .class
+                    .as_deref()
+                    .is_none_or(|c| c.eq_ignore_ascii_case(class)),
+                _ => true,
+            };
+            if !for_class {
+                continue;
+            }
+            for t in &src.tokens {
+                let listed = match t.tag.as_str() {
+                    "CSKILL" => true,
+                    "MONCSKILL" => monster && src.kind == SrcKind::Race,
+                    _ => false,
+                };
+                if listed && skill_list_has(self.ds, &t.value, sk, &src.choices) {
+                    return true;
+                }
+            }
+        }
+        // the skill may name the classes it is a class skill for
+        if sk.values("CLASSES").flat_map(|v| v.split('|')).any(|c| {
+            let c = c.split('=').next().unwrap_or(c).trim();
+            c.eq_ignore_ascii_case("ALL")
+                || cls.is_some_and(|o| {
+                    o.key.eq_ignore_ascii_case(c) || o.name.eq_ignore_ascii_case(c)
+                })
+        }) {
+            return true;
+        }
+        // class skills chosen when a level was taken
+        self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL").any(|l| {
+            let of_class = l
+                .head()
+                .map(|h| h.value_text())
+                .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
+                .is_some_and(|c| c.eq_ignore_ascii_case(class));
+            of_class
+                && l.elems.iter().flatten().any(|e| {
+                    e.tag == "ADD"
+                        && e.children().iter().any(|c| c.tag == "CLASSSKILLS")
+                        && e.children().iter().any(|c| {
+                            c.tag == "CHOICE" && c.value_text().eq_ignore_ascii_case(&sk.key)
+                        })
+                })
+        })
+    }
+
     /// Is the skill made a cross-class skill (CCSKILL) by some object?
     pub fn is_cross_class_skill(&self, skill: &str) -> bool {
         self.cross_class_skills.contains(&lower(skill))
@@ -1159,10 +1631,40 @@ impl<'a> Calc<'a> {
                 return Some(self.stat_score(a));
             }
         }
+        if let Some(v) = self.stat_term(&u) {
+            return Some(v);
+        }
         match u.as_str() {
             "TL" | "HD" => return Some(self.total_level() as f64),
             "ECL" => return Some(self.ecl() as f64),
-            "CR" => return Some(self.challenge_rating()),
+            // the race's walking speed before any bonus
+            "MOVEBASE" => {
+                return Some(
+                    self.race()
+                        .and_then(|r| r.get("MOVE"))
+                        .and_then(|v| {
+                            let p: Vec<&str> = v.split(',').collect();
+                            p.chunks(2).find_map(|c| match c {
+                                [t, n] if t.trim().eq_ignore_ascii_case("Walk") => {
+                                    n.trim().parse().ok()
+                                }
+                                _ => None,
+                            })
+                        })
+                        .unwrap_or(0.0),
+                )
+            }
+            // racial hit dice the race starts with (MONSTERCLASS:Class:n)
+            "BASEHD" => {
+                return Some(
+                    self.race()
+                        .and_then(|r| r.get("MONSTERCLASS"))
+                        .and_then(|v| v.rsplit(':').next())
+                        .and_then(|n| n.trim().parse().ok())
+                        .unwrap_or(0.0),
+                )
+            }
+            "CR" => return Some(self.challenge_rating().unwrap_or(0.0)),
             "CL" => {
                 return Some(
                     src.and_then(|s| s.class.as_deref())
@@ -1523,11 +2025,13 @@ impl<'a> Calc<'a> {
             "CSKILL" => self.count_items(args, |a| self.is_class_skill(a)),
             "RACE" => self.count_items(args, |a| {
                 let Some(r) = self.race() else { return false };
+                let rt = self.race_type();
                 if let Some(t) = a.strip_prefix("TYPE=").or_else(|| a.strip_prefix("TYPE.")) {
-                    return r.is_type(t) || r.values("RACETYPE").any(|x| x.eq_ignore_ascii_case(t));
+                    return r.is_type(t)
+                        || rt.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(t));
                 }
                 if let Some(t) = a.strip_prefix("RACETYPE=") {
-                    return r.values("RACETYPE").any(|x| x.eq_ignore_ascii_case(t));
+                    return rt.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(t));
                 }
                 if let Some(t) = a.strip_prefix("RACESUBTYPE=") {
                     return r
@@ -1705,10 +2209,12 @@ impl<'a> Calc<'a> {
                 let r = self.ch.pcg.value("REGION").unwrap_or_default();
                 args.iter().any(|a| a.trim().eq_ignore_ascii_case(&r))
             }
-            "RACETYPE" => self.count_items(args, |a| {
-                self.race()
-                    .is_some_and(|r| r.values("RACETYPE").any(|x| x.eq_ignore_ascii_case(a)))
-            }),
+            "RACETYPE" => {
+                let rt = self.race_type();
+                self.count_items(args, |a| {
+                    rt.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(a))
+                })
+            }
             "SKILLTOT" => {
                 // PRESKILLTOT:skill,skill=total
                 let Some(last) = args.last() else { return true };
@@ -1972,12 +2478,24 @@ impl<'a> Calc<'a> {
                 }
             }
         }
-        if let Some(d) = self.ch.deity().and_then(|d| ds.get(FileKind::Deity, &d)) {
+        if let Some(d) = self.deity() {
             srcs.push(self.src(SrcKind::Deity, d));
         }
-        for d in self.ch.domains() {
+        for l in self.ch.pcg.lines_tagged("DOMAIN") {
+            let Some(d) = l.head().map(|h| h.value_text()) else {
+                continue;
+            };
             if let Some(o) = ds.get(FileKind::Domain, &d) {
-                srcs.push(self.src(SrcKind::Domain, o));
+                let mut src = self.src(SrcKind::Domain, o);
+                // the class the domain was taken through
+                src.class = l
+                    .get("SOURCE")
+                    .and_then(|e| e.children().iter().find(|c| c.tag == "NAME"))
+                    .map(|c| c.value_text());
+                if let Some(a) = l.text("ASSOCIATEDDATA") {
+                    src.choices = a.split(',').map(|x| x.trim().to_string()).collect();
+                }
+                srcs.push(src);
             }
         }
         for (i, it) in self.items.iter().enumerate() {
@@ -2599,6 +3117,24 @@ impl<'a> Calc<'a> {
 /// An ability grant waiting to be resolved: category, key, choices,
 /// owning class, nature.
 type Grant = (String, String, Vec<String>, Option<String>, &'static str);
+
+/// Does a CSKILL-style list (`a|TYPE=b|ALL|LIST|%LIST`) include the
+/// skill?
+fn skill_list_has(ds: &Dataset, list: &str, sk: &Object, choices: &[String]) -> bool {
+    let _ = ds;
+    list.split('|').any(|item| {
+        if let Some(ty) = item
+            .strip_prefix("TYPE=")
+            .or_else(|| item.strip_prefix("TYPE."))
+        {
+            sk.is_type(ty)
+        } else if item == "%LIST" || item == "LIST" {
+            choices.iter().any(|c| c.eq_ignore_ascii_case(&sk.key))
+        } else {
+            item.eq_ignore_ascii_case("ALL") || item.eq_ignore_ascii_case(&sk.key)
+        }
+    })
+}
 
 /// The nature an ability is held with: NORMAL, AUTOMATIC or VIRTUAL.
 fn nature_of(s: &str) -> &'static str {

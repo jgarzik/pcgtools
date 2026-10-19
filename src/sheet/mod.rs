@@ -25,6 +25,14 @@ pub fn signed(v: i64) -> String {
     format!("{:+}", v)
 }
 
+/// Is an object shown on output (VISIBLE is not NO or DISPLAY)?
+pub fn exported(o: &crate::dataset::Object) -> bool {
+    !matches!(
+        o.get("VISIBLE").map(|v| v.to_ascii_uppercase()).as_deref(),
+        Some("NO") | Some("DISPLAY")
+    )
+}
+
 /// Build the sheet for a character.
 pub fn build(ch: &Character, ctx: &Context) -> Element {
     let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
@@ -52,12 +60,18 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
         .into_iter()
         .filter_map(|e| Some((e.name.to_lowercase(), e.associated?)))
         .collect();
-    for (k, v) in &s.skills {
+    // skills shown on output: hidden ones and display-only ones (used
+    // in the editor, with an export copy elsewhere) are left out
+    for sk_obj in ctx.dataset.objects(crate::lst::kind::FileKind::Skill) {
+        if !exported(sk_obj) {
+            continue;
+        }
+        let v = s.skills.get(&sk_obj.key).copied().unwrap_or(0);
         let mut sk = Element::new("skill");
         // a skill with a sub-choice shows it after the name
-        match assoc.get(&k.to_lowercase()) {
-            Some(a) => sk.add("name", format!("{}({})", k, a)),
-            None => sk.add("name", k),
+        match assoc.get(&sk_obj.name.to_lowercase()) {
+            Some(a) => sk.add("name", format!("{}({})", sk_obj.name, a)),
+            None => sk.add("name", &sk_obj.name),
         }
         sk.add("skill_mod", v);
         skills.push(sk);

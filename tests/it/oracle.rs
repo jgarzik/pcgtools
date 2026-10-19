@@ -7,7 +7,8 @@
 // skill totals) must match for the game modes in CORE_MODES.
 //
 // ORACLE_ONLY=name limits the run to one character, ORACLE_SECTION to
-// one section; ORACLE_VERBOSE=1 prints mismatches.
+// one section; ORACLE_VERBOSE=1 prints mismatches (at most
+// ORACLE_LIMIT, default 400).
 
 use crate::common;
 use pcgtools::context::Context;
@@ -18,7 +19,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 
 const CORE: &str = r"^character/(basics\[[^/]*\]/bab\[0\]|hit_points\[0\]/points\[0\]|armor_class\[0\]/(total|flat|touch)\[0\]|saving_throws\[0\]/saving_throw\[[^/]*\]/total\[0\]|skills\[0\]/skill\[[^/]*\]/skill_mod\[0\])$";
-const CORE_MODES: &[&str] = &["pf", "35e", "3e"];
+const CORE_MODES: &[&str] = &["pf", "35e", "3e", "msrd", "sf"];
 
 #[derive(Default)]
 struct Score {
@@ -73,8 +74,14 @@ fn oracle_character_sheets() {
             if ok {
                 s.ok += 1;
             }
-            if !ok && core.is_match(&path) && CORE_MODES.contains(&mode.as_str()) {
-                core_fail.push(format!("{}: {}", stem, path));
+            if core.is_match(&path) {
+                let c = ms.entry("(core)".to_string()).or_default();
+                c.total += 1;
+                if ok {
+                    c.ok += 1;
+                } else if CORE_MODES.contains(&mode.as_str()) {
+                    core_fail.push(format!("{}: {}", stem, path));
+                }
             }
         }
         for (p, want, got) in &diff.mismatches {
@@ -86,8 +93,9 @@ fn oracle_character_sheets() {
 
     for (mode, secs) in &scores {
         let (t, o) = secs
-            .values()
-            .fold((0, 0), |a, s| (a.0 + s.total, a.1 + s.ok));
+            .iter()
+            .filter(|(k, _)| k.as_str() != "(core)")
+            .fold((0, 0), |a, (_, s)| (a.0 + s.total, a.1 + s.ok));
         let line: Vec<String> = secs
             .iter()
             .filter(|(k, _)| only_section.as_deref().is_none_or(|s| s == k.as_str()))
@@ -96,7 +104,11 @@ fn oracle_character_sheets() {
         eprintln!("oracle {}: {}/{} | {}", mode, o, t, line.join(", "));
     }
     if verbose {
-        for m in shown.iter().take(400) {
+        let limit = std::env::var("ORACLE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(400);
+        for m in shown.iter().take(limit) {
             eprintln!("  {}", m);
         }
     }

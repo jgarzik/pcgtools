@@ -638,7 +638,20 @@ impl<'a> Calc<'a> {
 
     pub fn is_class_skill(&self, skill: &str) -> bool {
         let s = lower(skill);
-        self.class_skills.contains(&s) || self.pcg_class_skills.contains(&s)
+        if self.class_skills.contains(&s) || self.pcg_class_skills.contains(&s) {
+            return true;
+        }
+        // the skill may name the classes it is a class skill for
+        let Some(o) = self.ds.get(FileKind::Skill, skill) else {
+            return false;
+        };
+        o.values("CLASSES").flat_map(|v| v.split('|')).any(|c| {
+            let c = c.split('=').next().unwrap_or(c).trim();
+            c.eq_ignore_ascii_case("ALL")
+                || self.classes.iter().any(|(cl, _)| {
+                    cl.key.eq_ignore_ascii_case(c) || cl.name.eq_ignore_ascii_case(c)
+                })
+        })
     }
 
     fn race(&self) -> Option<&'a Object> {
@@ -1437,15 +1450,6 @@ impl<'a> Calc<'a> {
         }
     }
 
-    fn prereqs_pass(&self, toks: &[&Tok], src: &Src<'a>) -> bool {
-        toks.iter().filter(|t| Prereq::is_pre_tag(&t.tag)).all(|t| {
-            match Prereq::from_token(&t.tag, &t.value) {
-                Ok(p) => self.passes(&p, Some(src)),
-                Err(_) => true,
-            }
-        })
-    }
-
     // ---- gathering active objects ----
 
     fn src(&self, kind: SrcKind, obj: &'a Object) -> Src<'a> {
@@ -1591,11 +1595,11 @@ impl<'a> Calc<'a> {
         let mut i = 0;
         loop {
             while i < srcs.len() {
+                // an object's own PRExxx tokens decide whether it may be
+                // taken, not whether it works once the character has it;
+                // only prerequisites on grants and bonuses gate here
                 let s = srcs[i].clone();
                 i += 1;
-                if !self.prereqs_pass_obj(&s) {
-                    continue;
-                }
                 for t in &s.tokens {
                     match t.tag.as_str() {
                         "ABILITY" => {
@@ -1681,7 +1685,33 @@ impl<'a> Calc<'a> {
             if pending.is_empty() {
                 break;
             }
+            // TYPE=x grants every ability of the category with that type
+            let mut batch = Vec::new();
             for (cat, key, choices, class) in std::mem::take(&mut pending) {
+                match key
+                    .strip_prefix("TYPE=")
+                    .or_else(|| key.strip_prefix("TYPE."))
+                {
+                    Some(types) => {
+                        for o in ds.objects(FileKind::Ability) {
+                            let in_cat = o
+                                .category
+                                .as_deref()
+                                .is_some_and(|c| c.eq_ignore_ascii_case(&cat));
+                            if in_cat && types.split('.').all(|t| o.is_type(t)) {
+                                batch.push((
+                                    cat.clone(),
+                                    o.key.clone(),
+                                    choices.clone(),
+                                    class.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    None => batch.push((cat, key, choices, class)),
+                }
+            }
+            for (cat, key, choices, class) in batch {
                 let (obj, choices) = match ds.get_in(FileKind::Ability, &cat, &key) {
                     Some(o) => (Some(o), choices),
                     None => {
@@ -1750,12 +1780,6 @@ impl<'a> Calc<'a> {
         self.sources = srcs;
     }
 
-    /// Object-level prerequisites (PRExxx tokens directly on the object).
-    fn prereqs_pass_obj(&self, s: &Src<'a>) -> bool {
-        matches!(s.kind, SrcKind::Stat | SrcKind::Save | SrcKind::Class)
-            || self.prereqs_pass(&s.obj.tokens.iter().collect::<Vec<_>>(), s)
-    }
-
     // ---- evaluation ----
 
     fn pass(&mut self) {
@@ -1770,9 +1794,6 @@ impl<'a> Calc<'a> {
         let mut vars: HashMap<String, f64> = HashMap::new();
         let mut defined = HashSet::new();
         for (si, s) in self.sources.iter().enumerate() {
-            if !self.prereqs_pass_obj(s) {
-                continue;
-            }
             let env = Ctx {
                 calc: self,
                 src: Some(s),

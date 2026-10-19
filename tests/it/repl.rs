@@ -1409,6 +1409,51 @@ fn followers_limited_per_companion_list() {
 }
 
 #[test]
+fn body_slots_hold_their_count() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Ringo", dirs());
+    for item in [
+        "\"Copper Ring\"",
+        "\"Iron Ring\"",
+        "Signet",
+        "\"Ring Hand\"",
+    ] {
+        ok(&mut s, &format!("equip add {}", item));
+    }
+    // two rings fill the Finger slot (2 x TORSO 1)
+    ok(&mut s, "equip wear \"Copper Ring\"");
+    ok(&mut s, "equip wear \"Iron Ring\" Finger");
+    let e = err(&mut s, "equip wear Signet");
+    assert!(e.contains("Finger slot holds 2"), "{}", e);
+    // not a body slot: no limit
+    ok(&mut s, "equip wear Signet Carried");
+    ok(&mut s, "undo");
+    ok(&mut s, "undo");
+    ok(&mut s, "undo");
+    // BONUS:SLOTS|Finger adds one; an item fits while room is left,
+    // though the signet takes two
+    ok(&mut s, "equip wear \"Ring Hand\"");
+    ok(&mut s, "equip wear Signet");
+    ok(&mut s, "equip wear \"Copper Ring\"");
+    assert!(err(&mut s, "equip wear \"Iron Ring\"").contains("holds 3"));
+    ok(&mut s, "equip wear \"Iron Ring\" --force");
+}
+
+#[test]
+fn resized_containers_scale_their_capacity() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Sacky", dirs());
+    ok(&mut s, "equip add Sack");
+    // Large doubles what goods hold
+    let out = ok(&mut s, "equip customize Sack size L");
+    assert!(
+        out.starts_with("Sack is now size L; it holds 40 lbs, 20 Any"),
+        "{}",
+        out
+    );
+    let out = ok(&mut s, "equip customize Sack size M");
+    assert!(out.contains("it holds 20 lbs, 10 Any"), "{}", out);
+}
+
+#[test]
 fn hit_points_rolled_within_bonus_bounds() {
     let mut s = Session::create("Testmode", &["TB".into()], "Hale", dirs());
     let hp = |s: &Session, cls: &str, n: u32| {

@@ -98,7 +98,8 @@ Commands (names may be quoted; most accept --force to skip checks):
   equip sell NAME [QTY|all]    give up equipment for half its price
   equip wear NAME [LOCATION] [--set SET]
                                equip an item (location defaults by type) in
-                               a set (by default the one used)
+                               a set (by default the one used), if the
+                               body slot has room
   equip unwear NAME [--set SET]   stop using an item
   equip customize NAME +MOD[|CHOICE] | -MOD | size SIZE
                                add or remove an equipment modifier, or resize
@@ -1803,6 +1804,10 @@ impl Session {
                         placed, owned.quantity, owned.name
                     )));
                 }
+                if !force {
+                    let set = set_id.clone().unwrap_or_else(|| self.ch.calc_equip_set());
+                    self.check_slot_room(&set, &loc)?;
+                }
                 self.checkpoint();
                 let calc = self.ch.ensure_equip_set();
                 let set = set_id.unwrap_or(calc);
@@ -1820,6 +1825,73 @@ impl Session {
             }
             other => Err(Error::Other(format!("unknown equip command '{}'", other))),
         }
+    }
+
+    /// Is there room in body slot `loc` of an equipment set for one
+    /// more item?  A slot (EQSLOT) holds its CONTAINS count times the
+    /// game mode's NUMSLOTS number of its NUMBER kind, plus
+    /// BONUS:SLOTS|slot; each item placed there takes its SLOTS (1 by
+    /// default).  As in PCGen, an item fits while any room is left.
+    /// Locations that are not body slots are not limited.
+    fn check_slot_room(&self, set: &str, loc: &str) -> Result<()> {
+        let Some(g) = self.ctx.gamemode.as_ref() else {
+            return Ok(());
+        };
+        let Some(slot) = g
+            .lines("equipmentslots.lst", "EQSLOT")
+            .find(|l| l.value.eq_ignore_ascii_case(loc))
+        else {
+            return Ok(());
+        };
+        let tok = |t: &str| {
+            slot.tokens
+                .iter()
+                .find(|(k, _)| k == t)
+                .map(|(_, v)| v.as_str())
+        };
+        let per: i64 = tok("CONTAINS")
+            .and_then(|v| v.rsplit_once('='))
+            .and_then(|(_, n)| n.trim().parse().ok())
+            .unwrap_or(1);
+        let kind = tok("NUMBER").unwrap_or("");
+        let count: i64 = g
+            .lines("equipmentslots.lst", "NUMSLOTS")
+            .flat_map(|l| l.tokens.iter())
+            .find(|(k, _)| k.eq_ignore_ascii_case(kind))
+            .and_then(|(_, v)| v.trim().parse().ok())
+            .unwrap_or(0);
+        let mut c = self.calc();
+        c.run();
+        let room = per * count + c.bonus.total("SLOTS", &slot.value) as i64;
+        let owned = self.ch.equipment();
+        let used: i64 = self
+            .ch
+            .set_items(set)
+            .iter()
+            .filter(|e| e.location.eq_ignore_ascii_case(&slot.value))
+            .filter_map(|e| e.item.as_deref())
+            .map(|name| {
+                let key = owned
+                    .iter()
+                    .find(|o| o.name == name)
+                    .and_then(|o| o.base.clone())
+                    .unwrap_or_else(|| name.to_string());
+                self.ctx
+                    .dataset
+                    .get(FileKind::Equipment, &key)
+                    .and_then(|o| o.get("SLOTS"))
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+                    .unwrap_or(1)
+                    .max(0)
+            })
+            .sum();
+        if used >= room {
+            return Err(Error::Other(format!(
+                "the {} slot holds {} and is full (use --force)",
+                slot.value, room
+            )));
+        }
+        Ok(())
     }
 
     /// The character's equipment sets as (id, name); PCGen's default
@@ -2426,7 +2498,32 @@ impl Session {
         }
         self.checkpoint();
         self.ch.set_customization(&name, &base, &parts.join("$"));
+        let msg = match self.container_capacity(&name) {
+            Some(cap) => format!("{}; it holds {}", msg, cap),
+            None => msg,
+        };
         changed(self, msg)
+    }
+
+    /// What a container the character has holds, as text.
+    fn container_capacity(&self, name: &str) -> Option<String> {
+        let mut c = self.calc();
+        c.run();
+        let line = self
+            .ch
+            .pcg
+            .lines_tagged("EQUIPNAME")
+            .find(|l| l.head().is_some_and(|h| h.value_text() == name))?;
+        let cap = EqItem::from_pcg(&c, line)?.capacity(&c)?;
+        let amount = |n: Option<f64>| n.map_or("any number".to_string(), |n| format!("{}", n));
+        let mut out = vec![match cap.weight {
+            Some(w) => format!("{} lbs", w),
+            None => "any weight".to_string(),
+        }];
+        for (t, n) in &cap.items {
+            out.push(format!("{} {}", amount(*n), t));
+        }
+        Some(out.join(", "))
     }
 
     fn info(&self) -> String {

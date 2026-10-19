@@ -886,3 +886,19 @@ set align NG
 class add Wizard
 lang add Elven
 lang add Dwarven
+
+== ring_slots_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat DEX 14
+race Human
+set align NG
+class add Rogue
+equip add "Hand of Glory"
+equip wear "Hand of Glory"
+equip add "Ring of Protection +1"
+equip wear "Ring of Protection +1"
+equip add "Ring of Sustenance"
+equip wear "Ring of Sustenance"
+equip add "Ring of Swimming"
+equip wear "Ring of Swimming"

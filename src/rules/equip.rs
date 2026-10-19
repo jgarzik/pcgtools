@@ -66,6 +66,15 @@ pub struct EqItem<'a> {
     pub note: String,
 }
 
+/// What a container holds (see [`EqItem::capacity`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Capacity {
+    /// weight it carries; None for no limit
+    pub weight: Option<f64>,
+    /// (item type, how many; None for any number)
+    pub items: Vec<(String, Option<f64>)>,
+}
+
 fn num(v: Option<&str>) -> f64 {
     v.and_then(|x| x.trim().parse().ok()).unwrap_or(0.0)
 }
@@ -274,6 +283,37 @@ impl<'a> EqItem<'a> {
         self.resized_cost = Some(num(b.get("COST")) * cost_ratio);
         self.weight = num(b.get("WT")) * weight_ratio;
         self.size = new.to_string();
+    }
+
+    /// What a container holds, from CONTAINS: the weight it carries
+    /// (None for UNLIM) and how many items of each type (None for any
+    /// number).  A resized container's limits scale by the new size's
+    /// BONUS:ITEMCAPACITY for the item's types, as PCGen resizes it.
+    pub fn capacity(&self, calc: &Calc<'a>) -> Option<Capacity> {
+        let spec = self.data.get("CONTAINS")?;
+        let mult = if self.resized_cost.is_some() {
+            size_bonus(calc, &self.size, "ITEMCAPACITY", &self.types(calc))
+        } else {
+            1.0
+        };
+        let limit = |v: &str| -> Option<f64> {
+            if v.trim().eq_ignore_ascii_case("UNLIM") {
+                None
+            } else {
+                v.trim().parse::<f64>().ok().map(|n| n * mult)
+            }
+        };
+        let mut parts = spec.split('|');
+        let first = parts.next().unwrap_or("").trim_start_matches('*');
+        let weight = limit(first.split_once('%').map_or(first, |(_, w)| w));
+        let items = parts
+            .filter(|p| !p.is_empty())
+            .map(|p| match p.split_once('=') {
+                Some((t, n)) => (t.to_string(), limit(n)),
+                None => (p.to_string(), None),
+            })
+            .collect();
+        Some(Capacity { weight, items })
     }
 
     pub fn is_type(&self, calc: &Calc<'a>, t: &str) -> bool {

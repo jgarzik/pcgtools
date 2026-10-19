@@ -63,7 +63,8 @@ pub fn ability_cost(o: &Object) -> f64 {
 /// Feats a character gains from its levels and race: the race's
 /// STARTFEATS, one per LEVELSPERFEAT levels of classes that set it, and
 /// the game mode's BONUSFEATLEVELSTARTINTERVAL:start|interval schedule
-/// over the remaining levels (interval 0 grants only at the start).
+/// over the remaining levels (interval 0 grants only at the start),
+/// which BONUS:FEAT|PCPOOL adds to before rounding down.
 pub fn level_feats(c: &Calc) -> f64 {
     let mut total = 0.0;
     for s in c.sources.iter().filter(|s| s.kind == SrcKind::Race) {
@@ -84,24 +85,56 @@ pub fn level_feats(c: &Calc) -> f64 {
             None => levels += n,
         }
     }
+    // only the first schedule counts; without one just PCPOOL is left
+    let (mut start, mut interval) = (0, 0);
     if let Some(g) = c.gm {
         for l in g.lines("miscinfo.lst", "BONUSFEATLEVELSTARTINTERVAL") {
             let mut it = l.value.split('|').map(|x| x.trim().parse::<u32>().ok());
-            let (Some(Some(start)), interval) = (it.next(), it.next().flatten()) else {
-                continue;
-            };
-            total += feats_on_schedule(levels, start, interval.unwrap_or(0)) as f64;
+            if let Some(Some(s)) = it.next() {
+                start = s;
+                interval = it.next().flatten().unwrap_or(0);
+                break;
+            }
         }
     }
-    total
+    total + feats_on_schedule(levels, start, interval, c.bonus.total("FEAT", "PCPOOL"))
 }
 
-/// How many of levels 1..=levels fall on start, start+interval, ...
-fn feats_on_schedule(levels: u32, start: u32, interval: u32) -> u32 {
-    if start == 0 || levels < start {
-        return 0;
+/// PCGen's rounding of pool parts: down, forgiving float error.
+fn floor_eps(x: f64) -> f64 {
+    (x + 0.0001).floor()
+}
+
+/// Feats for levels 1..=levels on start, start+interval, ..., with
+/// extra points added before rounding down.  Each level past the start
+/// is 1/interval of a feat, so fractional extras combine with it.
+fn feats_on_schedule(levels: u32, start: u32, interval: u32, extra: f64) -> f64 {
+    if start == 0 {
+        return floor_eps(extra);
     }
-    (levels - start).checked_div(interval).unwrap_or(0) + 1
+    let grown = if interval > 0 {
+        (levels + interval).saturating_sub(start) as f64 / interval as f64
+    } else {
+        0.0
+    };
+    if levels >= start {
+        let first = start.checked_div(interval).unwrap_or(0) as f64;
+        floor_eps(1.0 + grown + extra - first)
+    } else {
+        floor_eps(grown + extra)
+    }
+}
+
+/// Points in the FEAT pool: BONUS:FEAT|POOL as is plus the level feats
+/// (with PCPOOL), BONUS:FEAT|MONSTERPOOL and BONUS:ABILITYPOOL|FEAT
+/// each rounded down, the sum rounded down again.
+fn feat_pool(c: &Calc) -> f64 {
+    floor_eps(
+        c.bonus.total("FEAT", "POOL")
+            + level_feats(c)
+            + floor_eps(c.bonus.total("FEAT", "MONSTERPOOL"))
+            + floor_eps(c.bonus.total("ABILITYPOOL", "FEAT")),
+    )
 }
 
 /// Pools with points granted or spent.
@@ -109,10 +142,12 @@ pub fn pools(c: &Calc) -> Vec<Pool> {
     let mut out = Vec::new();
     for cat in categories(c) {
         // points granted, and points added by hand
-        let mut total = c.bonus.total("ABILITYPOOL", &cat) + c.ch.user_pool(&cat);
-        if cat.eq_ignore_ascii_case("FEAT") {
-            total += level_feats(c);
-        }
+        let granted = if cat.eq_ignore_ascii_case("FEAT") {
+            feat_pool(c)
+        } else {
+            c.bonus.total("ABILITYPOOL", &cat)
+        };
+        let total = granted + c.ch.user_pool(&cat);
         let spent: f64 =
             c.ch.abilities()
                 .iter()
@@ -236,15 +271,33 @@ mod tests {
     #[test]
     fn feat_schedule() {
         // a feat at 3 and every 2 levels after
-        assert_eq!(feats_on_schedule(1, 3, 2), 0);
-        assert_eq!(feats_on_schedule(3, 3, 2), 1);
-        assert_eq!(feats_on_schedule(4, 3, 2), 1);
-        assert_eq!(feats_on_schedule(5, 3, 2), 2);
-        assert_eq!(feats_on_schedule(20, 3, 2), 9);
+        assert_eq!(feats_on_schedule(1, 3, 2, 0.0), 0.0);
+        assert_eq!(feats_on_schedule(3, 3, 2, 0.0), 1.0);
+        assert_eq!(feats_on_schedule(4, 3, 2, 0.0), 1.0);
+        assert_eq!(feats_on_schedule(5, 3, 2, 0.0), 2.0);
+        assert_eq!(feats_on_schedule(20, 3, 2, 0.0), 9.0);
+        // every 3 from 3
+        assert_eq!(feats_on_schedule(5, 3, 3, 0.0), 1.0);
+        assert_eq!(feats_on_schedule(6, 3, 3, 0.0), 2.0);
         // only at the start
-        assert_eq!(feats_on_schedule(1, 1, 0), 1);
-        assert_eq!(feats_on_schedule(9, 1, 0), 1);
-        assert_eq!(feats_on_schedule(0, 1, 0), 0);
-        assert_eq!(feats_on_schedule(5, 0, 2), 0);
+        assert_eq!(feats_on_schedule(1, 1, 0, 0.0), 1.0);
+        assert_eq!(feats_on_schedule(9, 1, 0, 0.0), 1.0);
+        assert_eq!(feats_on_schedule(0, 1, 0, 0.0), 0.0);
+        // no schedule
+        assert_eq!(feats_on_schedule(5, 0, 2, 0.0), 0.0);
+    }
+
+    #[test]
+    fn feat_schedule_extra_points() {
+        // fractions join the partial feat of the levels in between
+        assert_eq!(feats_on_schedule(4, 3, 2, 0.5), 2.0);
+        assert_eq!(feats_on_schedule(2, 3, 2, 0.5), 1.0);
+        assert_eq!(feats_on_schedule(2, 3, 3, 0.5), 1.0);
+        assert_eq!(feats_on_schedule(1, 3, 3, 0.5), 0.0);
+        assert_eq!(feats_on_schedule(1, 1, 0, 1.5), 2.0);
+        // without a schedule the points round down alone
+        assert_eq!(feats_on_schedule(5, 0, 2, 1.5), 1.0);
+        assert_eq!(feats_on_schedule(5, 0, 2, 0.9999), 1.0);
+        assert_eq!(feats_on_schedule(0, 0, 0, -0.5), -1.0);
     }
 }

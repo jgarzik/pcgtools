@@ -241,6 +241,16 @@ fn ability_pools_and_choices() {
 }
 
 #[test]
+fn feat_pool_bonuses() {
+    let mut s = session();
+    // BONUS:FEAT POOL 1, PCPOOL 1.5 and MONSTERPOOL 0.5 on top of
+    // ABILITYPOOL 3: the PC and monster parts round down on their own
+    ok(&mut s, "template add Studious");
+    let info = ok(&mut s, "info");
+    assert!(info.contains("Feat 2/5"), "{}", info);
+}
+
+#[test]
 fn subclass_spells_followers_and_kits() {
     let mut s = session();
     assert!(err(&mut s, "class subclass Tinker Nope").contains("no subclass"));

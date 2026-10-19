@@ -1236,7 +1236,8 @@ impl Character {
             .collect()
     }
 
-    /// Add a spell to a class's book at a level.
+    /// Add a spell to a class's book at a level.  A book not yet
+    /// recorded is made a prepared list.
     pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
         if !self
             .pcg
@@ -1246,7 +1247,7 @@ impl Character {
         {
             self.insert_ordered(
                 "SPELLBOOK",
-                PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "1")]),
+                PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "2")]),
             );
         }
         self.insert_ordered(

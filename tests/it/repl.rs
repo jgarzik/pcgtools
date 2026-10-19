@@ -256,6 +256,9 @@ fn subclass_spells_followers_and_kits() {
     assert!(ok(&mut s, "spell add Tinker Spark").contains("level 0"));
     ok(&mut s, "spell add Tinker Glow 1 Gadgets");
     assert_eq!(s.ch.spells().len(), 2);
+    // a book other than the known spells is a prepared list
+    let text = String::from_utf8(s.ch.pcg.encode()).unwrap();
+    assert!(text.contains("SPELLBOOK:Gadgets|TYPE:2\n"), "{}", text);
     assert!(err(&mut s, "spell rm Tinker Fireball").contains("has no spell"));
     ok(&mut s, "spell rm Tinker Spark");
     assert_eq!(s.ch.spells().len(), 1);

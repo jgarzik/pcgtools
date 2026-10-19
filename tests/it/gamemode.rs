@@ -7,7 +7,7 @@ use pcgtools::gamemode::GameModes;
 fn fixture_modes() {
     let modes = GameModes::scan(&common::fixture("mini/system/gameModes"));
     assert!(modes.diags.is_empty(), "{:?}", modes.diags);
-    assert_eq!(modes.modes.len(), 2);
+    assert_eq!(modes.modes.len(), 3);
 
     let tm = modes.find("tm").expect("alias lookup");
     assert_eq!(tm.key, "Testmode");
@@ -32,6 +32,12 @@ fn fixture_modes() {
     assert_eq!(fast.len(), 3);
     assert_eq!(fast[2].level, "LEVEL");
     assert_eq!(fast[2].min_xp, "LEVEL*1000");
+    // rows before the first XPTABLE make up a table of their own
+    let pm = modes.find("Plainmode").unwrap();
+    let first = pm.level_table(None);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].min_xp, "(LEVEL*LEVEL-LEVEL)*500");
+    assert_eq!(pm.level_table(Some("Steep")).len(), 3);
 
     let sc: Vec<_> = tm.lines("statsandchecks.lst", "BONUSSPELLLEVEL").collect();
     assert_eq!(sc[0].get("BASESTATSCORE"), Some("12"));

@@ -69,7 +69,9 @@ load such a file. `pcgtools` instead decodes each line independently:
 lines that are valid UTF-8 are decoded as UTF-8, and any other line is
 decoded as Latin-1 (one byte per character) and flagged. Writing the
 file back re-encodes flagged lines the same way, so unmodified files
-round-trip byte-for-byte.
+round-trip byte-for-byte. When loading a campaign's objects, though, a
+data file with any flagged line is left out entirely, as PCGen does,
+and reported as an error.
 
 ### 2.2 Line endings
 
@@ -169,7 +171,11 @@ object defined elsewhere (usually in another source book):
 `Name` here is the target's **key**. For abilities the key must be
 qualified with the ability category: `CATEGORY=FEAT|Power Attack.MOD`.
 Class modification heads keep the `CLASS:` prefix:
-`CLASS:Fighter.MOD`.
+`CLASS:Fighter.MOD`. A modification, copy or forget head drops any
+leading `TAG:` to find its target, but outside the kinds whose heads
+are `TAG:name` (classes, kits and the like) a defining head keeps it as
+part of the name: `DEITY:None` in a deity file defines an object keyed
+`DEITY:None`.
 
 The suffix is recognized anywhere after the first character of the
 head, with `.COPY` checked first, then `.MOD`, then `.FORGET`. (Names
@@ -861,7 +867,7 @@ equals the mode's key or one of its allowed names (case-insensitive).
 |---|---|---|
 | `miscinfo.lst` | assorted constants and UI setup | `ACNAME`, `BONUSSTACKS`, `BABMAXATT`, `BABATTCYC`, `BABMINVAL`, `SKILLMULTIPLIER`, `SPELLBASEDC`, `CURRENCYUNITABBREV`, `DEFAULTUNITSET`, `UNITSET`, `TAB`, `ROLLMETHOD`, `WIELDCATEGORY`, `ABILITYCATEGORY`, `CLASSTYPE`, `BASEDICE`, `ACTYPE`, `WEAPONTYPE`, ... |
 | `statsandchecks.lst` | bonus spells by stat score (older modes also declare stats and saves here) | `BONUSSPELLLEVEL` |
-| `level.lst` | experience tables; a `LEVEL:LEVEL` row gives a formula for higher levels | `XPTABLE`, `LEVEL` with `MINXP`, `CSKILLMAX`, `CCSKILLMAX` |
+| `level.lst` | experience tables; a `LEVEL:LEVEL` row gives a formula for higher levels; rows before any `XPTABLE` form a table named `Default`; the first table is the default | `XPTABLE`, `LEVEL` with `MINXP`, `CSKILLMAX`, `CCSKILLMAX` |
 | `load.lst` | carrying capacity | `SIZEMULT`, `LOADSCORE`, `ENCUMBRANCE` |
 | `sizeAdjustment.lst` | size categories (newer modes define sizes in data instead) | |
 | `rules.lst` | optional rules the user can toggle | `NAME` with `VAR`, `DEFAULT`, `EXCLUDE`, `DESC` |
@@ -884,8 +890,8 @@ over a core value. `pcgtools` reads these:
 
 | Control | Value | Effect |
 |---|---|---|
-| `ALIGNMENTFEATURE` | `YES`/`NO` | `NO` hides the character's alignment; absent means enabled |
-| `FACE` | variable name | declares a global `ORDEREDPAIR` variable of that name; its value, when set, is the character's face (width, depth) |
+| `ALIGNMENTFEATURE` | `YES`/`NO` | the character's alignment is shown only when `YES` |
+| `FACE` | variable name | declares a global `ORDEREDPAIR` variable of that name; its value, when set, is the character's face (width, depth). Without the control, a global variable `Face` the data declares serves instead |
 | `PCREACH` | variable name | the character's reach is that global variable's value instead of the race/template value plus `COMBAT.REACH` bonuses |
 | `STATMODSAVE` | variable name | the stat part of a save is that variable in the save's scope instead of the bonuses on the save object |
 | `STATINPUT` | channel name | each stat's base score is supplied as that channel in the stat's scope |
@@ -1248,9 +1254,11 @@ heights and weights follow the game mode's default unit set
 | Value | Rule |
 |---|---|
 | `bab` | `COMBAT.BASEAB` |
-| `alignment` | blank when `ALIGNMENTFEATURE` is `NO` (7.4) |
+| `alignment` | blank unless `ALIGNMENTFEATURE` is `YES` (7.4) |
 | `experience/next_level` | minimum experience for the next level |
-| `face` | the last race/template `FACE` (default 5), or the `FACE` control variable; squares by the game mode `SQUARESIZE` (default 5) |
+| `face` | the last race/template `FACE` (default 5), or the `FACE` control variable (or a data-declared `Face`); squares by the game mode `SQUARESIZE` (default 5) |
+| `race` | the race's output name; without a race, that of the race whose `GROUP` is `Unselected` |
+| `deity` | the chosen deity, else the data's default (`DEFAULTVARIABLEVALUE:DEITY`); a default naming no loaded deity shows that name with every other field blank |
 | `reach` | the last race/template `REACH` (default 5) + `COMBAT.REACH`, or the `PCREACH` control variable |
 | `move` | movement by type, walk first |
 | `vision` | per type, the longest distance plus `VISION` bonuses |

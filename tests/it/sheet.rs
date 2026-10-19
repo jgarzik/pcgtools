@@ -262,3 +262,33 @@ fn class_without_hit_die_rolls_nothing() {
     assert_eq!(at(&m, "hit_points[0]/history[0]/roll[0]/roll[0]"), "0");
     assert_eq!(at(&m, "hit_points[0]/points[0]"), "5");
 }
+
+/// A mode with few code controls, an untitled experience table and a
+/// default deity that no data defines.
+#[test]
+fn sparse_game_mode_basics() {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Plainmode", &["PL".into()], "Pat", dirs);
+    s.exec("class add Drifter").unwrap();
+    let m: HashMap<String, String> = sheet::build(&s.ch, &s.ctx).flatten().into_iter().collect();
+    // alignment is shown only when the mode turns the feature on
+    assert_eq!(at(&m, "basics[Pat]/alignment[0]/long[0]"), "");
+    assert_eq!(at(&m, "basics[Pat]/alignment[0]/short[0]"), "");
+    // rows before any XPTABLE are a table of their own, used first
+    assert_eq!(at(&m, "basics[Pat]/experience[0]/next_level[0]"), "1000");
+    // without a race, the data's unselected race
+    assert_eq!(at(&m, "basics[Pat]/race[0]"), "<none selected>");
+    // the Face variable, declared by the data with no FACE control
+    assert_eq!(at(&m, "basics[Pat]/face[0]/face[0]"), "5' by 5'");
+    assert_eq!(at(&m, "basics[Pat]/face[0]/short[0]"), "5' x 5'");
+    assert_eq!(at(&m, "basics[Pat]/face[0]/squares[0]"), "1 x 1");
+    // the default deity names nothing loaded: shown by name only
+    assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/name[0]"), "Nobody");
+    assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/domainlist[0]"), "");
+    assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/holyitem[0]"), "");
+    assert_eq!(at(&m, "basics[Pat]/deity[Nobody]/source[0]"), "");
+}

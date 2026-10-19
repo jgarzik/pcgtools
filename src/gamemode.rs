@@ -214,28 +214,25 @@ impl GameMode {
     }
 
     /// The experience table with the given name (or the first one).
+    /// Rows before any XPTABLE line form a table named `Default`.
     pub fn level_table(&self, name: Option<&str>) -> Vec<LevelRow> {
         let Some(f) = self.files.get("level.lst") else {
             return Vec::new();
         };
         let mut out = Vec::new();
-        let mut cur: Option<&str> = None;
-        let mut taken: Option<&str> = None;
+        let mut cur = "Default";
+        let mut first: Option<&str> = None;
         for l in &f.lines {
             if l.tag == "XPTABLE" {
-                cur = Some(l.value.as_str());
+                cur = l.value.as_str();
                 continue;
             }
             if l.tag != "LEVEL" {
                 continue;
             }
-            let want = match (name, taken) {
-                (Some(n), _) => cur == Some(n),
-                (None, None) => {
-                    taken = cur;
-                    true
-                }
-                (None, Some(t)) => cur == Some(t),
+            let want = match name {
+                Some(n) => cur == n,
+                None => *first.get_or_insert(cur) == cur,
             };
             if want {
                 out.push(LevelRow {

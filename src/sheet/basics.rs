@@ -38,6 +38,26 @@ pub fn build(s: &SheetCtx) -> Element {
     b.push(classes(s));
     if let Some(d) = c.deity() {
         b.push(deity(s, d));
+    } else if let Some(name) = c.default_deity_key() {
+        // a default naming no loaded deity stands for an empty one
+        let mut e = Element::new("deity");
+        e.add("name", name);
+        for f in [
+            "alignment",
+            "description",
+            "domainlist",
+            "favoredweapon",
+            "holyitem",
+            "pantheonlist",
+            "source",
+            "special_abilities",
+            "appearance",
+            "title",
+            "worshippers",
+        ] {
+            e.add(f, "");
+        }
+        b.push(e);
     }
     b.push(paragraphs("description", &pcg("CHARACTERDESC")));
 
@@ -149,12 +169,8 @@ pub fn build(s: &SheetCtx) -> Element {
 
 fn alignment(s: &SheetCtx) -> Element {
     let mut e = Element::new("alignment");
-    let enabled = s
-        .vars
-        .controls
-        .get("ALIGNMENTFEATURE")
-        .is_none_or(|v| !v.eq_ignore_ascii_case("NO"));
-    let (long, short) = if !enabled {
+    // off unless the game mode turns it on
+    let (long, short) = if !s.vars.controls.enabled("ALIGNMENTFEATURE") {
         (String::new(), String::new())
     } else {
         match s.ch.alignment() {
@@ -318,18 +334,19 @@ fn face_size(s: &SheetCtx) -> (f64, f64) {
             face = (it.next().unwrap_or(5.0), it.next().unwrap_or(0.0));
         }
     }
-    if let Some(var) = s.vars.controls.get("FACE") {
-        if let Some(v) = s
-            .vars
-            .get(&crate::rules::vars::system::Owner::global(), var)
-        {
-            let t = v.to_string();
-            if let Some((a, b)) = t.split_once(',') {
-                face = (
-                    a.trim().parse().unwrap_or(face.0),
-                    b.trim().parse().unwrap_or(face.1),
-                );
-            }
+    // the variable the FACE control names, else one the data declares
+    // under the default name
+    let var = s.vars.controls.get("FACE").unwrap_or("Face");
+    if let Some(v) = s
+        .vars
+        .get(&crate::rules::vars::system::Owner::global(), var)
+    {
+        let t = v.to_string();
+        if let Some((a, b)) = t.split_once(',') {
+            face = (
+                a.trim().parse().unwrap_or(face.0),
+                b.trim().parse().unwrap_or(face.1),
+            );
         }
     }
     face
@@ -475,7 +492,19 @@ fn movement(s: &SheetCtx, units: &Units) -> Element {
 
 fn race_name(s: &SheetCtx) -> String {
     let Some(r) = s.ch.race() else {
-        return String::new();
+        // a character without a race has the data's unselected one
+        return s
+            .ctx
+            .dataset
+            .objects(FileKind::Race)
+            .iter()
+            .find(|o| {
+                o.values("GROUP")
+                    .flat_map(|v| v.split('|'))
+                    .any(|g| g.trim().eq_ignore_ascii_case("Unselected"))
+            })
+            .map(output_name)
+            .unwrap_or_default();
     };
     let mut name = s
         .ctx

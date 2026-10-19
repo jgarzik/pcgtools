@@ -177,3 +177,31 @@ fn duplicates_by_source_date_and_allowed() {
         Some("Spoken")
     );
 }
+
+fn load_plain() -> Dataset {
+    let data = common::fixture("mini/data");
+    let mut reg = Registry::new(DataDirs {
+        data: Some(data.clone()),
+        ..Default::default()
+    });
+    let plan = LoadPlan::build(&mut reg, &[data.join("plain/plain.pcc")]);
+    Dataset::load(&plan)
+}
+
+#[test]
+fn files_not_in_utf8_are_skipped() {
+    let ds = load_plain();
+    // as PCGen does, the whole file is left out
+    assert!(ds.get(FileKind::Race, "Stranger").is_none());
+    assert!(ds.get(FileKind::Race, "None Selected").is_some());
+    assert!(ds.diags.items.iter().any(|d| d.message.contains("UTF-8")));
+}
+
+#[test]
+fn tag_prefixed_heads_keep_the_tag_in_the_name() {
+    // only class-like kinds have TAG:name heads; elsewhere the whole
+    // head is the name
+    let ds = load_plain();
+    assert!(ds.get(FileKind::Deity, "DEITY:Nobody").is_some());
+    assert!(ds.get(FileKind::Deity, "Nobody").is_none());
+}

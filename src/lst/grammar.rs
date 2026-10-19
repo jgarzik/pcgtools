@@ -135,7 +135,14 @@ pub fn classify(kind: FileKind, head: &str) -> Role {
         }
     }
 
-    let h = Head::parse(head);
+    let mut h = Head::parse(head);
+    // PCGen drops a leading TAG: only from .MOD, .COPY and .FORGET
+    // heads; a defining head keeps it as part of the name
+    if h.op == super::line::HeadOp::Define && h.category.is_none() {
+        if let Some(p) = h.prefix.take() {
+            h.name = format!("{}:{}", p, h.name);
+        }
+    }
     Role::Object {
         head_tag: h.prefix.clone(),
         head: h,
@@ -221,6 +228,16 @@ mod tests {
         assert_eq!(h.op, HeadOp::Copy("Magic Missile II".into()));
         let r = classify(FileKind::Ability, "CATEGORY=FEAT|Dodge.MOD");
         assert_eq!(obj(&r).1.category.as_deref(), Some("FEAT"));
+        // a leading tag is part of a defined name, not of a modified one
+        let r = classify(FileKind::Deity, "DEITY:None");
+        let (t, h) = obj(&r);
+        assert_eq!(*t, None);
+        assert_eq!(h.name, "DEITY:None");
+        assert_eq!(h.unparse(), "DEITY:None");
+        let r = classify(FileKind::Deity, "DEITY:None.MOD");
+        let (t, h) = obj(&r);
+        assert_eq!(t.as_deref(), Some("DEITY"));
+        assert_eq!(h.name, "None");
     }
 
     #[test]
@@ -307,7 +324,7 @@ mod tests {
                 Some("FUNCTION"),
                 "d20Mod",
             ),
-            (FileKind::Deity, "DEITY:Sun God", Some("DEITY"), "Sun God"),
+            (FileKind::Deity, "DEITY:Sun God", None, "DEITY:Sun God"),
             (FileKind::Race, "Elf", None, "Elf"),
             (FileKind::Race, "Elf (Wood)", None, "Elf (Wood)"),
         ];

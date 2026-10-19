@@ -1614,9 +1614,14 @@ impl<'a> Calc<'a> {
                 return Some(o);
             }
         }
-        let def = crate::rules::vars::system::data_defaults(self.ds, self.gm);
-        let key = def.get("DEITY")?;
-        self.ds.get(FileKind::Deity, key)
+        self.ds.get(FileKind::Deity, &self.default_deity_key()?)
+    }
+
+    /// The deity the data names as the default (DEFAULTVARIABLEVALUE).
+    pub fn default_deity_key(&self) -> Option<String> {
+        crate::rules::vars::system::data_defaults(self.ds, self.gm)
+            .remove("DEITY")
+            .filter(|k| !k.trim().is_empty())
     }
 
     /// Is the skill a class skill for the given class?  Class skills

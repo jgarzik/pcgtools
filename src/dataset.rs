@@ -474,10 +474,11 @@ impl Dataset {
                     continue;
                 }
             };
+            // PCGen leaves such a file out entirely
             if lf.lines.iter().any(|l| l.latin1) {
-                self.diags.push(
-                    Diagnostic::warning("file is not valid UTF-8; read as Latin-1").at(&pf.path, 0),
-                );
+                self.diags
+                    .push(Diagnostic::error("file is not valid UTF-8; not loaded").at(&pf.path, 0));
+                continue;
             }
             let mut ops = Ops {
                 copies: &mut copies,
@@ -828,6 +829,11 @@ impl Dataset {
                 return;
             }
         };
+        if tf.has_latin1() {
+            self.diags
+                .push(Diagnostic::error("file is not valid UTF-8; not loaded").at(&pf.path, 0));
+            return;
+        }
         let mut cur: Option<Table> = None;
         for (i, l) in tf.lines.iter().enumerate() {
             let origin = Origin {

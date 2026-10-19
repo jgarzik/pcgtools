@@ -348,3 +348,74 @@ class add "Magical Beast" --force
 class add "Magical Beast" --force
 class add "Magical Beast" --force
 class add "Magical Beast" --force
+
+== wizard_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat INT 16
+set stat DEX 14
+set stat CON 13
+race Human
+set align NG
+class add Wizard
+class add Wizard
+class add Wizard
+spell add Wizard "Magic Missile"
+spell add Wizard "Magic Weapon"
+
+== rogue_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat DEX 16
+set stat INT 12
+race Halfling
+set align CN
+class add Rogue
+class add Rogue
+class add Rogue
+equip add "Studded Leather"
+equip wear "Studded Leather"
+equip add Rapier
+equip wear Rapier
+
+== technomancer_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+set stat INT 16
+set stat DEX 14
+race Human
+class add Technomancer
+class add Technomancer
+class add Technomancer
+spell add Technomancer "Magic Missile"
+equip add "Laser pistol (azimuth)"
+equip wear "Laser pistol (azimuth)"
+equip add "Second Skin"
+equip wear "Second Skin"
+
+== fast_hero_modern
+gamemode Modern
+campaign MSRD - Basics
+set stat DEX 16
+set stat STR 12
+race Human
+class add Fast
+class add Fast
+class add Fast
+equip add "Beretta 93R (9mm machine pistol)"
+equip wear "Beretta 93R (9mm machine pistol)"
+equip add "Concealable Vest"
+equip wear "Concealable Vest"
+
+== monk_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat DEX 15
+set stat WIS 15
+set stat STR 13
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk

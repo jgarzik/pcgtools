@@ -102,8 +102,8 @@ fn query_matches() {
         "COST",
     ]);
     assert!(o.status.success(), "{}", stderr(&o));
-    // a .COPY appends to the copied tokens; all values are shown
-    assert_eq!(stdout(&o), "Wooden Spoon\t1\nSilver Spoon\t1 | 25\n");
+    // a .COPY that sets a single-valued tag replaces the copied value
+    assert_eq!(stdout(&o), "Wooden Spoon\t1\nSilver Spoon\t25\n");
 
     let o = pcgtools(&[
         "--data-dir",

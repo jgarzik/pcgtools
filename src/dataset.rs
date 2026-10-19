@@ -149,13 +149,33 @@ impl Object {
         })
     }
 
-    /// Append tokens, honoring `TAG:.CLEAR` (drop earlier values of
-    /// that tag).  KEY and CATEGORY tokens update identity.
+    /// Append tokens.  Clearing forms drop earlier values:
+    /// `TAG:.CLEAR` and `TAG:.CLEARALL` all of them, `TAG:.CLEAR.x` those
+    /// matching x, `TAG:.CLEAR|v` all before adding v, `PRE:.CLEAR` every
+    /// prerequisite.  A single-valued tag replaces its earlier value.
+    /// KEY and CATEGORY tokens update identity.
     fn apply_tokens(&mut self, toks: Vec<Tok>) {
-        for t in toks {
-            if t.value == ".CLEAR" {
+        for mut t in toks {
+            if t.tag == "PRE" && t.value == ".CLEAR" {
+                self.tokens
+                    .retain(|x| !crate::token::pre::Prereq::is_pre_tag(&x.tag));
+                continue;
+            }
+            if t.value == ".CLEAR" || t.value == ".CLEARALL" {
                 self.tokens.retain(|x| x.tag != t.tag);
                 continue;
+            }
+            if let Some(what) = t.value.strip_prefix(".CLEAR.") {
+                let matches = clear_matcher(what);
+                self.tokens.retain(|x| x.tag != t.tag || !matches(&x.value));
+                continue;
+            }
+            if let Some(rest) = t.value.strip_prefix(".CLEAR|") {
+                self.tokens.retain(|x| x.tag != t.tag);
+                t.value = rest.to_string();
+            }
+            if single_valued(&t.tag) {
+                self.tokens.retain(|x| x.tag != t.tag);
             }
             match t.tag.as_str() {
                 "KEY" => self.key = t.value.clone(),
@@ -180,6 +200,80 @@ impl Object {
     /// Lookup key: category-qualified for abilities, lower case.
     pub fn index_key(&self) -> String {
         index_key(self.category.as_deref(), &self.key)
+    }
+}
+
+/// Tags that hold one value: a later one replaces an earlier one.
+const SINGLE_VALUED: &[&str] = &[
+    "ABB",
+    "ACCHECK",
+    "ALTCRITMULT",
+    "ALTCRITRANGE",
+    "ALTDAMAGE",
+    "BASEITEM",
+    "BASEQTY",
+    "CHOOSE",
+    "CONTAINS",
+    "COST",
+    "CR",
+    "CRITMULT",
+    "CRITRANGE",
+    "DAMAGE",
+    "EDR",
+    "EXCLUSIVE",
+    "FACE",
+    "HANDS",
+    "HD",
+    "KEYSTAT",
+    "LEGS",
+    "LEVELADJUSTMENT",
+    "MAXDEX",
+    "MAXLEVEL",
+    "MEMORIZE",
+    "MULT",
+    "OUTPUTNAME",
+    "PROFICIENCY",
+    "RACETYPE",
+    "RANGE",
+    "RATEOFFIRE",
+    "REACH",
+    "REACHMULT",
+    "SELECT",
+    "SIZE",
+    "SLOTS",
+    "SORTKEY",
+    "SOURCEDATE",
+    "SOURCELINK",
+    "SOURCELONG",
+    "SOURCEPAGE",
+    "SOURCESHORT",
+    "SOURCEWEB",
+    "SPELLFAILURE",
+    "SPELLSTAT",
+    "STACK",
+    "STARTSKILLPTS",
+    "STATMOD",
+    "USEUNTRAINED",
+    "VISIBLE",
+    "WIELD",
+    "WT",
+    "XTRASKILLPTSPERLVL",
+];
+
+/// Does a tag hold a single value?
+pub fn single_valued(tag: &str) -> bool {
+    SINGLE_VALUED.contains(&tag)
+}
+
+/// What `TAG:.CLEAR.x` removes: values equal to x, values listing x
+/// among `|`-separated parts, or values x matches as a pattern.
+fn clear_matcher(what: &str) -> impl Fn(&str) -> bool {
+    let what = what.to_string();
+    let re = regex::Regex::new(&what).ok();
+    move |v: &str| {
+        v.eq_ignore_ascii_case(&what)
+            || v.split('|').any(|p| p.eq_ignore_ascii_case(&what))
+            || re.as_ref().is_some_and(|r| r.is_match(v))
     }
 }
 
@@ -773,6 +867,72 @@ pub fn split_csv(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tok(tag: &str, value: &str) -> Tok {
+        Tok {
+            tag: tag.into(),
+            value: value.into(),
+            origin: Origin { file: 0, line: 0 },
+        }
+    }
+
+    fn obj(toks: &[(&str, &str)]) -> Object {
+        let mut o = Object::new(FileKind::Spell, None, "Bless", Origin { file: 0, line: 0 });
+        o.apply_tokens(toks.iter().map(|(t, v)| tok(t, v)).collect());
+        o
+    }
+
+    fn vals<'a>(o: &'a Object, tag: &str) -> Vec<&'a str> {
+        o.values(tag).collect()
+    }
+
+    #[test]
+    fn clear_forms() {
+        let o = obj(&[
+            ("DESC", "a"),
+            ("DESC", "b"),
+            ("DESC", ".CLEAR"),
+            ("DESC", "c"),
+        ]);
+        assert_eq!(vals(&o, "DESC"), vec!["c"]);
+        let o = obj(&[
+            ("CLASSES", "Wizard=1"),
+            ("CLASSES", ".CLEARALL"),
+            ("CLASSES", "Bard=2"),
+        ]);
+        assert_eq!(vals(&o, "CLASSES"), vec!["Bard=2"]);
+        let o = obj(&[
+            ("CSKILL", "Climb"),
+            ("CSKILL", "Swim"),
+            ("CSKILL", ".CLEAR.Climb"),
+        ]);
+        assert_eq!(vals(&o, "CSKILL"), vec!["Swim"]);
+        let o = obj(&[("CSKILL", "Climb|Swim"), ("CSKILL", ".CLEAR.Swim")]);
+        assert!(vals(&o, "CSKILL").is_empty());
+        let o = obj(&[("DESCRIPTOR", "Fire"), ("DESCRIPTOR", ".CLEAR|Cold")]);
+        assert_eq!(vals(&o, "DESCRIPTOR"), vec!["Cold"]);
+        let o = obj(&[
+            ("PRECLASS", "1,Wizard=1"),
+            ("!PREFEAT", "1,Alertness"),
+            ("PRE", ".CLEAR"),
+            ("TYPE", "Arcane"),
+        ]);
+        assert!(vals(&o, "PRECLASS").is_empty() && vals(&o, "!PREFEAT").is_empty());
+        assert_eq!(vals(&o, "TYPE"), vec!["Arcane"]);
+    }
+
+    #[test]
+    fn single_valued_tags_replace() {
+        let o = obj(&[
+            ("SOURCEPAGE", "p.1"),
+            ("SOURCEPAGE", "p.91"),
+            ("TYPE", "A"),
+            ("TYPE", "B"),
+        ]);
+        assert_eq!(vals(&o, "SOURCEPAGE"), vec!["p.91"]);
+        assert_eq!(vals(&o, "TYPE"), vec!["A", "B"]);
+        assert!(single_valued("COST") && !single_valued("BONUS"));
+    }
 
     #[test]
     fn csv() {

@@ -56,6 +56,14 @@ fn objects_and_operations() {
     assert!(ds.get(FileKind::Ability, "Keen Nose").is_some());
     assert!(ds.get(FileKind::Ability, "Loud Voice").is_none());
 
+    // .MOD: single-valued tags replace, clearing forms drop values
+    let glow = ds.get(FileKind::Spell, "Glow").unwrap();
+    let vals = |tag: &str| glow.values(tag).collect::<Vec<_>>();
+    assert_eq!(vals("SOURCEPAGE"), vec!["p.2"]);
+    assert_eq!(vals("CLASSES"), vec!["Tinker=1"]);
+    assert_eq!(vals("DESCRIPTOR"), vec!["Fire"]);
+    assert!(vals("PRECLASS").is_empty());
+
     // spells: MOD applied, FORGET applied, PRECAMPAIGN-gated file skipped
     let spark = ds.get(FileKind::Spell, "Spark").unwrap();
     assert_eq!(spark.get("DESC"), Some("A tiny spark."));

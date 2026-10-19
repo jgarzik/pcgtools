@@ -102,7 +102,11 @@ pub fn normalize(p: &Path) -> PathBuf {
     // doubled separator (checked on the text, since the components
     // skip a `.` in the middle)
     let text = p.as_os_str().as_encoded_bytes();
-    let plain = !text.windows(2).any(|w| w == b"/." || w == b"//") && !text.starts_with(b".");
+    let sep = |b: u8| b == b'/' || (cfg!(windows) && b == b'\\');
+    let plain = !text
+        .windows(2)
+        .any(|w| sep(w[0]) && (w[1] == b'.' || sep(w[1])))
+        && !text.starts_with(b".");
     if plain {
         return p.to_path_buf();
     }
@@ -169,7 +173,12 @@ mod tests {
             ("/a/b/c.lst", "/a/b/c.lst"),
             ("/a/.hidden/c.lst", "/a/.hidden/c.lst"),
         ] {
-            assert_eq!(normalize(Path::new(from)).to_str(), Some(to), "{}", from);
+            let got = normalize(Path::new(from));
+            assert_eq!(got, PathBuf::from(to), "{}", from);
+            // separators are written the platform's way
+            if cfg!(unix) {
+                assert_eq!(got.to_str(), Some(to), "{}", from);
+            }
         }
     }
 

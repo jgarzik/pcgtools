@@ -344,7 +344,7 @@ pub fn build(s: &SheetCtx) -> Element {
                 );
                 continue;
             }
-            let granted = 0;
+            let granted = cx.sp.granted_known_count(&cls.key, lvl);
             let kn = known_at(c, cls, lvl, granted);
             let cast = cast_per_day(c, cls, lvl, false);
             let mut bonus = String::new();

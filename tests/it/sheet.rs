@@ -467,3 +467,14 @@ fn thrown_range_bonuses() {
     // (10 + 10) doubled, then 5 more
     assert_eq!(rows(true), ["30'", "45'", "90'", "135'", "180'"]);
 }
+
+#[test]
+fn spells_granted_as_known_count_toward_known() {
+    let m = new_sheet(&["class add Chanter"]);
+    let known = m
+        .iter()
+        .find(|(k, _)| k.contains("known_spells[0]/class[0]/level[0]/@known"))
+        .map(|(_, v)| v.clone());
+    // SPELLKNOWN grants Spark and Glow to the class's list at level 0
+    assert_eq!(known.as_deref(), Some("2"));
+}

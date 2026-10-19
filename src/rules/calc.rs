@@ -1645,7 +1645,7 @@ impl<'a> Calc<'a> {
     /// the class's points: what the class's own SKILLPOOL|NUMBER adds at
     /// this class level, SKILLPOOL|CLASS.x on the class's first level,
     /// SKILLPOOL|CLASS.x;LEVEL.n and SKILLPOOL|LEVEL.n for the character
-    /// level.  Targets may be written with '=' for '.'.
+    /// level.
     pub fn bonus_skill_points(&self, cls: &'a Object, class_level: u32, char_level: u32) -> f64 {
         let src = self.sources.iter().find(|x| std::ptr::eq(x.obj, cls));
         let env = Ctx { calc: self, src };
@@ -1666,10 +1666,7 @@ impl<'a> Calc<'a> {
                 .map(f64::trunc)
                 .sum()
         };
-        let total = |target: &str| {
-            self.bonus.total("SKILLPOOL", target)
-                + self.bonus.total("SKILLPOOL", &target.replace('.', "="))
-        };
+        let total = |target: &str| self.bonus.total("SKILLPOOL", target);
         let mut points = own(class_level) - own(class_level - 1);
         if class_level == 1 {
             points += total(&format!("CLASS.{}", cls.key));

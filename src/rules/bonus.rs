@@ -141,6 +141,14 @@ impl BonusTable {
         if cat == "SKILL" && (target.starts_with("TYPE=") || target.starts_with("STAT=")) {
             target = target.replace('=', ".");
         }
+        // structured targets (CLASS=x;LEVEL=n, TYPE=t;LEVEL=n) of the
+        // spell and skill pool categories may use '=' or '.' alike
+        if matches!(
+            cat.as_str(),
+            "SPELLCAST" | "SPELLCASTMULT" | "SPELLKNOWN" | "SPELLKNOWNMULT" | "SKILLPOOL"
+        ) {
+            target = target.replace('=', ".");
+        }
         format!("{}.{}", cat, target)
     }
 

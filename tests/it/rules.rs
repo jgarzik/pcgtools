@@ -164,3 +164,35 @@ fn carried_weight_without_saved_weights() {
     // wearing places one of the three spoons
     assert_eq!(calc.carried_weight(), 5.0 + spoon);
 }
+
+#[test]
+fn spellcast_bonus_targets_written_with_equals() {
+    // data writes CLASS=x;LEVEL=n and TYPE=t;LEVEL=n for what PCGen
+    // reads as CLASS.x;LEVEL.n
+    let per_day = |class: &str, levels: usize, feat: bool| {
+        let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        for _ in 0..levels {
+            s.exec(&format!("class add {}", class)).unwrap();
+        }
+        if feat {
+            s.exec("feat add \"Spell Spring\" --force").unwrap();
+        }
+        let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        calc.run();
+        let cls = s
+            .ctx
+            .dataset
+            .get(pcgtools::lst::kind::FileKind::Class, class)
+            .unwrap();
+        (0..3)
+            .map(|l| pcgtools::rules::spells::cast_per_day(&calc, cls, l, false))
+            .collect::<Vec<_>>()
+    };
+    // a class without a table at a level gets only its class's bonus
+    assert_eq!(per_day("Tinker", 1, false)[1], 0);
+    assert_eq!(per_day("Tinker", 1, true)[1], 2);
+    // with a table: the spell type's bonus adds, and a multiplier
+    // multiplies the table's count only
+    assert_eq!(per_day("Chanter", 2, false), [2, 2, 1]);
+    assert_eq!(per_day("Chanter", 2, true), [2, 3, 2]);
+}

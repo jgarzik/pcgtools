@@ -77,6 +77,8 @@ pub struct Spells<'a> {
     pub by_caster: Vec<Vec<CharSpell<'a>>>,
     /// spell list membership: (list kind, list key lower) -> level -> spell keys
     lists: BTreeMap<(char, String), BTreeMap<i64, Vec<&'a Object>>>,
+    /// spells SPELLKNOWN grants: (class list lower, level) -> spells
+    granted_known: BTreeMap<(String, i64), Vec<&'a Object>>,
 }
 
 fn lower(s: &str) -> String {
@@ -169,6 +171,7 @@ impl<'a> Spells<'a> {
             books: vec![KNOWN_BOOK.to_string(), INNATE_BOOK.to_string()],
             by_caster: Vec::new(),
             lists,
+            granted_known: BTreeMap::new(),
         };
         for l in calc.ch.pcg.lines_tagged("SPELLBOOK") {
             if let Some(n) = l.head().map(|h| h.value_text()) {
@@ -561,6 +564,14 @@ impl<'a> Spells<'a> {
         }
     }
 
+    /// How many distinct spells SPELLKNOWN grants to a class's spell
+    /// list at a level; they count toward the class's spells known.
+    pub fn granted_known_count(&self, list: &str, level: i64) -> i64 {
+        self.granted_known
+            .get(&(lower(list), level))
+            .map_or(0, |v| v.len() as i64)
+    }
+
     /// Spells granted to class lists (SPELLKNOWN:CLASS|Class=1|Spell)
     /// and domains' spell-like abilities, which their class also
     /// holds at level 1.
@@ -601,6 +612,10 @@ impl<'a> Spells<'a> {
                     let ci = self.caster_index(cls).unwrap_or(0);
                     for n in names.split(',') {
                         if let Some(sp) = calc.ds.get(FileKind::Spell, n.trim()) {
+                            let known = self.granted_known.entry((lower(list), lvl)).or_default();
+                            if !known.iter().any(|x| std::ptr::eq(*x, sp)) {
+                                known.push(sp);
+                            }
                             // the spell is on the class's list as well
                             let on = self
                                 .lists
@@ -892,8 +907,22 @@ pub fn cast_per_day(calc: &Calc, cls: &Object, level: i64, limit_by_stat: bool) 
             }
         }
     }
+    // multipliers (at least 1) apply to the table's count only
+    let mut mult = calc
+        .bonus
+        .total(
+            "SPELLCASTMULT",
+            &format!("CLASS.{};LEVEL.{}", cls.key, level),
+        )
+        .trunc();
+    if let Some(t) = spell_type(cls) {
+        mult += calc
+            .bonus
+            .total("SPELLCASTMULT", &format!("TYPE.{};LEVEL.{}", t, level))
+            .trunc();
+    }
     score += bonus_stat;
-    total += n + stat_bonus_spells(calc, score, level) as f64;
+    total += n * mult.max(1.0) + stat_bonus_spells(calc, score, level) as f64;
     total as i64
 }
 

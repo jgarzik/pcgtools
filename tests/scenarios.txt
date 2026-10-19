@@ -280,3 +280,13 @@ equip wear Longbow
 equip add "Arrows (20)"
 equip add Javelin 3
 equip wear Javelin Carried
+
+== wizard_bonus_slot_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat INT 17
+race Human
+class add Wizard
+class add Wizard
+class add Wizard
+ability add "Special Ability|+1 Level 1 Spell Cast" Wizard

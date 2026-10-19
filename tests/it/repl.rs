@@ -512,6 +512,147 @@ fn level_choices_from_add_tokens() {
 }
 
 #[test]
+fn point_buy_stats() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    // two methods: one must be named
+    let e = err(&mut s, "stats buy");
+    assert!(e.contains("Modest, Grand"), "{}", e);
+    assert!(err(&mut s, "stats buy Lavish").contains("Modest, Grand"));
+    ok(&mut s, "stats buy modest");
+    assert_eq!(s.ch.stats(), [("MGT".into(), 10), ("GRC".into(), 10)]);
+    assert_eq!(lines(&s, "ROLLMETHOD"), ["ROLLMETHOD:2|EXPRESSION:Modest"]);
+    assert_eq!(
+        lines(&s, "PURCHASEPOINTS"),
+        ["PURCHASEPOINTS:Y|TYPE:Modest"]
+    );
+    assert_eq!(
+        lines(&s, "POOLPOINTS"),
+        ["POOLPOINTS:0", "POOLPOINTSAVAIL:6"]
+    );
+
+    // the points spent are kept as scores change
+    ok(&mut s, "set stat MGT 14");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:5"]);
+    // 13 costs what 12 does (no row of its own)
+    let e = err(&mut s, "set stat GRC 13");
+    assert!(e.contains("7 points") && e.contains("budget of 6"), "{}", e);
+    ok(&mut s, "set stat GRC 11");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:6"]);
+    let out = ok(&mut s, "stats method");
+    assert!(
+        out.contains("point buy (Modest): 6 of 6 points spent"),
+        "{}",
+        out
+    );
+    assert!(out.contains("scores 7 to 16"), "{}", out);
+    // beyond what can be bought, or over budget, needs --force
+    assert!(err(&mut s, "set stat GRC 17").contains("between 7 and 16"));
+    assert!(err(&mut s, "set stat GRC 6").contains("between 7 and 16"));
+    ok(&mut s, "set stat GRC 7");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:1"]);
+    ok(&mut s, "set stat GRC 17 --force");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:15"]);
+
+    // first level: still bought; second: no longer
+    ok(&mut s, "set stat GRC 10");
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "set stat GRC 11");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:6"]);
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "set stat GRC 16");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:6"]);
+    assert!(err(&mut s, "stats buy Grand").contains("--force"));
+}
+
+#[test]
+fn stat_ranges_and_other_methods() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    // the stat's own range (STATRANGE)
+    assert!(err(&mut s, "set stat MGT 31").contains("between 1 and 30"));
+    assert!(err(&mut s, "set stat MGT 0").contains("between 1 and 30"));
+    ok(&mut s, "set stat MGT 31 --force");
+    // no range: any score
+    ok(&mut s, "set stat GRC 99");
+
+    ok(&mut s, "stats same 12");
+    assert_eq!(s.ch.stats(), [("MGT".into(), 12), ("GRC".into(), 12)]);
+    assert_eq!(lines(&s, "ROLLMETHOD"), ["ROLLMETHOD:1|EXPRESSION:12"]);
+    assert_eq!(lines(&s, "PURCHASEPOINTS"), ["PURCHASEPOINTS:N"]);
+
+    ok(&mut s, "stats assign 15 9");
+    assert_eq!(s.ch.stats(), [("MGT".into(), 15), ("GRC".into(), 9)]);
+    assert_eq!(lines(&s, "ROLLMETHOD"), ["ROLLMETHOD:0|EXPRESSION:0"]);
+    assert!(err(&mut s, "stats assign 15").contains("2 scores"));
+    assert!(err(&mut s, "stats assign 40 9").contains("between 1 and 30"));
+
+    // rolling: the first method by its sort key, unless one is named
+    ok(&mut s, "stats roll --seed 3");
+    assert_eq!(lines(&s, "ROLLMETHOD"), ["ROLLMETHOD:3|EXPRESSION:3d6"]);
+    let first = s.ch.stats();
+    assert!(
+        first.iter().all(|(_, v)| (3..=18).contains(v)),
+        "{:?}",
+        first
+    );
+    ok(&mut s, "stats roll --seed 3");
+    assert_eq!(s.ch.stats(), first);
+    ok(&mut s, "stats roll \"4d6 drop lowest\" --seed 9");
+    assert_eq!(
+        lines(&s, "ROLLMETHOD"),
+        ["ROLLMETHOD:3|EXPRESSION:roll(4,6,top(3))"]
+    );
+    assert!(err(&mut s, "stats roll 5d6").contains("3d6, 4d6 drop lowest"));
+
+    // past the first level, scores are no longer generated
+    let mut t = session();
+    assert!(err(&mut t, "stats same 10").contains("--force"));
+    ok(&mut t, "stats same 10 --force");
+}
+
+#[test]
+fn level_stat_increases() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    for _ in 0..5 {
+        ok(&mut s, "class add Tinker");
+    }
+    // level 6 grants an increase (the mode's 6|3)
+    let e = err(&mut s, "class add Tinker");
+    assert!(
+        e.contains("1 stat increase") && e.contains("--stat"),
+        "{}",
+        e
+    );
+    assert!(err(&mut s, "class add Tinker --stat Luck").contains("no STAT named"));
+    assert!(err(&mut s, "class add Tinker --stat MGT --stat GRC").contains("1 stat increase"));
+    assert_eq!(s.ch.total_level(), 5);
+    ok(&mut s, "class add Tinker --stat MGT");
+    assert_eq!(s.ch.stat("MGT"), Some(11));
+    let lvl = &lines(&s, "CLASSABILITIESLEVEL:Tinker=6")[0];
+    assert!(lvl.contains("|PRESTAT:MGT=1|SKILLSGAINED:"), "{}", lvl);
+    // taking the level away takes its increase too
+    ok(&mut s, "class rm");
+    assert_eq!(s.ch.stat("MGT"), Some(10));
+    // left pending with --force
+    ok(&mut s, "class add Tinker --force");
+    assert_eq!(lines(&s, "POOLPOINTS:"), ["POOLPOINTS:1"]);
+    assert!(!lines(&s, "CLASSABILITIESLEVEL:Tinker=6")[0].contains("PRESTAT"));
+    // a level that grants none takes no --stat
+    assert!(err(&mut s, "class add Tinker --stat MGT").contains("0 stat increase"));
+}
+
+#[test]
+fn stat_edits_after_levels_are_recorded() {
+    let mut s = session();
+    ok(&mut s, "set stat MGT 15");
+    assert!(lines(&s, "CLASSABILITIESLEVEL:Tinker=2")[0].contains("|PRESTAT:MGT=1|SKILLSGAINED"));
+    ok(&mut s, "set stat MGT 13");
+    assert!(lines(&s, "CLASSABILITIESLEVEL:Tinker=2")[0]
+        .contains("|PRESTAT:MGT=1|PRESTAT:MGT=-2|SKILLSGAINED"));
+    ok(&mut s, "class rm");
+    assert_eq!(s.ch.stat("MGT"), Some(14));
+}
+
+#[test]
 fn new_characters_carry_pcgen_defaults() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     ok(&mut s, "class add Tinker");

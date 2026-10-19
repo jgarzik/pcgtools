@@ -217,7 +217,7 @@ set align LN
 class add Monk
 class add Monk
 class add Monk
-class add Monk
+class add Monk --stat WIS
 skill Acrobatics 4
 skill Perception 4
 
@@ -232,7 +232,7 @@ set align NG
 class add Fighter
 class add Fighter
 class add Fighter
-class add Fighter
+class add Fighter --stat STR
 class add Fighter
 equip add Longsword
 equip customize Longsword +PLUS1W
@@ -252,7 +252,7 @@ set align CN
 class add Rogue
 class add Rogue
 class add Rogue
-class add Rogue
+class add Rogue --stat DEX
 class add Rogue
 class add Rogue
 class add Rogue
@@ -312,7 +312,7 @@ set align TN
 class add Wizard
 class add Wizard
 class add Wizard
-class add Cleric
+class add Cleric --stat WIS
 class add Cleric
 class add Cleric
 skill "Knowledge (Arcana)" 6 Wizard
@@ -329,12 +329,12 @@ set align LN
 class add Cleric
 class add Cleric
 class add Cleric
-class add Cleric
+class add Cleric --stat WIS
 class add Cleric
 class add Cleric
 class add Cleric
 feat add "Spell Focus" Conjuration
-class add Thaumaturgist
+class add Thaumaturgist --stat WIS
 
 == worg_advanced_35e
 gamemode 35e
@@ -418,7 +418,7 @@ set align LN
 class add Monk
 class add Monk
 class add Monk
-class add Monk
+class add Monk --stat WIS
 
 == gunslinger_deadlands_gear
 gamemode Deadlands
@@ -495,11 +495,11 @@ set align TN
 class add Wizard
 class add Wizard
 class add Wizard
+class add Sorcerer --stat CHA
 class add Sorcerer
-class add Sorcerer
 class add Cleric
 class add Cleric
-class add Cleric
+class add Cleric --stat WIS
 skill "Knowledge (Arcana)" 6 Wizard
 skill "Knowledge (Religion)" 6 Cleric
 class add "Mystic Theurge" --choose Wizard --choose Cleric
@@ -532,3 +532,31 @@ set align LN
 class add Defender
 class add Defender
 class add Defender
+
+== pointbuy_pf
+gamemode Pathfinder
+campaign Core Rulebook
+stats buy "Standard Fantasy"
+set stat STR 16
+set stat CON 14
+set stat WIS 8
+set stat DEX 12
+race Human
+set align LN
+class add Fighter
+feat add "Power Attack"
+equip add Longsword
+equip wear Longsword
+
+== stat_increase_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+stats roll "4d6 drop lowest" --seed 11
+race Human
+set align LN
+class add Fighter
+set stat CON 15
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Fighter

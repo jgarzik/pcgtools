@@ -22,6 +22,8 @@ use crate::pcc::resolve::DataDirs;
 use crate::pcg::character::Character;
 use crate::query::Query;
 use crate::rules::calc::{Calc, Sheet};
+use crate::rules::statgen::{self, PointBuy, Rng};
+use crate::token::pre::Prereq;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -57,14 +59,20 @@ Commands (names may be quoted; most accept --force to skip checks):
   show KIND KEY                show a data object
   prereq KIND KEY              check whether the character qualifies
   set stat ABB SCORE           set a base ability score
+  stats buy [METHOD]           buy scores with a point-buy method
+  stats roll [METHOD] [--seed N]   roll scores with a dice method
+  stats same SCORE | stats assign SCORE...   one score for all, or each
+                               in stat order
+  stats method                 how the scores were made; point costs
   set xp N | set align ABB     experience, alignment
   set FIELD VALUE              name, player, age, gender, city, bio, ...
   race KEY                     set race
   deity KEY | deity none       set or clear deity
   domain add KEY               add a domain
-  class add KEY [HP] [--subclass SUB] [--choose CHOICE]...
+  class add KEY [HP] [--subclass SUB] [--choose CHOICE]... [--stat ABB]...
                                gain a level (HP defaults to the hit die);
-                               choices for the level's ADD tokens, in order
+                               choices for the level's ADD tokens, in order;
+                               the stats its stat increases raise
   class rm                     remove the last level gained
   class subclass KEY SUB       choose a class's subclass
   ability add [CATEGORY|]KEY [CHOICE...]   add an ability (feat by default)
@@ -349,6 +357,14 @@ impl Session {
             "help" | "?" => Ok(Outcome::Text(HELP.to_string())),
             "quit" | "exit" => Ok(Outcome::Quit),
             "info" => Ok(Outcome::Text(self.info())),
+            "stats"
+                if matches!(
+                    w.get(1).copied(),
+                    Some("buy" | "roll" | "same" | "assign" | "method")
+                ) =>
+            {
+                self.cmd_stats(&w, force, changed)
+            }
             "stats" | "sheet" => Ok(Outcome::Text(self.stats(w.get(1) == Some(&"-v")))),
             "vars" => {
                 let mut calc = self.calc();
@@ -460,7 +476,7 @@ impl Session {
                 self.dirty = false;
                 Ok(Outcome::Text(format!("saved {}", path.display())))
             }
-            "set" => self.cmd_set(&w, changed),
+            "set" => self.cmd_set(&w, force, changed),
             "race" => {
                 let o = self.find(FileKind::Race, arg(1)?)?;
                 let key = o.key.clone();
@@ -496,13 +512,34 @@ impl Session {
                 "add" => {
                     let o = self.find(FileKind::Class, arg(2)?)?;
                     let key = o.key.clone();
+                    // stat increases the level grants, and those chosen
+                    let mut raise = Vec::new();
+                    for (i, _) in w.iter().enumerate().filter(|(_, x)| **x == "--stat") {
+                        let abb = w
+                            .get(i + 1)
+                            .ok_or_else(|| Error::Other("--stat needs a stat".into()))?;
+                        raise.push(self.find(FileKind::Stat, abb)?.key.clone());
+                    }
+                    let grants = self.stat_increases_for_new_level(o);
+                    let pending = self.check_stat_increases(grants, &raise, force)?;
+                    let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
+                    // the stats rise before the level's skill points are
+                    // counted, if the game mode says so
+                    let int_before = {
+                        let mut c = self.calc();
+                        c.run();
+                        c.rule("INTBEFORE")
+                    };
+                    let mut work = self.ch.clone();
+                    if int_before {
+                        raise_stats(&mut work, &raise);
+                    }
                     // the hit die as the rules adjust it (a class without
                     // one gains no rolled hit points) and the skill points
                     // this level is worth, as the rules count them now
                     let (hd, skills) = {
-                        let mut c = self.calc();
+                        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &work);
                         c.run();
-                        let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
                         let char_level = self.ch.total_level() + 1;
                         let class_level = self
                             .ch
@@ -550,6 +587,14 @@ impl Session {
                     let was_dirty = self.dirty;
                     self.checkpoint();
                     let lvl = self.ch.add_level(&key, hp, skills);
+                    raise_stats(&mut self.ch, &raise);
+                    for abb in &raise {
+                        self.ch.add_stat_change(abb, 1);
+                    }
+                    if pending > 0 {
+                        let n = self.ch.pool_points() + pending;
+                        self.ch.set_pool_points(n);
+                    }
                     if let Some(sub) = &subclass {
                         self.ch.set_subclass(&key, sub);
                     }
@@ -594,9 +639,25 @@ impl Session {
                     changed(self, format!("{} subclass is {}", key, sub))
                 }
                 "rm" | "remove" => {
+                    let deltas = self.ch.last_level_stat_changes();
                     self.checkpoint();
                     match self.ch.remove_last_level() {
-                        Some(c) => changed(self, format!("removed a level of {}", c)),
+                        Some(c) => {
+                            // the stat changes made with the level go
+                            // with it (but not a monster level's)
+                            let monster = self
+                                .ctx
+                                .dataset
+                                .get(FileKind::Class, &c)
+                                .is_some_and(|o| self.calc().is_monster_class(o));
+                            if !monster {
+                                for (abb, d) in deltas {
+                                    let now = self.ch.stat(&abb).unwrap_or(0);
+                                    self.ch.set_stat(&abb, now - d);
+                                }
+                            }
+                            changed(self, format!("removed a level of {}", c))
+                        }
                         None => {
                             self.undo.pop();
                             Ok(Outcome::Text("no levels to remove".into()))
@@ -840,6 +901,7 @@ impl Session {
     fn cmd_set(
         &mut self,
         w: &[&str],
+        force: bool,
         changed: impl Fn(&Session, String) -> Result<Outcome>,
     ) -> Result<Outcome> {
         let what = w.get(1).copied().unwrap_or("");
@@ -856,8 +918,38 @@ impl Session {
                 let score: i64 = need(3)?
                     .parse()
                     .map_err(|_| Error::Other("score must be a number".into()))?;
+                self.check_stat_range(&key, score, force)?;
+                // a bought score, while scores are still bought
+                let buying = self.purchase().filter(|_| self.nonmonster_levels() < 2);
+                if let Some(p) = &buying {
+                    if !force && (score < p.min || score > p.max) {
+                        return Err(Error::Other(format!(
+                            "{} can buy scores between {} and {} (use --force)",
+                            p.method, p.min, p.max
+                        )));
+                    }
+                    let spent = self.points_spent(p, Some((&key, score)));
+                    if !force && p.budget >= 0 && spent > p.budget {
+                        return Err(Error::Other(format!(
+                            "those scores cost {} points, over the budget of {} (use --force)",
+                            spent, p.budget
+                        )));
+                    }
+                }
+                let old = self.ch.stat(&key).unwrap_or(0);
                 self.checkpoint();
                 self.ch.set_stat(&key, score);
+                // a change after levels are gained is recorded with the
+                // latest, as PCGen does
+                if score != old {
+                    self.ch.add_stat_change(&key, score - old);
+                }
+                if let Some(p) = &buying {
+                    if self.nonmonster_levels() <= 1 {
+                        let spent = self.points_spent(p, None);
+                        self.ch.set_pool_points(spent);
+                    }
+                }
                 changed(self, format!("{} is now {}", key, score))
             }
             "xp" => {
@@ -885,6 +977,382 @@ impl Session {
                 changed(self, format!("{} is now '{}'", field, value))
             }
         }
+    }
+
+    /// Stats whose scores are generated (all but those with
+    /// ROLLED:NO), by key.
+    fn rolled_stats(&self) -> Vec<String> {
+        self.ctx
+            .dataset
+            .objects(FileKind::Stat)
+            .iter()
+            .filter(|o| {
+                !o.get("ROLLED")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("NO"))
+            })
+            .map(|o| o.key.clone())
+            .collect()
+    }
+
+    /// The scores a stat may have (STATRANGE), by default 0 to 1000.
+    fn stat_range(&self, key: &str) -> (i64, i64) {
+        self.ctx
+            .dataset
+            .get(FileKind::Stat, key)
+            .and_then(|o| o.get("STATRANGE"))
+            .and_then(|r| {
+                let (a, b) = r.split_once('|')?;
+                Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+            })
+            .unwrap_or((0, 1000))
+    }
+
+    fn check_stat_range(&self, key: &str, score: i64, force: bool) -> Result<()> {
+        let (lo, hi) = self.stat_range(key);
+        if !force && (score < lo || score > hi) {
+            return Err(Error::Other(format!(
+                "{} must be between {} and {} (use --force)",
+                key, lo, hi
+            )));
+        }
+        Ok(())
+    }
+
+    /// Levels in classes other than monster classes.
+    fn nonmonster_levels(&self) -> u32 {
+        let c = self.calc();
+        self.ch
+            .classes()
+            .iter()
+            .filter(|x| {
+                !self
+                    .ctx
+                    .dataset
+                    .get(FileKind::Class, &x.name)
+                    .is_some_and(|o| c.is_monster_class(o))
+            })
+            .map(|x| x.level)
+            .sum()
+    }
+
+    /// The game mode's point-buy rules, if it has any.
+    fn point_buy(&self) -> Option<PointBuy> {
+        self.ctx
+            .gamemode
+            .as_ref()
+            .map(PointBuy::from_gamemode)
+            .filter(PointBuy::available)
+    }
+
+    /// The scores the character can buy: those of the cost rows whose
+    /// prerequisites it meets.
+    fn buy_range(&self, pb: &PointBuy) -> (i64, i64) {
+        let mut c = self.calc();
+        c.run();
+        pb.range(|r| {
+            r.prereqs
+                .iter()
+                .all(|p| Prereq::parse(p).map_or(true, |p| c.passes(&p, None)))
+        })
+    }
+
+    /// Work out a point-buy budget formula.
+    fn budget_of(&self, formula: &str) -> i64 {
+        statgen::roll(formula, &mut Rng::from_time()).unwrap_or_else(|| {
+            let mut c = self.calc();
+            c.run();
+            c.eval_formula(formula) as i64
+        })
+    }
+
+    /// The point buy the character's scores were made with.
+    fn purchase(&self) -> Option<Purchase> {
+        let (code, method) = self.ch.roll_method()?;
+        if code != statgen::METHOD_PURCHASE {
+            return None;
+        }
+        let pb = self.point_buy()?;
+        let (name, formula) = pb.method(&method)?.clone();
+        let (min, max) = self.buy_range(&pb);
+        let budget = match self.ch.pool_budget() {
+            b if b >= 0 => b,
+            _ => self.budget_of(&formula),
+        };
+        Some(Purchase {
+            pb,
+            method: name,
+            min,
+            max,
+            budget,
+        })
+    }
+
+    /// Points the generated stats cost (with one score as given),
+    /// plus POINTBUY|SPENT bonuses.
+    fn points_spent(&self, p: &Purchase, over: Option<(&str, i64)>) -> i64 {
+        let mut c = self.calc();
+        c.run();
+        let bonus = c.bonus.total("POINTBUY", "SPENT") as i64;
+        let scores: i64 = self
+            .rolled_stats()
+            .iter()
+            .map(|k| {
+                let s = match over {
+                    Some((o, v)) if o.eq_ignore_ascii_case(k) => v,
+                    _ => self.ch.stat(k).unwrap_or(0),
+                };
+                p.pb.cost(s, p.min, p.max)
+            })
+            .sum();
+        scores + bonus
+    }
+
+    /// Stat increases gaining a level of `cls` brings: the game mode's
+    /// for the new total level, but none for a monster class's levels
+    /// the race already accounts for.
+    fn stat_increases_for_new_level(&self, cls: &Object) -> u32 {
+        let Some(gm) = &self.ctx.gamemode else {
+            return 0;
+        };
+        let specs = statgen::bonus_stat_specs(gm);
+        if specs.is_empty() {
+            return 0;
+        }
+        let level = self.ch.total_level() + 1;
+        let mut c = self.calc();
+        c.run();
+        if c.is_monster_class(cls) {
+            let racial = self
+                .ch
+                .race()
+                .and_then(|r| self.ctx.dataset.get(FileKind::Race, &r))
+                .and_then(|r| r.get("MONSTERCLASS"))
+                .and_then(|v| v.rsplit(':').next())
+                .and_then(|n| n.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            if level <= racial {
+                return 0;
+            }
+        }
+        let specs: Vec<&str> = specs.iter().map(String::as_str).collect();
+        statgen::bonus_stats_for_level(&specs, level as i64, |f| c.eval_formula(f))
+    }
+
+    /// Check the stats chosen to raise against the increases a level
+    /// grants.  Returns how many are left to take later.
+    fn check_stat_increases(&self, grants: u32, raise: &[String], force: bool) -> Result<i64> {
+        if raise.len() as u32 != grants && !force {
+            return Err(Error::Other(format!(
+                "this level grants {} stat increase{}; {} (or use --force{})",
+                grants,
+                if grants == 1 { "" } else { "s" },
+                if grants > 0 {
+                    "name the stat of each with --stat ABB"
+                } else {
+                    "drop --stat"
+                },
+                if grants > 0 {
+                    " to leave them for later"
+                } else {
+                    ""
+                }
+            )));
+        }
+        let stack = self
+            .ctx
+            .gamemode
+            .as_ref()
+            .and_then(|g| g.misc("BONUSSTATALLOWSSTACK"))
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("YES"));
+        let twice = raise
+            .iter()
+            .enumerate()
+            .any(|(i, a)| raise[..i].contains(a));
+        if twice && !stack && !force {
+            return Err(Error::Other(
+                "a stat can be raised only once a level (or use --force)".into(),
+            ));
+        }
+        Ok(grants.saturating_sub(raise.len() as u32) as i64)
+    }
+
+    /// `stats buy|roll|same|assign|method`: generate the scores of a
+    /// new character, or show how they were made.
+    fn cmd_stats(
+        &mut self,
+        w: &[&str],
+        force: bool,
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let sub = w[1];
+        if sub == "method" {
+            return Ok(Outcome::Text(self.stat_method()));
+        }
+        if self.nonmonster_levels() > 1 && !force {
+            return Err(Error::Other(
+                "scores are generated before the second level (use --force)".into(),
+            ));
+        }
+        let mut seed = None;
+        let mut args = Vec::new();
+        let mut it = w[2..].iter();
+        while let Some(a) = it.next() {
+            if *a == "--seed" {
+                seed = Some(
+                    it.next()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .ok_or_else(|| Error::Other("--seed needs a number".into()))?,
+                );
+            } else {
+                args.push(*a);
+            }
+        }
+        let stats = self.rolled_stats();
+        let clamp = |s: &Session, k: &str, v: i64| {
+            let (lo, hi) = s.stat_range(k);
+            v.clamp(lo, hi.max(lo))
+        };
+        let (code, expr, scores): (u32, String, Vec<i64>) = match sub {
+            "buy" => {
+                let pb = self
+                    .point_buy()
+                    .ok_or_else(|| Error::Other("the game mode has no point buy".into()))?;
+                let names: Vec<&str> = pb.methods.iter().map(|m| m.0.as_str()).collect();
+                let names = names.join(", ");
+                let (name, formula) = match args.first() {
+                    Some(m) => pb.method(m).cloned().ok_or_else(|| {
+                        Error::Other(format!(
+                            "no point-buy method '{}'; choose from: {}",
+                            m, names
+                        ))
+                    })?,
+                    None if pb.methods.len() == 1 => pb.methods[0].clone(),
+                    None => {
+                        return Err(Error::Other(format!("name a point-buy method: {}", names)))
+                    }
+                };
+                let (min, _) = self.buy_range(&pb);
+                let neutral = pb.neutral(min);
+                let budget = self.budget_of(&formula);
+                self.checkpoint();
+                for k in &stats {
+                    let v = clamp(self, k, neutral);
+                    self.ch.set_stat(k, v);
+                }
+                self.ch.set_roll_method(statgen::METHOD_PURCHASE, &name);
+                self.ch.set_pool_budget(budget);
+                if let Some(p) = self.purchase() {
+                    let spent = self.points_spent(&p, None);
+                    self.ch.set_pool_points(spent);
+                }
+                return changed(
+                    self,
+                    format!(
+                        "buying scores with {} ({} points); every score is {}",
+                        name, budget, neutral
+                    ),
+                );
+            }
+            "roll" => {
+                let methods = self
+                    .ctx
+                    .gamemode
+                    .as_ref()
+                    .map(statgen::roll_methods)
+                    .unwrap_or_default();
+                let names: Vec<&str> = methods.iter().map(|m| m.0.as_str()).collect();
+                let method = match args.first() {
+                    Some(m) => methods.iter().find(|x| x.0.eq_ignore_ascii_case(m)),
+                    None => methods.first(),
+                };
+                let Some((_, expr)) = method else {
+                    return Err(Error::Other(format!(
+                        "no roll method{}; choose from: {}",
+                        args.first()
+                            .map(|m| format!(" '{}'", m))
+                            .unwrap_or_default(),
+                        names.join(", ")
+                    )));
+                };
+                let mut rng = seed.map(Rng::new).unwrap_or_else(Rng::from_time);
+                let mut scores = Vec::new();
+                for k in &stats {
+                    let v = statgen::roll(expr, &mut rng)
+                        .ok_or_else(|| Error::Other(format!("cannot roll '{}'", expr)))?;
+                    scores.push(clamp(self, k, v));
+                }
+                (statgen::METHOD_ROLLED, expr.clone(), scores)
+            }
+            "same" => {
+                let n: i64 = args
+                    .first()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or_else(|| Error::Other("give the score for every stat".into()))?;
+                let scores = stats.iter().map(|k| clamp(self, k, n)).collect();
+                (statgen::METHOD_SAME, n.to_string(), scores)
+            }
+            _ => {
+                if args.len() != stats.len() {
+                    return Err(Error::Other(format!(
+                        "give {} scores, for {}",
+                        stats.len(),
+                        stats.join(", ")
+                    )));
+                }
+                let mut scores = Vec::new();
+                for (k, v) in stats.iter().zip(&args) {
+                    let n: i64 = v
+                        .parse()
+                        .map_err(|_| Error::Other(format!("'{}' is not a score", v)))?;
+                    self.check_stat_range(k, n, force)?;
+                    scores.push(n);
+                }
+                (statgen::METHOD_USER, "0".into(), scores)
+            }
+        };
+        self.checkpoint();
+        for (k, v) in stats.iter().zip(&scores) {
+            self.ch.set_stat(k, *v);
+        }
+        self.ch.set_roll_method(code, &expr);
+        self.ch.set_pool_points(0);
+        let shown: Vec<String> = stats
+            .iter()
+            .zip(&scores)
+            .map(|(k, v)| format!("{} {}", k, v))
+            .collect();
+        changed(self, format!("scores: {}", shown.join(", ")))
+    }
+
+    /// How the character's scores were made.
+    fn stat_method(&self) -> String {
+        let mut out = match self.ch.roll_method() {
+            Some((statgen::METHOD_SAME, n)) => format!("every score {}", n),
+            Some((statgen::METHOD_ROLLED, e)) => format!("rolled ({})", e),
+            Some((statgen::METHOD_PURCHASE, m)) => match self.purchase() {
+                Some(p) => {
+                    let costs: Vec<String> = (p.min..=p.max)
+                        .map(|s| format!("{} {}", s, p.pb.cost(s, p.min, p.max)))
+                        .collect();
+                    format!(
+                        "point buy ({}): {} of {} points spent; scores {} to {}\ncosts: {}",
+                        p.method,
+                        self.points_spent(&p, None),
+                        p.budget,
+                        p.min,
+                        p.max,
+                        costs.join(", ")
+                    )
+                }
+                None => format!("point buy ({}), which the game mode does not have", m),
+            },
+            _ => "scores entered by hand".to_string(),
+        };
+        let pending = self.ch.pool_points();
+        if self.purchase().is_none() && pending > 0 {
+            out.push_str(&format!("\n{} stat increase(s) not taken", pending));
+        }
+        out
     }
 
     fn cmd_equip(
@@ -1416,6 +1884,25 @@ impl Session {
             out.push(format!("equipped: {}", s.equipped.join("; ")));
         }
         out.join("\n")
+    }
+}
+
+/// Point buy in effect for a character.
+struct Purchase {
+    pb: PointBuy,
+    method: String,
+    /// the lowest and highest scores the character can buy
+    min: i64,
+    max: i64,
+    /// points to spend (-1: none)
+    budget: i64,
+}
+
+/// Raise each stat by one.
+fn raise_stats(ch: &mut Character, keys: &[String]) {
+    for k in keys {
+        let v = ch.stat(k).unwrap_or(0);
+        ch.set_stat(k, v + 1);
     }
 }
 

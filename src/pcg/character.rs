@@ -569,6 +569,71 @@ impl Character {
         self.put("PURCHASEPOINTS", purchase);
     }
 
+    /// How the stats were generated: (ROLLMETHOD code, EXPRESSION).
+    pub fn roll_method(&self) -> Option<(u32, String)> {
+        let l = self.pcg.lines_tagged("ROLLMETHOD").next()?;
+        Some((
+            num(l.head().map(Elem::value_text))?,
+            l.text("EXPRESSION").unwrap_or_default(),
+        ))
+    }
+
+    /// POOLPOINTS: points spent buying stats, or stat increases not
+    /// yet taken.
+    pub fn pool_points(&self) -> i64 {
+        num(self.pcg.value("POOLPOINTS")).unwrap_or(0)
+    }
+
+    pub fn set_pool_points(&mut self, n: i64) {
+        self.put("POOLPOINTS", vec![Elem::raw("POOLPOINTS", &n.to_string())]);
+    }
+
+    /// POOLPOINTSAVAIL: the point-buy budget, -1 when none is set.
+    pub fn pool_budget(&self) -> i64 {
+        num(self.pcg.value("POOLPOINTSAVAIL")).unwrap_or(-1)
+    }
+
+    pub fn set_pool_budget(&mut self, n: i64) {
+        self.put(
+            "POOLPOINTSAVAIL",
+            vec![Elem::raw("POOLPOINTSAVAIL", &n.to_string())],
+        );
+    }
+
+    /// Record a change to a stat's base score with the latest level
+    /// gained (`PRESTAT:ABB=delta`, before its skill points).  False
+    /// if the character has no levels.
+    pub fn add_stat_change(&mut self, abb: &str, delta: i64) -> bool {
+        let Some(&i) = self.pcg.indices("CLASSABILITIESLEVEL").last() else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let at = elems
+            .iter()
+            .position(|e| matches!(e.tag.as_str(), "SKILLSGAINED" | "SKILLSREMAINING"))
+            .unwrap_or(elems.len());
+        elems.insert(at, Elem::text("PRESTAT", &format!("{}={}", abb, delta)));
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
+    /// Stat changes recorded with the latest level gained.
+    pub fn last_level_stat_changes(&self) -> Vec<(String, i64)> {
+        let Some(l) = self.pcg.lines_tagged("CLASSABILITIESLEVEL").last() else {
+            return Vec::new();
+        };
+        l.elems
+            .iter()
+            .flatten()
+            .filter(|e| e.tag == "PRESTAT" || e.tag == "POSTSTAT")
+            .filter_map(|e| {
+                let v = e.value_text();
+                let (a, d) = v.split_once('=')?;
+                Some((a.to_string(), d.trim().parse().ok()?))
+            })
+            .collect()
+    }
+
     pub fn set_race(&mut self, race: &str) {
         self.put("RACE", vec![Elem::text("RACE", race)]);
     }

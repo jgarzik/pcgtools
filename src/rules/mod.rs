@@ -16,4 +16,5 @@ pub mod eval;
 pub mod pools;
 pub mod profs;
 pub mod spells;
+pub mod statgen;
 pub mod vars;

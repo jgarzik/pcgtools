@@ -86,6 +86,20 @@ enum PcgCommand {
         /// PCG file
         file: PathBuf,
     },
+
+    /// Compute derived statistics
+    Stats {
+        /// PCG file
+        file: PathBuf,
+
+        /// Show all skills, active abilities and unresolved terms
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Explain a bonus total, e.g. SKILL.Climb or COMBAT.AC
+        #[arg(short, long, value_name = "CATEGORY.TARGET")]
+        explain: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -375,6 +389,11 @@ fn main() -> ExitCode {
         Command::Pcg { cmd } => match cmd {
             PcgCommand::Show { file } => cmd::pcg::show(o, file),
             PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
+            PcgCommand::Stats {
+                file,
+                verbose,
+                explain,
+            } => cmd::pcg::stats(o, file, *verbose, explain),
         },
         Command::Tags { scope } => cmd::check::tags(o, scope.as_deref()),
         Command::Parse { file } => cmd::misc::parse(file),

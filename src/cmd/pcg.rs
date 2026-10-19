@@ -102,3 +102,63 @@ pub fn lint(o: &GlobalOpts, file: &Path) -> CmdResult {
     }
     Ok(diags.count(Severity::Error) == 0)
 }
+
+pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> CmdResult {
+    let c = Character::read(file)?;
+    let ctx = Context::for_character(&c, o.dirs(None));
+    report(&ctx.diags);
+    let mut calc = pcgtools::rules::calc::Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &c);
+    let sheet = calc.run();
+    for key in explain {
+        let (cat, tgt) = key.split_once('.').unwrap_or((key.as_str(), ""));
+        println!("{}:", key);
+        for line in calc.explain(cat, tgt) {
+            println!("  {}", line);
+        }
+    }
+    if !explain.is_empty() {
+        return Ok(true);
+    }
+    if o.json {
+        print_json(&sheet);
+        return Ok(true);
+    }
+    println!("{} (level {})", c.name().unwrap_or_default(), sheet.level);
+    let stats: Vec<String> = sheet
+        .stats
+        .iter()
+        .map(|(k, (s, m))| format!("{} {} ({:+})", k, s, m))
+        .collect();
+    println!("  stats: {}", stats.join(", "));
+    println!("  BAB {:+}  HP {}", sheet.bab, sheet.hp);
+    let saves: Vec<String> = sheet
+        .saves
+        .iter()
+        .map(|(k, v)| format!("{} {:+}", k, v))
+        .collect();
+    println!("  saves: {}", saves.join(", "));
+    let ac: Vec<String> = sheet
+        .ac
+        .iter()
+        .map(|(k, v)| format!("{} {}", k, v))
+        .collect();
+    println!("  AC: {}", ac.join(", "));
+    let skills: Vec<String> = sheet
+        .skills
+        .iter()
+        .filter(|(k, _)| verbose || calc.skill_ranks(k) > 0.0)
+        .map(|(k, v)| format!("{} {:+}", k, v))
+        .collect();
+    println!("  skills: {}", skills.join(", "));
+    if verbose {
+        println!("  abilities: {}", sheet.abilities.join(", "));
+        println!("  passes: {}", sheet.passes);
+        let unk: Vec<String> = sheet
+            .unknown
+            .iter()
+            .map(|(k, n)| format!("{}x{}", k, n))
+            .collect();
+        println!("  unknown terms: {}", unk.join(", "));
+    }
+    Ok(true)
+}

@@ -160,6 +160,42 @@ pub struct EquipSetEntry {
     pub quantity: Option<f64>,
 }
 
+/// A temporary bonus applied, as a TEMPBONUS line records it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TempBonus {
+    /// kind of object applying it: FEAT, SPELL, EQUIPMENT, ...
+    pub kind: String,
+    /// that object's key
+    pub key: String,
+    /// "PC", or the name of the item it is applied to
+    pub target: String,
+    /// false when switched off
+    pub active: bool,
+    /// the bonuses, as BONUS token values
+    pub bonuses: Vec<String>,
+}
+
+impl TempBonus {
+    /// Whether it is aimed at the character rather than an item.
+    pub fn on_pc(&self) -> bool {
+        self.target == "PC"
+    }
+
+    /// Whether PCGen keeps it when loading the character: the kind of
+    /// source is one it reads back (class sources lose their bonuses),
+    /// and an item aimed at is owned.
+    pub fn loads(&self, ch: &Character) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "FEAT" | "EQUIPMENT" | "TEMPLATE" | "SKILL" | "SPELL" | "NAME"
+        ) && (self.on_pc()
+            || ch
+                .equipment()
+                .iter()
+                .any(|e| e.name.eq_ignore_ascii_case(&self.target)))
+    }
+}
+
 /// Copies of a spell placed in a book or list, as a SPELLNAME line
 /// records them.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
@@ -513,6 +549,38 @@ impl Character {
                     name: l.head()?.value_text(),
                     quantity: num(l.text("QUANTITY")).unwrap_or(1.0),
                     base,
+                })
+            })
+            .collect()
+    }
+
+    /// Whether temporary bonuses count (USETEMPMODS; on by default).
+    pub fn use_temp_mods(&self) -> bool {
+        self.flag("USETEMPMODS", true)
+    }
+
+    /// Temporary bonuses applied, in file order.  A line naming no
+    /// source or no target is passed over, as PCGen does.
+    pub fn temp_bonuses(&self) -> Vec<TempBonus> {
+        self.pcg
+            .lines_tagged("TEMPBONUS")
+            .filter_map(|l| {
+                let head = l.head()?.value_text();
+                let mut parts = head.split('=').filter(|p| !p.is_empty());
+                let (kind, key) = (parts.next()?, parts.next()?);
+                Some(TempBonus {
+                    kind: kind.to_string(),
+                    key: key.to_string(),
+                    target: l.text("TBTARGET")?,
+                    active: l.text("TBACTIVE").is_none_or(|v| v.ends_with('Y')),
+                    bonuses: l
+                        .elems
+                        .iter()
+                        .flatten()
+                        .filter(|e| e.tag == "TBBONUS")
+                        .map(Elem::value_text)
+                        .filter(|b| !b.is_empty())
+                        .collect(),
                 })
             })
             .collect()

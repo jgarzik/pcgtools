@@ -3865,12 +3865,16 @@ impl<'a> Calc<'a> {
             }
             let _ = si;
         }
-        // temporary bonuses the user switched on, aimed at the character
-        for line in self.ch.pcg.lines_tagged("TEMPBONUS") {
-            if line.text("TBTARGET").as_deref() != Some("PC") {
-                continue;
-            }
-            let name = line.head().map(|h| h.value_text()).unwrap_or_default();
+        // temporary bonuses applied and switched on, unless temporary
+        // modifiers are off; those aimed at an item count for the
+        // character too
+        let temps = if self.ch.use_temp_mods() {
+            self.ch.temp_bonuses()
+        } else {
+            Vec::new()
+        };
+        for tb in temps.iter().filter(|t| t.active && t.loads(self.ch)) {
+            let name = format!("{}={}", tb.kind, tb.key);
             let origin = Source {
                 origin: format!("TempBonus {}", name),
                 kind: "TempBonus".into(),
@@ -3882,8 +3886,8 @@ impl<'a> Calc<'a> {
                 calc: self,
                 src: None,
             };
-            for e in line.elems.iter().flatten().filter(|e| e.tag == "TBBONUS") {
-                let Ok(b) = Bonus::parse(&e.value_text()) else {
+            for text in &tb.bonuses {
+                let Ok(b) = Bonus::parse(text) else {
                     continue;
                 };
                 if !b.prereqs().all(|p| self.passes(p, None)) {

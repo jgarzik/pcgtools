@@ -739,3 +739,119 @@ fn one_equipment_set_element_per_set() {
     assert!(m.contains_key("character/equipment[0]/item[Wooden Spoon]/name[0]"));
     assert_eq!(at(&m, "armor_class[0]/total[0]"), "10");
 }
+
+/// A new character with saved lines added after the editor commands.
+fn with_lines(cmds: &[&str], text: &str) -> HashMap<String, String> {
+    let mut s = new_session(cmds);
+    let lines = pcgtools::pcg::PcgFile::parse(text).lines;
+    s.ch.pcg.lines.extend(lines);
+    session_sheet(&s)
+}
+
+fn ac_total(m: &HashMap<String, String>) -> i64 {
+    at(m, "armor_class[0]/total[0]").parse().unwrap()
+}
+
+#[test]
+fn temporary_bonus_switches() {
+    let base = ac_total(&new_sheet(&[]));
+    let on = "TEMPBONUS:SPELL=Spark|TBTARGET:PC|TBBONUS:COMBAT&pipe;AC&pipe;2\n";
+    assert_eq!(ac_total(&with_lines(&[], on)), base + 2);
+    // a bonus switched off does not count
+    let off = "TEMPBONUS:SPELL=Spark|TBTARGET:PC|TBACTIVE:N|TBBONUS:COMBAT&pipe;AC&pipe;2\n";
+    assert_eq!(ac_total(&with_lines(&[], off)), base);
+    // nor does any, with temporary modifiers off
+    let unused = format!("USETEMPMODS:N\n{}", on);
+    assert_eq!(ac_total(&with_lines(&[], &unused)), base);
+}
+
+#[test]
+fn temporary_bonus_on_armor() {
+    let cmds = ["equip add \"Dented Vest\"", "equip wear \"Dented Vest\""];
+    let base = ac_total(&new_sheet(&cmds));
+    let m = with_lines(
+        &cmds,
+        "TEMPBONUS:SPELL=Spark|TBTARGET:Dented Vest|TBBONUS:COMBAT&pipe;AC&pipe;2\n",
+    );
+    // a bonus aimed at an item counts for the character too
+    assert_eq!(ac_total(&m), base + 2);
+    // the copy carrying it replaces the armor worn
+    let a = "protection[0]/armor[*Dented Vest [Spark]]";
+    assert_eq!(at(&m, &format!("{}/acbonus[0]", a)), "+1");
+    assert_eq!(at(&m, &format!("{}/wt[0]", a)), "5");
+    assert!(!m.contains_key("character/protection[0]/armor[*Dented Vest]/acbonus[0]"));
+    assert!(!m
+        .keys()
+        .any(|k| k.starts_with("character/equipment[0]/item[Dented Vest#2]/")));
+    assert_eq!(at(&m, "equipment[0]/item[Dented Vest]/weight[0]"), "5");
+    assert_eq!(at(&m, "equipment[0]/item[Dented Vest]/equipped[0]"), "Y");
+    // switched off, it still rides on the copy but not the character
+    let m = with_lines(
+        &cmds,
+        "TEMPBONUS:SPELL=Spark|TBTARGET:Dented Vest|TBACTIVE:N|TBBONUS:COMBAT&pipe;AC&pipe;2\n",
+    );
+    assert_eq!(ac_total(&m), base);
+    assert_eq!(at(&m, &format!("{}/acbonus[0]", a)), "+1");
+}
+
+#[test]
+fn temporary_bonus_on_unworn_weapon() {
+    let m = with_lines(
+        &[
+            "equip add \"Throwing Cog\"",
+            "equip wear \"Throwing Cog\" Carried",
+        ],
+        "TEMPBONUS:SPELL=Spark|TBTARGET:Throwing Cog|TBBONUS:WEAPON&pipe;TOHIT&pipe;1\n",
+    );
+    // the copy is listed apart, not worn, weighing nothing
+    let mut both: Vec<(&str, &str)> = ["Throwing Cog", "Throwing Cog#2"]
+        .iter()
+        .map(|n| {
+            let e = format!("equipment[0]/item[{}]", n);
+            (
+                at(&m, &format!("{}/equipped[0]", e)),
+                at(&m, &format!("{}/weight[0]", e)),
+            )
+        })
+        .collect();
+    both.sort();
+    assert_eq!(both, [("N", "0"), ("N", "1")]);
+}
+
+#[test]
+fn temporary_copies_in_sets_follow_the_set() {
+    let mut s = new_session(&[
+        "equip add \"Throwing Cog\"",
+        "equip wear \"Throwing Cog\" Carried",
+    ]);
+    s.ch.pcg.lines.extend(
+        pcgtools::pcg::PcgFile::parse(
+            "TEMPBONUS:SPELL=Spark|TBTARGET:Throwing Cog|TBBONUS:WEAPON&pipe;TOHIT&pipe;1\n",
+        )
+        .lines,
+    );
+    let copy =
+        "character/equipment[0]/equipmentsets[0]/equipmentset[0]/item[Throwing Cog#2]/name[0]";
+    let mark = |s: &mut pcgtools::repl::Session, flag: &str| {
+        let root =
+            s.ch.pcg
+                .lines
+                .iter_mut()
+                .find(|l| l.tag() == Some("EQUIPSET") && l.text("ID").as_deref() == Some("0.1"))
+                .unwrap();
+        let mut elems: Vec<_> = root
+            .elems
+            .clone()
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.tag != "USETEMPMODS")
+            .collect();
+        elems.push(pcgtools::pcg::Elem::raw("USETEMPMODS", flag));
+        root.set_elems(elems);
+    };
+    // a set not marked to use temporary modifiers lists no copies
+    mark(&mut s, "N");
+    assert!(!session_sheet(&s).contains_key(copy));
+    mark(&mut s, "Y");
+    assert!(session_sheet(&s).contains_key(copy));
+}

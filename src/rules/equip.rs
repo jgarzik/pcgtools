@@ -612,8 +612,14 @@ impl<'a> EqItem<'a> {
         } else {
             Vec::new()
         };
+        // a copy's temporary bonuses count with its primary head
+        let temporary: &[String] = match &self.temporary {
+            Some((_, b)) if eqmods => b,
+            _ => &[],
+        };
         let values = objs
             .flat_map(|o| o.values("BONUS"))
+            .chain(temporary.iter().map(String::as_str))
             .chain(size_penalty.iter().copied());
         {
             for v in values {
@@ -784,6 +790,15 @@ impl<'a> EqItem<'a> {
             modified: None,
             temporary: None,
             note: String::new(),
+        }
+    }
+
+    /// What a copy carrying temporary bonuses adds to its name on
+    /// weapon and armor lists: " [source]".
+    pub fn applied_name(&self) -> String {
+        match &self.temporary {
+            Some((src, _)) => format!(" [{}]", src),
+            None => String::new(),
         }
     }
 

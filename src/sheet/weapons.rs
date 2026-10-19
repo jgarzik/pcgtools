@@ -550,20 +550,7 @@ fn num(v: Option<&str>) -> f64 {
 
 /// An item's own WEAPON bonus, with temporary bonuses on a copy.
 fn item_bonus(s: &SheetCtx, w: &Weapon, target: &str) -> f64 {
-    let c = &s.calc;
-    let mut t = w.item.bonus(c, "WEAPON", target, true);
-    if let Some((_, bonuses)) = &w.item.temporary {
-        for v in bonuses {
-            if let Ok(b) = crate::token::bonus::Bonus::parse(v) {
-                if b.category.eq_ignore_ascii_case("WEAPON")
-                    && b.targets.iter().any(|x| x.eq_ignore_ascii_case(target))
-                {
-                    t += c.eval_formula(&b.formula);
-                }
-            }
-        }
-    }
-    t
+    w.item.bonus(&s.calc, "WEAPON", target, true)
 }
 
 /// Mode-dependent part of the to-hit bonus.
@@ -1189,10 +1176,7 @@ fn template(src: &Source) -> bool {
 fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     let c = &s.calc;
     let star = if w.equipped { "*" } else { "" };
-    let applied = match &w.item.temporary {
-        Some((src, _)) => format!(" [{}]", src),
-        None => String::new(),
-    };
+    let applied = w.item.applied_name();
     let short = if w.name == w.item.name {
         w.item.output_name()
     } else {

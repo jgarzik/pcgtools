@@ -49,11 +49,7 @@ pub(super) struct Placed<'a> {
 /// Master items (one per saved item) and the items placed in the
 /// calculation equipment set, in set order.
 pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
-    let temp =
-        s.ch.pcg
-            .value("USETEMPMODS")
-            .is_none_or(|v| v.eq_ignore_ascii_case("Y"));
-    placed_in(s, &s.ch.calc_equip_set(), temp)
+    placed_in(s, &s.ch.calc_equip_set(), s.ch.use_temp_mods())
 }
 
 /// Master items and the items placed in an equipment set, with copies
@@ -168,26 +164,14 @@ fn placed_in<'a>(s: &SheetCtx<'a>, set: &str, temp: bool) -> (Vec<EqItem<'a>>, V
         });
     }
     // copies of items carrying temporary bonuses
+    // (kept when switched off: only the character loses their bonuses)
     if temp {
-        for l in pcg.lines_tagged("TEMPBONUS") {
-            let Some(target) = l.text("TBTARGET") else {
-                continue;
-            };
-            if target.eq_ignore_ascii_case("PC") {
+        for tb in s.ch.temp_bonuses() {
+            if tb.on_pc() || !tb.loads(s.ch) {
                 continue;
             }
-            let source = l.head().map(|h| h.value_text()).unwrap_or_default();
-            let source = source
-                .split_once('=')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or(source);
-            let bonuses: Vec<String> = l
-                .elems
-                .iter()
-                .flatten()
-                .filter(|e| e.tag == "TBBONUS")
-                .map(|e| e.value_text())
-                .collect();
+            let (source, bonuses, target) = (tb.key, tb.bonuses, tb.target);
+            // the first item of that name, which may be an earlier copy
             let Some(i) = out
                 .iter()
                 .position(|p| p.item.long_name().eq_ignore_ascii_case(&target))
@@ -195,16 +179,36 @@ fn placed_in<'a>(s: &SheetCtx<'a>, set: &str, temp: bool) -> (Vec<EqItem<'a>>, V
                 continue;
             };
             let p = &out[i];
-            let copy = Placed {
-                item: p.item.temporary_copy(&source, bonuses),
-                id: format!("{}.temp", p.id),
-                root: p.root.clone(),
-                parent: p.parent,
-                equipped: p.equipped,
-                carried: p.carried,
-                qty: p.qty,
-            };
-            out.push(copy);
+            let id = format!("{}.temp", p.id);
+            if !p.equipped {
+                // listed apart, outside any container, worth nothing
+                out.push(Placed {
+                    item: p.item.temporary_copy(&source, bonuses),
+                    id,
+                    root: String::new(),
+                    parent: None,
+                    equipped: false,
+                    carried: p.carried,
+                    qty: p.qty,
+                });
+            } else if p.item.is_type(c, "WEAPON") {
+                // a weapon is listed twice, the copy worth nothing
+                out.push(Placed {
+                    item: p.item.temporary_copy(&source, bonuses),
+                    id,
+                    root: p.root.clone(),
+                    parent: p.parent,
+                    equipped: true,
+                    carried: p.carried,
+                    qty: p.qty,
+                });
+            } else {
+                // anything else worn is replaced by its copy
+                let mut item = p.item.clone();
+                item.temporary = Some((source, bonuses));
+                out[i].item = item;
+                out[i].id = id;
+            }
         }
     }
     (master, out)
@@ -477,8 +481,10 @@ pub fn equipment(s: &SheetCtx) -> Element {
                     (
                         id,
                         l.head().map(|h| h.value_text()).unwrap_or_default(),
+                        // a set lists copies carrying temporary bonuses
+                        // only when marked to use them
                         l.text("USETEMPMODS")
-                            .is_some_and(|v| v.eq_ignore_ascii_case("Y")),
+                            .is_some_and(|v| v.trim_end().ends_with('Y')),
                     )
                 })
             })
@@ -532,7 +538,12 @@ pub fn protection(s: &SheetCtx) -> Element {
             let mut e = Element::new(tag);
             e.add(
                 "name",
-                format!("{}{}", if p.equipped { "*" } else { "" }, it.output_name()),
+                format!(
+                    "{}{}{}",
+                    if p.equipped { "*" } else { "" },
+                    it.output_name(),
+                    it.applied_name()
+                ),
             );
             let ac = it.bonus(c, "COMBAT", "AC", true) as i64;
             e.add("acbonus", signed(ac));

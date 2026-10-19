@@ -18,7 +18,7 @@
 //! depend on each other, so evaluation repeats until nothing changes.
 
 use super::bonus::{BonusTable, Source};
-use super::eval::{eval, eval_str, Env};
+use super::eval::{eval_str, Env};
 use crate::dataset::{Dataset, Object, Tok};
 use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
@@ -1520,11 +1520,40 @@ impl<'a> Calc<'a> {
         eval_str(formula, &env)
     }
 
-    /// Evaluate a formula with extra terms looked up first (for
-    /// equipment formulas: BASECOST, PLUSTOTAL, ...).
+    /// Evaluate a formula with extra terms looked up first (spell
+    /// formulas: CASTERLEVEL, ...).
     pub fn eval_with(&self, formula: &str, extra: &dyn Fn(&str) -> Option<f64>) -> f64 {
-        let env = ExtraEnv { calc: self, extra };
+        let env = ExtraEnv {
+            calc: self,
+            extra,
+            item: false,
+        };
         eval_str(formula, &env)
+    }
+
+    /// Evaluate an item's formula, with its terms (BASECOST,
+    /// PLUSTOTAL, ...) looked up first.
+    pub fn eval_item(&self, formula: &str, extra: &dyn Fn(&str) -> Option<f64>) -> f64 {
+        let env = ExtraEnv {
+            calc: self,
+            extra,
+            item: true,
+        };
+        eval_str(formula, &env)
+    }
+
+    /// Would PCGen find a value for this name on the character?  Its
+    /// variables, the terms this crate works out, and PCGen's other
+    /// built-in terms and numeric output tokens (which this crate may
+    /// not work out).
+    fn resolves(&self, name: &str, src: Option<&Src<'a>>) -> bool {
+        self.defined.contains(&upper(name))
+            || pcgen_term(name, |s| self.stat_base.contains_key(s))
+            || name
+                .split(['.', ','])
+                .next()
+                .is_some_and(|t| NUMERIC_OUTPUT_TOKENS.contains(&t))
+            || self.builtin(name, src).is_some()
     }
 
     /// Hit points gained per level from stats (BONUS:HP|BONUS on stats).
@@ -2086,7 +2115,7 @@ impl<'a> Calc<'a> {
                         && b.targets.iter().any(|t| t.eq_ignore_ascii_case("NUMBER"))
                 })
                 .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
-                .filter_map(|b| b.expr().ok().map(|e| eval(&e, &env)))
+                .map(|b| eval_str(&b.formula, &env))
                 .map(f64::trunc)
                 .sum()
         };
@@ -2587,7 +2616,15 @@ impl<'a> Calc<'a> {
             }
         };
         match lower(name).as_str() {
-            "var" => self.var_value(&s(0)?, src),
+            // PCGen works out a name with no value as a formula, which
+            // always gives a number
+            "var" => {
+                let name = s(0)?;
+                Some(
+                    self.var_value(&name, src)
+                        .unwrap_or_else(|| eval_str(&name, &Ctx { calc: self, src })),
+                )
+            }
             "classlevel" => {
                 let a = s(0).unwrap_or_default();
                 if a.is_empty() {
@@ -3971,6 +4008,17 @@ impl<'a> Calc<'a> {
     fn pass(&mut self) {
         self.unknown.borrow_mut().clear();
         self.gather();
+        // the character has every variable its objects define before any
+        // is worked out, so a formula naming one resolves it
+        self.defined = self
+            .sources
+            .iter()
+            .flat_map(|s| &s.tokens)
+            .filter(|t| t.tag == "DEFINE")
+            .map(|t| t.value.split_once('|').map_or(t.value.as_str(), |x| x.0))
+            .filter(|name| !(name.contains('.') && name.starts_with("LOCK")))
+            .map(upper)
+            .collect();
         self.stat_limits = self.find_stat_limits();
         let mut table = BonusTable::new(
             &self
@@ -3979,7 +4027,6 @@ impl<'a> Calc<'a> {
                 .unwrap_or_default(),
         );
         let mut vars: HashMap<String, f64> = HashMap::new();
-        let mut defined = HashSet::new();
         for (si, s) in self.sources.iter().enumerate() {
             let env = Ctx {
                 calc: self,
@@ -3995,7 +4042,6 @@ impl<'a> Calc<'a> {
                         }
                         let u = upper(name);
                         let v = eval_str(f, &env);
-                        defined.insert(u.clone());
                         let e = vars.entry(u).or_insert(f64::NEG_INFINITY);
                         *e = e.max(v);
                     }
@@ -4006,10 +4052,7 @@ impl<'a> Calc<'a> {
                         if !b.prereqs().all(|p| self.passes(p, Some(s))) {
                             continue;
                         }
-                        let v = match b.expr() {
-                            Ok(e) => eval(&e, &env),
-                            Err(_) => continue,
-                        };
+                        let v = eval_str(&b.formula, &env);
                         let btype = b.opts.iter().find_map(|o| match o {
                             BonusOpt::Type(t) => Some(t.as_str()),
                             _ => None,
@@ -4105,8 +4148,7 @@ impl<'a> Calc<'a> {
                 if !b.prereqs().all(|p| self.passes(p, None)) {
                     continue;
                 }
-                let Ok(x) = b.expr() else { continue };
-                let v = eval(&x, &env);
+                let v = eval_str(&b.formula, &env);
                 let btype = b.opts.iter().find_map(|o| match o {
                     BonusOpt::Type(t) => Some(t.as_str()),
                     _ => None,
@@ -4166,8 +4208,7 @@ impl<'a> Calc<'a> {
             if !b.prereqs().all(|p| self.passes(p, None)) {
                 continue;
             }
-            let Ok(e) = b.expr() else { continue };
-            let val = eval(&e, &env);
+            let val = eval_str(&b.formula, &env);
             let btype = b.opts.iter().find_map(|o| match o {
                 BonusOpt::Type(t) => Some(t.as_str()),
                 _ => None,
@@ -4178,7 +4219,6 @@ impl<'a> Calc<'a> {
         }
         self.bonus = table;
         self.vars = vars;
-        self.defined = defined;
     }
 
     /// Armor check penalty of equipped armor and shields (zero or less).
@@ -4366,9 +4406,7 @@ impl<'a> Calc<'a> {
                         && b.targets.iter().any(|x| x.eq_ignore_ascii_case("BONUS"))
                         && b.prereqs().all(|p| self.passes(p, Some(s)))
                     {
-                        if let Ok(e) = b.expr() {
-                            con += eval(&e, &env).trunc();
-                        }
+                        con += eval_str(&b.formula, &env).trunc();
                     }
                 }
             }
@@ -4620,6 +4658,8 @@ fn si_item(s: &Src<'_>) -> usize {
 struct ExtraEnv<'c, 'a> {
     calc: &'c Calc<'a>,
     extra: &'c dyn Fn(&str) -> Option<f64>,
+    /// an item's formula, where PCGen's item terms resolve
+    item: bool,
 }
 
 impl Env for ExtraEnv<'_, '_> {
@@ -4632,6 +4672,152 @@ impl Env for ExtraEnv<'_, '_> {
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         self.calc.call(name, args, None)
     }
+
+    fn resolves(&self, name: &str) -> bool {
+        (self.item && ITEM_TERMS.contains(&name))
+            || self.var(name).is_some()
+            || self.calc.resolves(name, None)
+    }
+}
+
+/// PCGen's built-in terms for an item's formulas.
+const ITEM_TERMS: &[&str] = &[
+    "ALTPLUSTOTAL",
+    "BASECOST",
+    "CRITMULT",
+    "DMGDICE",
+    "DMGDIE",
+    "EQACCHECK",
+    "EQHANDS",
+    "EQSPELLFAIL",
+    "EQUIP.SIZE",
+    "EQUIP.SIZE.INT",
+    "HEADPLUSTOTAL",
+    "PLUSTOTAL",
+    "RACEREACH",
+    "RANGE",
+    "REACH",
+    "REACHMULT",
+    "SIZE",
+    "WT",
+];
+
+/// PCGen's built-in terms naming one fixed value.
+const WHOLE_TERMS: &[&str] = &[
+    "ACCHECK",
+    "ACHECK",
+    "ARMORACCHECK",
+    "ARMORACHECK",
+    "ATWILL",
+    "BAB",
+    "BASECR",
+    "BASEHD",
+    "BASESPELLSTAT",
+    "BONUSLANG",
+    "CASTERLEVEL",
+    "CASTERLEVEL.TOTAL",
+    "ENCUMBERANCE",
+    "FAVCLASSLEVEL",
+    "HANDS",
+    "HD",
+    "HP",
+    "LEGS",
+    "MAXCASTABLE",
+    "MAXLEVEL",
+    "MOVEBASE",
+    "PROFACCHECK",
+    "RACESIZE",
+    "RACIALHDSIZE",
+    "SCORE",
+    "SHIELDACCHECK",
+    "SHIELDACHECK",
+    "SIZE",
+    "SIZEMOD",
+    "SPELLBASESTAT",
+    "SPELLBASESTATSCORE",
+    "SPELLLEVEL",
+    "TL",
+];
+
+/// Starts of PCGen's built-in terms that take the rest of the name as
+/// an argument (a class, a skill, an item type, ...).
+const TERM_PREFIXES: &[&str] = &[
+    "BL",
+    "CL",
+    "COUNT[",
+    "EQTYPE",
+    "HASDEITY:",
+    "HASFEAT:",
+    "MODEQUIP",
+    "MOVE[",
+    "PC.HEIGHT",
+    "PC.SIZE",
+    "PC.WEIGHT",
+    "SKILLRANK.",
+    "SKILLRANK=",
+    "SKILLTOTAL.",
+    "SKILLTOTAL=",
+    "VARDEFINED:",
+    "WEIGHT.",
+];
+
+/// PCGen output tokens with a numeric value, which PCGen also reads as
+/// variables (the name up to its first `.` or `,`).
+const NUMERIC_OUTPUT_TOKENS: &[&str] = &[
+    "AC",
+    "ACCHECK",
+    "ALTHP",
+    "ATTACK",
+    "CASTERLEVEL",
+    "CHECK",
+    "CR",
+    "ECL",
+    "EXP",
+    "FEATPOINTS",
+    "GOLD",
+    "HP",
+    "INITIATIVEBONUS",
+    "INITIATIVEMISC",
+    "INITIATIVEMOD",
+    "MAXCCSKILLLEVEL",
+    "MAXDEX",
+    "MAXSKILLLEVEL",
+    "MAXSPELLLEVEL",
+    "SIZEMOD",
+    "SKILL",
+    "SKILLPOINTS",
+    "SPELLFAILURE",
+    "SR",
+    "STAT",
+    "TOTALLEVELS",
+    "VAR",
+];
+
+/// Is `name` one of PCGen's built-in terms?  Names are matched as
+/// written (PCGen's terms are upper case); `is_stat` tells a stat's
+/// abbreviation.  Like PCGen, the first term the name starts with
+/// decides: one naming a fixed value must be the whole name.
+fn pcgen_term(name: &str, is_stat: impl Fn(&str) -> bool) -> bool {
+    if WHOLE_TERMS.contains(&name) {
+        return true;
+    }
+    // a longer name starting with a fixed-value term is no term
+    if WHOLE_TERMS
+        .iter()
+        .any(|t| name.starts_with(t) && !TERM_PREFIXES.iter().any(|p| name.starts_with(p)))
+    {
+        return false;
+    }
+    if TERM_PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return true;
+    }
+    // a stat: STR, STR.BASE, STRSCORE, STRSCORE.BASE
+    (1..=name.len())
+        .filter(|&i| name.is_char_boundary(i))
+        .any(|i| {
+            let (abb, rest) = name.split_at(i);
+            is_stat(abb) && (rest.is_empty() || rest == ".BASE" || rest.starts_with("SCORE"))
+        })
 }
 
 /// Evaluation context: the calculator plus the source being evaluated.
@@ -4653,6 +4839,10 @@ impl Env for Ctx<'_, '_> {
 
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         self.calc.call(name, args, self.src)
+    }
+
+    fn resolves(&self, name: &str) -> bool {
+        name == "%LIST" || name == "%CHOICE" || self.calc.resolves(name, self.src)
     }
 
     fn unknown(&self, name: &str) {
@@ -4683,6 +4873,10 @@ impl Env for LevelEnv<'_, '_> {
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         self.calc.call(name, args, None)
     }
+
+    fn resolves(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("LEVEL") || self.calc.resolves(name, None)
+    }
 }
 
 /// Context for a stat's STATMOD formula, where SCORE is that stat.
@@ -4698,6 +4892,10 @@ impl Env for ScoreEnv<'_, '_> {
         } else {
             self.calc.var_value(name, None)
         }
+    }
+
+    fn resolves(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("SCORE") || self.calc.resolves(name, None)
     }
 }
 

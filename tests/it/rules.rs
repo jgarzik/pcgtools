@@ -47,6 +47,21 @@ fn fixture_character_sheet() {
 }
 
 #[test]
+fn formula_naming_an_undefined_variable_reads_left_to_right() {
+    let path = common::fixture("mini/characters/tess.pcg");
+    let mut s = pcgtools::repl::Session::open(&path, dirs()).unwrap();
+    assert_eq!(s.sheet().skills["Tinkering"], 6);
+    // TL+2*3 with TL 2: operator precedence holds
+    s.exec("feat add \"Even Knack\" --force").unwrap();
+    assert_eq!(s.sheet().skills["Tinkering"], 14);
+    // NoSuchVar+TL+2*3: PCGen's fallback works ((0+2)+2)*3
+    s.exec("feat add \"Odd Knack\" --force").unwrap();
+    let sheet = s.sheet();
+    assert_eq!(sheet.skills["Tinkering"], 26);
+    assert_eq!(sheet.unknown.get("NoSuchVar"), Some(&1));
+}
+
+#[test]
 fn check_penalty_bonus_offsets_armor_on_skills() {
     let path = common::fixture("mini/characters/tess.pcg");
     let mut s = pcgtools::repl::Session::open(&path, dirs()).unwrap();

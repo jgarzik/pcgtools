@@ -526,7 +526,6 @@ skill Jump 2
 gamemode 35e
 campaign 3.5 RSRD - Campaign Set - Core Books I - III
 campaign Midnight - Campaign Source Book
-differs character/feats[0]/feat[Stunning Fist]/description[0] -- the uses per day come from a formula naming an undefined variable, which PCGen then works out left to right, ignoring operator precedence
 set stat STR 14
 set stat DEX 13
 set align LN

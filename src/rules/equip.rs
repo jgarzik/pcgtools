@@ -384,7 +384,7 @@ impl<'a> EqItem<'a> {
     }
 
     fn eval(&self, calc: &Calc<'a>, formula: &str, head: &[EqMod]) -> f64 {
-        calc.eval_with(formula, &|n| self.term(calc, n, head))
+        calc.eval_item(formula, &|n| self.term(calc, n, head))
     }
 
     /// Does a prerequisite on a modifier's bonus hold for this item?

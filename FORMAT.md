@@ -1050,8 +1050,28 @@ The variable's value is that initial value plus every
 fall back to built-in terms: stat abbreviations (the modifier),
 `<STAT>SCORE`, `TL`/`HD` (total level), `CL` (level in the owning
 class), `CL=Class`, `BAB`, `SIZE`, `ENCUMBERANCE`, `MODEQUIPMAXDEX`,
-`MOVE[Walk]`, `SKILL.name.RANK`, `COUNT[...]`, and others. Unknown
-names are zero.
+`MOVE[Walk]`, `SKILL.name.RANK`, `COUNT[...]`, and others.
+
+A formula naming something that is none of these (no active object
+defines it and it is no built-in term), calling an unknown function,
+or failing to parse is read the way PCGen reads it: the text is
+upper-cased, the innermost parenthesized parts are worked out first,
+each as a formula of its own, `.IF.a.OP.b.THEN.c.ELSE.d.` (OP one of
+`LT`, `LTEQ`, `EQ`, `GT`, `GTEQ`) picks an outcome, and what is left is
+worked out strictly left to right over `+ - * /`, every piece that is
+not a number or a known name counting as zero. So `X+3+(TL-X)/4` with
+`X` undefined and `TL` 3 is `(0+3+3)/4`, 1.5. A function name is left
+glued to its argument's value, so `max(X,5)` is zero.
+
+`DEFINE` variables and declared variables (9.5) are separate systems
+that are not coupled by name, as in PCGen: a formula in one never sees
+a variable of the other, even one with the same name. They meet only
+through the code controls of 7.4.
+
+One difference from PCGen is known. Gaslight's level table gives
+`CSKILLMAX` as a bare variable (`MaxRank`); PCGen's value for it
+depends on when it last cached that variable, so its sheet may show a
+lower maximum class skill rank than `pcgtools` does.
 
 Because values depend on each other (an ability granted only above a
 variable threshold may itself raise variables), evaluation repeats

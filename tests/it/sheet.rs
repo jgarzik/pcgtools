@@ -108,6 +108,15 @@ fn skills_list() {
 }
 
 #[test]
+fn skills_shown_by_misc_bonus() {
+    let m = tess();
+    // shown only while Tinkering's bonuses beyond ranks and stat
+    // (3) pass the skill's prerequisite
+    assert_eq!(at(&m, "skills[0]/skill[Tinkering Flair]/skill_mod[0]"), "1");
+    assert!(!m.contains_key("character/skills[0]/skill[Gadget Flair]/name[0]"));
+}
+
+#[test]
 fn saves_and_attacks() {
     let m = tess();
     let f = "saving_throws[0]/saving_throw[fortitude]";

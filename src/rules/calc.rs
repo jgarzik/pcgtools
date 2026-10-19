@@ -1973,6 +1973,7 @@ impl<'a> Calc<'a> {
                 return Some(match upper(what).as_str() {
                     "RANK" => self.skill_ranks(sk),
                     "TOTAL" => self.skill_total(sk) as f64,
+                    "MISC" => self.skill_misc(sk) as f64,
                     _ => 0.0,
                 });
             }
@@ -3447,6 +3448,18 @@ impl<'a> Calc<'a> {
             _ => 0.0,
         };
         (self.skill_ranks(&sk.key) + b).floor() as i64
+    }
+
+    /// What a skill's total holds beyond its ranks and key stat
+    /// modifier: bonuses, armor check penalty and the like.
+    pub fn skill_misc(&self, skill: &str) -> i64 {
+        let stat = self
+            .ds
+            .get(FileKind::Skill, skill)
+            .and_then(|sk| sk.get("KEYSTAT"))
+            .map(|k| self.stat_mod(k) as i64)
+            .unwrap_or(0);
+        self.skill_total(skill) - self.skill_ranks(skill) as i64 - stat
     }
 
     /// Armor class of a game-mode AC type (Total, Flatfooted, ...).

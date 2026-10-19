@@ -126,7 +126,7 @@ impl BonusTable {
             value.trunc()
         };
         self.log.push(Contribution {
-            key: format!("{}.{}", cat, target.to_ascii_uppercase()),
+            key: BonusTable::key_of(&cat, target),
             btype: btype.unwrap_or("").to_string(),
             value,
             source: source.clone(),
@@ -134,11 +134,14 @@ impl BonusTable {
     }
 
     fn key_of(category: &str, target: &str) -> String {
-        format!(
-            "{}.{}",
-            category.to_ascii_uppercase(),
-            target.to_ascii_uppercase()
-        )
+        let cat = category.to_ascii_uppercase();
+        let mut target = target.to_ascii_uppercase();
+        // skill bonuses by type or key stat may be written `TYPE=x`
+        // or `TYPE.x`; both name the same target
+        if cat == "SKILL" && (target.starts_with("TYPE=") || target.starts_with("STAT=")) {
+            target = target.replace('=', ".");
+        }
+        format!("{}.{}", cat, target)
     }
 
     /// Contributions to `category.target`: (type, value, origin).
@@ -247,7 +250,7 @@ impl BonusTable {
         } else {
             value.trunc()
         };
-        let key = format!("{}.{}", cat, target.to_ascii_uppercase());
+        let key = BonusTable::key_of(&cat, target);
         let t = btype.unwrap_or("").to_ascii_uppercase();
         let (t, mode) = if let Some(x) = t.strip_suffix(".STACK") {
             (x.to_string(), Mode::Stack)
@@ -373,6 +376,18 @@ mod tests {
         b.add("SKILL", "Ride", Some("Armor"), -2.0);
         b.add("SKILL", "Ride", Some("Armor"), -3.0);
         assert_eq!(b.total("SKILL", "Ride"), -5.0);
+    }
+
+    #[test]
+    fn skill_type_and_stat_targets_either_spelling() {
+        let mut b = t();
+        b.add("SKILL", "TYPE=Craft (Stone)", Some("Racial"), 2.0);
+        b.add("SKILL", "STAT=INT", None, 1.0);
+        assert_eq!(b.total("SKILL", "TYPE.Craft (Stone)"), 2.0);
+        assert_eq!(b.total("SKILL", "STAT.INT"), 1.0);
+        // other categories keep the target as written
+        b.add("COMBAT", "TYPE=X", None, 1.0);
+        assert_eq!(b.total("COMBAT", "TYPE.X"), 0.0);
     }
 
     #[test]

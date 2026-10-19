@@ -184,14 +184,8 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 contents.push(x.item.clone());
             }
         }
-        let range = p
-            .item
-            .data
-            .get("RANGE")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.0)
-            + p.item.bonus(c, "EQMWEAPON", "RANGEADD", true);
         let has = |t: &str| types.iter().any(|x| x == t);
+        let range = weapon_range(c, &p.item, has("THROWN"), has("PROJECTILE"));
         if has("MELEE") && has("RANGED") {
             let mut melee: Vec<String> = types
                 .iter()
@@ -315,6 +309,44 @@ fn wield_bumped(s: &SheetCtx, w: &Weapon) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_default()
+}
+
+/// A weapon's range: its own range and item bonuses; for thrown (or
+/// projectile) weapons the character's RANGEADD, then RANGEMULT (in
+/// percent) applied, then POSTRANGEADD.
+fn weapon_range(
+    c: &crate::rules::calc::Calc,
+    item: &EqItem,
+    thrown: bool,
+    projectile: bool,
+) -> f64 {
+    let mut r = item
+        .data
+        .get("RANGE")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0)
+        + item.bonus(c, "EQMWEAPON", "RANGEADD", true).trunc();
+    let item_mult = item.bonus(c, "EQMWEAPON", "RANGEMULT", true).trunc();
+    let mut mult = 1.0
+        + if item_mult > 0.0 {
+            item_mult - 1.0
+        } else {
+            0.0
+        };
+    let mut post = 0.0;
+    let kind = if thrown {
+        Some("THROWN")
+    } else if projectile {
+        Some("PROJECTILE")
+    } else {
+        None
+    };
+    if let Some(k) = kind {
+        r += c.bonus.total("RANGEADD", k).trunc();
+        post = c.bonus.total("POSTRANGEADD", k).trunc();
+        mult += c.bonus.total("RANGEMULT", k).trunc() / 100.0;
+    }
+    (r * mult).trunc() + post
 }
 
 /// Weapon proficiency of an item.

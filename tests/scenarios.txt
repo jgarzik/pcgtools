@@ -263,3 +263,20 @@ equip add "Studded Leather"
 equip wear "Studded Leather"
 equip add "Rapier"
 equip wear "Rapier"
+
+== archer_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 16
+set stat STR 13
+race Human
+class add Fighter
+class add Fighter
+feat add "Point Blank Shot"
+ability add "Fighter Feat|Far Shot"
+feat add "Precise Shot"
+equip add Longbow
+equip wear Longbow
+equip add "Arrows (20)"
+equip add Javelin 3
+equip wear Javelin Carried

@@ -444,3 +444,26 @@ fn stat_columns_past_the_game_modes_stats_are_empty() {
     );
     assert_ne!(at(&m, "initiative[0]/dex_mod[0]"), "");
 }
+
+#[test]
+fn thrown_range_bonuses() {
+    // the distances of the range rows (a short range row of 30 is
+    // listed before the first increment beyond it)
+    let rows = |feat: bool| {
+        let mut cmds = vec!["equip add \"Throwing Cog\"", "equip wear \"Throwing Cog\""];
+        if feat {
+            cmds.push("feat add \"Long Arm\" --force");
+        }
+        let m = new_sheet(&cmds);
+        (0..5)
+            .filter_map(|i| {
+                m.iter()
+                    .find(|(k, _)| k.ends_with(&format!("/ranges[0]/range[{}]/distance[0]", i)))
+                    .map(|(_, v)| v.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(false), ["10'", "20'", "30'", "40'", "50'"]);
+    // (10 + 10) doubled, then 5 more
+    assert_eq!(rows(true), ["30'", "45'", "90'", "135'", "180'"]);
+}

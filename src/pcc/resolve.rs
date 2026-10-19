@@ -98,6 +98,14 @@ impl DataDirs {
 
 /// Lexically normalize `.` and `..` components.
 pub fn normalize(p: &Path) -> PathBuf {
+    // most paths have nothing to remove: no `.` or `..` part and no
+    // doubled separator (checked on the text, since the components
+    // skip a `.` in the middle)
+    let text = p.as_os_str().as_encoded_bytes();
+    let plain = !text.windows(2).any(|w| w == b"/." || w == b"//") && !text.starts_with(b".");
+    if plain {
+        return p.to_path_buf();
+    }
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
@@ -152,6 +160,17 @@ mod tests {
             normalize(Path::new("/a/b/../c/./d.lst")),
             PathBuf::from("/a/c/d.lst")
         );
+        // the written form too: a `.` in the middle, doubled separators
+        // and a leading `./` are removed; plain paths come back as they are
+        for (from, to) in [
+            ("/a/./b.lst", "/a/b.lst"),
+            ("/a//b.lst", "/a/b.lst"),
+            ("./a/b.lst", "a/b.lst"),
+            ("/a/b/c.lst", "/a/b/c.lst"),
+            ("/a/.hidden/c.lst", "/a/.hidden/c.lst"),
+        ] {
+            assert_eq!(normalize(Path::new(from)).to_str(), Some(to), "{}", from);
+        }
     }
 
     #[test]

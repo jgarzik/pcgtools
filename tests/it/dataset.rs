@@ -106,3 +106,28 @@ fn objects_and_operations() {
         .collect();
     assert!(errs.is_empty(), "{:?}", errs);
 }
+
+#[test]
+fn shared_include_diagnostics_reported_once() {
+    // two selected campaigns both include common.pcc, which names a
+    // missing file; its warning must be reported once, not per include
+    let data = common::fixture("mini/data");
+    let mut reg = Registry::new(DataDirs {
+        data: Some(data.clone()),
+        ..Default::default()
+    });
+    let plan = LoadPlan::build(
+        &mut reg,
+        &[
+            data.join("testbook/testbook.pcc"),
+            data.join("other/other.pcc"),
+        ],
+    );
+    let n = plan
+        .diags
+        .items
+        .iter()
+        .filter(|d| d.message.contains("missing_languages.lst"))
+        .count();
+    assert_eq!(n, 1, "{:?}", plan.diags.items);
+}

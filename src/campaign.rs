@@ -171,11 +171,14 @@ impl LoadPlan {
         let mut excludes = HashSet::new();
         for closure in &closures {
             for cpath in closure {
-                if seen_campaigns.insert(cpath.clone()) {
+                let first_seen = seen_campaigns.insert(cpath.clone());
+                if first_seen {
                     plan.campaigns.push(cpath.clone());
                 }
                 let c = reg.get(cpath).expect("loaded by closure");
-                plan.diags.extend(c.diags.clone());
+                if first_seen {
+                    plan.diags.extend(c.diags.clone());
+                }
                 excludes.extend(c.lst_excludes.iter().cloned());
                 for f in &c.files {
                     let Some(path) = &f.path else { continue };

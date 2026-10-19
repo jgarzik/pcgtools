@@ -123,7 +123,16 @@ fn pcgen_sheet(
         .skip_while(|l| !l.contains("Loaded character"))
         .filter(|l| l.contains(" SEVERE ") || l.contains(" WARNING "))
         // reports on the data's own syntax, not on the character
-        .filter(|l| !l.contains(" PreTypeTester:") && !l.contains(" LoggingProviderImpl:"))
+        .filter(|l| {
+            [
+                " PreTypeTester:",
+                " LoggingProviderImpl:",
+                " GameMode:",
+                " PrerequisiteUtilities:",
+            ]
+            .iter()
+            .all(|c| !l.contains(c))
+        })
         .map(|l| l.split_once(' ').map_or(l, |(_, r)| r).to_string())
         .collect();
     let xml = std::fs::read_to_string(&out).map_err(|_| {

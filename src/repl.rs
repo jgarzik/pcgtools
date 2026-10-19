@@ -157,6 +157,8 @@ impl Session {
         if let Some(gm) = &ctx.gamemode {
             ch.set_field("GAMEMODE", &gm.key);
         }
+        // a file without an age gets a random one each time PCGen loads it
+        ch.set_field("AGE", "0");
         // start with every stat at the usual average
         for st in ctx.dataset.objects(FileKind::Stat) {
             ch.set_stat(&st.key, 10);

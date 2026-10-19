@@ -392,3 +392,10 @@ fn bonus_skill_points_for_class_and_character_levels() {
     }
     assert_eq!(gains[3], gains[2] + 1.0, "{:?}", gains);
 }
+
+#[test]
+fn new_characters_record_an_age() {
+    // without one PCGen rolls an age each time it loads the file
+    let s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    assert_eq!(s.ch.pcg.value("AGE").as_deref(), Some("0"));
+}

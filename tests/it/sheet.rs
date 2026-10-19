@@ -336,6 +336,92 @@ fn class_type_fact_without_a_row_falls_back_to_types() {
     assert_eq!(at(&sheet_of(&s), "basics[Pat]/cr[0]"), "2");
 }
 
+/// The experience factor and penalty of a new Plainmode character
+/// after some commands.
+fn xp_factor(cmds: &[&str]) -> (String, String) {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let mut s = pcgtools::repl::Session::create("Plainmode", &["PL".into()], "Pat", dirs);
+    for c in cmds {
+        s.exec(c).unwrap();
+    }
+    let m = sheet_of(&s);
+    let x = "basics[Pat]/experience[0]";
+    (
+        at(&m, &format!("{}/factor[0]", x)).to_string(),
+        at(&m, &format!("{}/penalty[0]", x)).to_string(),
+    )
+}
+
+fn levels(class: &str, n: usize) -> Vec<String> {
+    vec![format!("class add {}", class); n]
+}
+
+#[test]
+fn multiclass_experience_penalty() {
+    let pair = |f: &str, p: &str| (f.to_string(), p.to_string());
+    let build = |race: &str, classes: &[(&str, usize)], extra: &[&str]| {
+        let mut cmds: Vec<String> = Vec::new();
+        if !race.is_empty() {
+            cmds.push(format!("race {}", race));
+        }
+        for (c, n) in classes {
+            cmds.extend(levels(c, *n));
+        }
+        cmds.extend(extra.iter().map(|s| s.to_string()));
+        let refs: Vec<&str> = cmds.iter().map(String::as_str).collect();
+        xp_factor(&refs)
+    };
+    // a single class has nothing to be penalized against
+    assert_eq!(build("", &[("Wanderer", 3)], &[]), pair("100%", "0%"));
+    // without a favored class, every class more than one level below
+    // the highest costs a fifth; the prestige class is exempt by its
+    // type, though its ClassType fact names a row with a penalty
+    let mix = [
+        ("Wanderer", 4),
+        ("Drifter", 1),
+        ("Seer", 1),
+        ("Scout", 2),
+        ("Warden", 1),
+    ];
+    assert_eq!(build("", &mix, &[]), pair("39%", "61%"));
+    // one level apart is no penalty
+    assert_eq!(
+        build("", &[("Wanderer", 2), ("Scout", 1)], &[]),
+        pair("100%", "0%")
+    );
+    // the favored class does not count, so the highest other class
+    // sets the mark
+    assert_eq!(build("Plainsfolk", &mix, &[]), pair("100%", "0%"));
+    assert_eq!(
+        build(
+            "Plainsfolk",
+            &[("Wanderer", 4), ("Scout", 3), ("Drifter", 1), ("Seer", 1)],
+            &[]
+        ),
+        pair("60%", "40%")
+    );
+    // any class favored: the highest class is passed over
+    assert_eq!(
+        build(
+            "Openfolk",
+            &[("Wanderer", 4), ("Scout", 3), ("Drifter", 1)],
+            &[]
+        ),
+        pair("80%", "20%")
+    );
+    // a favored subclass counts only once chosen
+    let seer = [("Seer", 4), ("Scout", 1)];
+    assert_eq!(build("Seerfolk", &seer, &[]), pair("80%", "20%"));
+    assert_eq!(
+        build("Seerfolk", &seer, &["class subclass Seer Oracle"]),
+        pair("100%", "0%")
+    );
+}
+
 /// A copy of the mini fixture with lines of the game mode's
 /// miscinfo.lst for which `drop` is true removed.
 fn fixture_copy(name: &str, drop: &dyn Fn(&str) -> bool) -> std::path::PathBuf {

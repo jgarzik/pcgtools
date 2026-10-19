@@ -67,8 +67,10 @@ pub fn build(s: &SheetCtx) -> Element {
         "next_level",
         c.min_xp(c.ecl() + 1).map(|v| v as i64).unwrap_or(0),
     );
-    xp.add("factor", "100%");
-    xp.add("penalty", "0%");
+    // shown as whole percents, cut short
+    let factor = (c.xp_multiplier() * 100.0) as i64;
+    xp.add("factor", format!("{}%", factor));
+    xp.add("penalty", format!("{}%", 100 - factor));
     b.push(xp);
     b.push(Element::new("eyes").with(Element::leaf("color", pcg("EYECOLOR"))));
     b.push(
@@ -382,50 +384,9 @@ fn face(s: &SheetCtx, units: &Units) -> Element {
 /// (FAVOREDCLASS): `Any` for HIGHESTLEVELCLASS, else the class keys
 /// in order, run together.
 fn favored(s: &SheetCtx) -> String {
-    use crate::rules::calc::SrcKind;
-    let pcg = &s.ch.pcg;
-    let mut keys: Vec<String> = Vec::new();
-    for src in &s.calc.sources {
-        let tag = match src.kind {
-            SrcKind::Race => "FAVCLASS",
-            SrcKind::Template => "FAVOREDCLASS",
-            _ => continue,
-        };
-        // choices recorded for %LIST
-        let applied = || -> Vec<String> {
-            let found = match src.kind {
-                SrcKind::Race => pcg
-                    .lines_tagged("RACE")
-                    .next()
-                    .and_then(|l| l.text("APPLIEDTO")),
-                _ => pcg.lines_tagged("TEMPLATESAPPLIED").find_map(|l| {
-                    let h = l.head()?;
-                    let name = h.children().iter().find(|c| c.tag == "NAME")?.value_text();
-                    if !name.eq_ignore_ascii_case(&src.obj.key) {
-                        return None;
-                    }
-                    h.children()
-                        .iter()
-                        .find(|c| c.tag == "APPLIEDTO")
-                        .map(|c| c.value_text())
-                }),
-            };
-            found
-                .map(|v| v.split(',').map(str::to_string).collect())
-                .unwrap_or_default()
-        };
-        for v in src.obj.values(tag) {
-            for k in v.split('|') {
-                if k.eq_ignore_ascii_case("HIGHESTLEVELCLASS") || k.eq_ignore_ascii_case("ANY") {
-                    return "Any".into();
-                }
-                if k == "%LIST" {
-                    keys.extend(applied());
-                } else {
-                    keys.push(k.to_string());
-                }
-            }
-        }
+    let (any, mut keys) = s.calc.favored_classes();
+    if any {
+        return "Any".into();
     }
     let sort_key = |k: &String| k.rsplit('.').next().unwrap_or(k).to_string();
     keys.sort_by_key(sort_key);

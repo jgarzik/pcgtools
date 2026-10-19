@@ -1,2 +1,6 @@
 CLASS:Drifter	HD:6
 CLASS:Wanderer	HD:8	TYPE:Base.PC	FACT:ClassType|Warrior
+CLASS:Seer	HD:4	TYPE:Base.PC
+SUBCLASS:Oracle	COST:0
+CLASS:Scout	HD:8	TYPE:Base.PC
+CLASS:Warden	HD:10	TYPE:Prestige	FACT:ClassType|PC

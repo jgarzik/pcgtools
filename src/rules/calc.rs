@@ -919,6 +919,129 @@ impl<'a> Calc<'a> {
             .find_map(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
     }
 
+    /// Favored classes: the race's FAVCLASS, the templates'
+    /// FAVOREDCLASS (with %LIST resolved to the recorded choices) and
+    /// the character file's FAVOREDCLASS line, as keys ("Class" or
+    /// "Class.Subclass").  The flag is set when any class is favored
+    /// (HIGHESTLEVELCLASS).
+    pub fn favored_classes(&self) -> (bool, Vec<String>) {
+        let pcg = &self.ch.pcg;
+        let mut any = false;
+        let mut keys: Vec<String> = Vec::new();
+        for src in &self.sources {
+            let tag = match src.kind {
+                SrcKind::Race => "FAVCLASS",
+                SrcKind::Template => "FAVOREDCLASS",
+                _ => continue,
+            };
+            // choices recorded for %LIST
+            let applied = || -> Vec<String> {
+                let found = match src.kind {
+                    SrcKind::Race => pcg
+                        .lines_tagged("RACE")
+                        .next()
+                        .and_then(|l| l.text("APPLIEDTO")),
+                    _ => pcg.lines_tagged("TEMPLATESAPPLIED").find_map(|l| {
+                        let h = l.head()?;
+                        let name = h.children().iter().find(|c| c.tag == "NAME")?.value_text();
+                        if !name.eq_ignore_ascii_case(&src.obj.key) {
+                            return None;
+                        }
+                        h.children()
+                            .iter()
+                            .find(|c| c.tag == "APPLIEDTO")
+                            .map(|c| c.value_text())
+                    }),
+                };
+                found
+                    .map(|v| v.split(',').map(str::to_string).collect())
+                    .unwrap_or_default()
+            };
+            for v in src.obj.values(tag) {
+                for k in v.split('|') {
+                    if k.eq_ignore_ascii_case("HIGHESTLEVELCLASS") || k.eq_ignore_ascii_case("ANY")
+                    {
+                        any = true;
+                    } else if k == "%LIST" {
+                        keys.extend(applied());
+                    } else {
+                        keys.push(k.to_string());
+                    }
+                }
+            }
+        }
+        // the file's line names a class the character was saved with
+        keys.extend(
+            pcg.lines_tagged("FAVOREDCLASS")
+                .filter_map(|l| l.head().map(|h| h.value_text()))
+                .filter(|v| self.ds.get(FileKind::Class, v).is_some()),
+        );
+        (any, keys)
+    }
+
+    /// Does the class carry the multiclass experience penalty?  Not when
+    /// any of its types names a class type row that turns it off.
+    fn has_xp_penalty(&self, cls: &Object) -> bool {
+        let Some(g) = self.gm else {
+            return true;
+        };
+        !cls.types().iter().any(|t| {
+            g.lines("miscinfo.lst", "CLASSTYPE")
+                .find(|l| l.value.eq_ignore_ascii_case(t))
+                .and_then(|l| l.get("XPPENALTY"))
+                .is_some_and(|v| v.eq_ignore_ascii_case("NO"))
+        })
+    }
+
+    /// The multiclass experience multiplier: a fifth less (down to
+    /// nothing) for each unfavored class more than one level below the
+    /// highest unfavored class.  A chosen subclass stands for its class;
+    /// when any class is favored, the highest is passed over and the
+    /// next one sets the mark.
+    pub fn xp_multiplier(&self) -> f64 {
+        let (any, favored) = self.favored_classes();
+        // favored subclasses are named Class.Subclass; only keys compare
+        let favored: Vec<String> = favored
+            .iter()
+            .map(|k| lower(k.rsplit('.').next().unwrap_or(k)))
+            .collect();
+        let mut unfavored: Vec<(usize, u32)> = Vec::new();
+        let (mut max, mut second): (Option<usize>, Option<usize>) = (None, None);
+        let (mut max_level, mut second_level) = (0, 0);
+        for (i, &(cls, level)) in self.classes.iter().enumerate() {
+            if !self.has_xp_penalty(cls) {
+                continue;
+            }
+            let eval = self.subclass_of(cls).unwrap_or(cls);
+            if favored.contains(&lower(&eval.key)) {
+                continue;
+            }
+            unfavored.push((i, level));
+            if level > max_level {
+                if any {
+                    (second, second_level) = (max, max_level);
+                }
+                (max, max_level) = (Some(i), level);
+            } else if any && level > second_level {
+                (second, second_level) = (Some(i), level);
+            }
+        }
+        let mut skip = vec![max];
+        if any && second_level > 0 {
+            max_level = second_level;
+            skip.push(second);
+        }
+        if max_level == 0 {
+            return 1.0;
+        }
+        let penalties = unfavored
+            .iter()
+            .filter(|(i, _)| !skip.contains(&Some(*i)))
+            .filter(|(_, l)| max_level as i64 - *l as i64 > 1)
+            .count();
+        (1.0 - penalties as f64 * 0.2).max(0.0)
+    }
+
     /// The character's region: as chosen, else from the last of its
     /// templates that names one.
     pub fn region(&self) -> Option<String> {

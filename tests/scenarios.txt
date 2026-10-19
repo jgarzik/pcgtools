@@ -799,3 +799,41 @@ class add Monk
 feat add "Wild Talent"
 skill Concentration 10
 class add "Psionic Fist" --stat WIS
+
+== xp_penalty_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 15
+set stat DEX 14
+set stat INT 13
+set stat WIS 12
+set stat CHA 12
+race Elf
+set align CG
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Fighter
+class add Rogue
+class add Cleric
+class add Bard --stat DEX
+class add Wizard
+class add Duelist --force
+
+== xp_penalty_any_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 14
+set stat WIS 12
+race Human
+set align CN
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Rogue
+class add Rogue
+class add Rogue
+class add Cleric --stat DEX

@@ -776,3 +776,25 @@ temp add "Disable Device"
 temp add "Magic Vestment (Armor)" "Studded Leather" --value 8
 temp add "Cloak of Chaos"
 temp mods off
+
+== psionic_fist_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+campaign 3.5 RSRD Psionics
+set stat STR 13
+set stat DEX 15
+set stat CON 12
+set stat INT 12
+set stat WIS 15
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk --stat WIS
+class add Monk
+class add Monk
+class add Monk
+feat add "Wild Talent"
+skill Concentration 10
+class add "Psionic Fist" --stat WIS

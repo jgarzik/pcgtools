@@ -142,10 +142,11 @@ impl BonusTable {
             target = target.replace('=', ".");
         }
         // structured targets (CLASS=x;LEVEL=n, TYPE=t;LEVEL=n) of the
-        // spell and skill pool categories may use '=' or '.' alike
+        // spell and skill pool categories, and UDAM's CLASS=x, may use
+        // '=' or '.' alike
         if matches!(
             cat.as_str(),
-            "SPELLCAST" | "SPELLCASTMULT" | "SPELLKNOWN" | "SPELLKNOWNMULT" | "SKILLPOOL"
+            "SPELLCAST" | "SPELLCASTMULT" | "SPELLKNOWN" | "SPELLKNOWNMULT" | "SKILLPOOL" | "UDAM"
         ) {
             target = target.replace('=', ".");
         }

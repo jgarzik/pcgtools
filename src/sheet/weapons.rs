@@ -872,7 +872,8 @@ fn udam_at(list: &str, size: usize) -> Option<&str> {
 }
 
 /// Unarmed damage dice: the best of 1d2, the classes' unarmed damage
-/// (UDAM on level lines), unarmed damage from the race, templates and
+/// (UDAM on level lines, at the class level plus any BONUS:UDAM levels
+/// for it), unarmed damage from the race, templates and
 /// abilities (UDAM), and the race's (1d3 at medium size,
 /// scaled by size).
 fn unarmed_dice(s: &SheetCtx) -> String {
@@ -914,7 +915,10 @@ fn unarmed_dice(s: &SheetCtx) -> String {
         }
     };
     for (cls, lvl) in c.classes() {
-        // the last level line at or below the class level with UDAM
+        // the last level line with UDAM at or below the class level,
+        // moved by BONUS:UDAM|CLASS.x levels
+        let lvl = (*lvl as i64)
+            .saturating_add(c.bonus.total("UDAM", &format!("CLASS.{}", cls.key)) as i64);
         let line = cls
             .sublines
             .iter()
@@ -923,8 +927,8 @@ fn unarmed_dice(s: &SheetCtx) -> String {
                 sl.value
                     .split(':')
                     .next()
-                    .and_then(|x| x.trim().parse::<u32>().ok())
-                    .is_some_and(|n| n > 0 && n <= *lvl)
+                    .and_then(|x| x.trim().parse::<i64>().ok())
+                    .is_some_and(|n| n > 0 && n <= lvl)
             })
             .filter_map(|sl| sl.tokens.iter().find(|t| t.tag == "UDAM"))
             .next_back();

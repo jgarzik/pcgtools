@@ -473,6 +473,22 @@ fn unarmed_damage_from_a_single_die() {
 }
 
 #[test]
+fn unarmed_damage_bonus_levels() {
+    let mut s = nova();
+    let damage = |s: &pcgtools::repl::Session| {
+        at(&sheet_of(s), "weapons[0]/unarmed[0]/damage[0]").to_string()
+    };
+    s.exec("class add Brawler").unwrap();
+    assert_eq!(damage(&s), "1d4");
+    // two more levels reach the level 3 line
+    s.exec("template add \"Fist Wraps\"").unwrap();
+    assert_eq!(damage(&s), "1d10");
+    // CLASS= names the class too; one level less is level 2
+    s.exec("template add \"Soft Fists\"").unwrap();
+    assert_eq!(damage(&s), "1d4");
+}
+
+#[test]
 fn wield_category_bonuses() {
     let w = "weapons[0]/weapon[0]";
     let one_handed = |s: &pcgtools::repl::Session| {

@@ -1237,7 +1237,8 @@ impl Character {
     }
 
     /// Add a spell to a class's book at a level.  A book not yet
-    /// recorded is made a prepared list.
+    /// recorded is made a prepared list.  Another copy of a spell
+    /// already in a list adds to the times on its line.
     pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
         if !self
             .pcg
@@ -1249,6 +1250,16 @@ impl Character {
                 "SPELLBOOK",
                 PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "2")]),
             );
+        }
+        if book != "Known Spells" {
+            if let Some(&i) = self
+                .spell_lines(spell, class, Some(book), Some(level))
+                .first()
+            {
+                let had = num::<i64>(self.pcg.lines[i].text("TIMES")).unwrap_or(1);
+                self.set_elem(i, "TIMES", &(had + times).to_string());
+                return;
+            }
         }
         self.insert_ordered(
             "SPELLNAME",
@@ -1266,18 +1277,48 @@ impl Character {
         );
     }
 
-    /// Remove a spell from a class's book.  Returns whether one was.
-    pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
-        let before = self.pcg.lines.len();
-        self.pcg.lines.retain(|l| {
-            !(l.tag() == Some("SPELLNAME")
-                && l.head()
+    /// SPELLNAME lines of a class's spell, optionally only in a book
+    /// and at a level.
+    fn spell_lines(
+        &self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+        level: Option<i64>,
+    ) -> Vec<usize> {
+        self.pcg
+            .indices("SPELLNAME")
+            .into_iter()
+            .filter(|&i| {
+                let l = &self.pcg.lines[i];
+                l.head()
                     .is_some_and(|h| h.value_text().eq_ignore_ascii_case(spell))
-                && l.text("CLASS")
-                    .is_some_and(|c| c.eq_ignore_ascii_case(class))
-                && book.is_none_or(|b| l.text("BOOK").is_some_and(|x| x.eq_ignore_ascii_case(b))))
-        });
-        before != self.pcg.lines.len()
+                    && l.text("CLASS")
+                        .is_some_and(|c| c.eq_ignore_ascii_case(class))
+                    && book.is_none_or(|b| {
+                        l.text("BOOK")
+                            .unwrap_or_else(|| "Known Spells".into())
+                            .eq_ignore_ascii_case(b)
+                    })
+                    && level.is_none_or(|v| num::<i64>(l.text("SPELLLEVEL")).unwrap_or(0) == v)
+            })
+            .collect()
+    }
+
+    /// Remove one copy of a spell from a class's book: the times on
+    /// its latest line go down by one, and the line goes at none.
+    /// Returns whether there was one.
+    pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
+        let Some(&i) = self.spell_lines(spell, class, book, None).last() else {
+            return false;
+        };
+        let had = num::<i64>(self.pcg.lines[i].text("TIMES")).unwrap_or(1);
+        if had > 1 {
+            self.set_elem(i, "TIMES", &(had - 1).to_string());
+        } else {
+            self.pcg.lines.remove(i);
+        }
+        true
     }
 
     /// Followers: (name, type, race, file).
@@ -1444,7 +1485,12 @@ DOMAIN:Light|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]\n";
             .pcg
             .lines_tagged("SPELLBOOK")
             .any(|l| l.head().unwrap().value_text() == "Gadgets"));
+        // two copies, removed one at a time
         assert!(c.remove_spell("spark", "Tinker", Some("Gadgets")));
+        assert!(c
+            .spells()
+            .contains(&("Spark".into(), "Tinker".into(), "Gadgets".into(), 1, 1)));
+        assert!(c.remove_spell("Spark", "Tinker", None));
         assert!(!c.remove_spell("Spark", "Tinker", None));
         assert_eq!(c.spells().len(), 1);
     }

@@ -225,7 +225,7 @@ impl Campaign {
         }
         if c.name.is_empty() {
             c.diags
-                .push(Diagnostic::warning("campaign has no CAMPAIGN tag").at(&path, 0));
+                .push(Diagnostic::info("campaign has no CAMPAIGN tag").at(&path, 0));
         }
         c.key = key.unwrap_or_else(|| c.name.clone());
         c
@@ -261,7 +261,7 @@ mod tests {
 # A test campaign
 CAMPAIGN:Book of Tests
 KEY:BoT
-GAMEMODE:35e|Pathfinder
+GAMEMODE:Basic|Heroic
 BOOKTYPE:Core Rules|Setting
 RANK:3
 !PRECAMPAIGN:1,Other Book
@@ -288,7 +288,7 @@ not a tag line
         let c = Campaign::from_pcc(&pcc, &dirs);
         assert_eq!(c.name, "Book of Tests");
         assert_eq!(c.key, "BoT");
-        assert_eq!(c.gamemodes, vec!["35e", "Pathfinder"]);
+        assert_eq!(c.gamemodes, vec!["Basic", "Heroic"]);
         assert_eq!(c.booktypes, vec!["Core Rules", "Setting"]);
         assert_eq!(c.rank, 3);
         assert_eq!(c.prereqs, vec!["!PRECAMPAIGN:1,Other Book"]);
@@ -296,7 +296,7 @@ not a tag line
         assert_eq!(c.files[0].kind, FileKind::Spell);
         assert_eq!(c.files[1].fref.prereqs.len(), 1);
         assert_eq!(c.includes.len(), 1);
-        assert!(c.supports_gamemode("pathfinder"));
+        assert!(c.supports_gamemode("heroic"));
         assert_eq!(c.meta("SOURCELONG"), Some("Book of Tests"));
     }
 }

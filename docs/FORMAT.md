@@ -12,7 +12,7 @@ Contents:
 2. [Text encoding and lines](#2-text-encoding-and-lines)
 3. [LST data files](#3-lst-data-files)
 4. [PCC campaign files](#4-pcc-campaign-files)
-5. Per-file-type structure (TBD)
+5. [Per-kind structure and loading](#5-per-kind-structure-and-loading)
 6. Token value syntax (TBD)
 7. Game mode files (TBD)
 8. PCG character files (TBD)
@@ -170,7 +170,7 @@ The suffix is recognized anywhere after the first character of the
 head, with `.COPY` checked first, then `.MOD`, then `.FORGET`. (Names
 containing these strings therefore cannot be defined directly.)
 
-Operations are not applied in file order. See 5.x for the deferral
+Operations are not applied in file order. See 5.3 for the deferral
 rules.
 
 ### 3.4 Source header lines
@@ -318,7 +318,7 @@ character selects the base directory:
 
 A single `/` after a prefix character is optional (`@/x.lst` and
 `@x.lst` are the same). File names are case-sensitive on most
-filesystems, but data authored on Windows or macOS sometimes gets case
+filesystems, but data authored on case-insensitive filesystems sometimes gets case
 wrong; `pcgtools` falls back to a case-insensitive match.
 
 ### 4.5 Campaign includes
@@ -367,3 +367,126 @@ Given the set of campaigns the user selected:
    `EQUIPMENT`, `COMPANIONMOD`, `KIT`, `BIOSET`.
 
    Within a kind, files load in the collected order.
+
+---
+
+## 5. Per-kind structure and loading
+
+### 5.1 Simple object kinds
+
+Most kinds hold exactly one object per record, named by the head:
+
+`SIZE`, `STAT`, `SAVE`, `ALIGNMENT`, `WEAPONPROF`, `ARMORPROF`,
+`SHIELDPROF`, `SKILL`, `LANGUAGE`, `FEAT`, `ABILITY`, `RACE`, `DOMAIN`,
+`SPELL`, `DEITY`, `TEMPLATE`, `EQUIPMOD`, `EQUIPMENT`.
+
+Identity rules:
+
+* The key is the name unless a `KEY:` token overrides it.
+* `SIZE`, `STAT` and `ALIGNMENT` objects are keyed by their `ABB:`
+  abbreviation (`STR`, `M`, `LG`), and data refers to them that way.
+* `ABILITY` objects live in an ability category, given by a
+  `CATEGORY:` token; keys need only be unique within a category.
+  Modification heads must name the category (`CATEGORY=FEAT|Key.MOD`).
+* Key comparison is case-insensitive.
+* Defining a key that already exists is an error; the later definition
+  is ignored. (Listing the same file twice, for example with different
+  INCLUDE filters, is not a duplicate.)
+
+### 5.2 Structured kinds
+
+**CLASS.** A class file mixes several line types:
+
+| Head | Meaning |
+|---|---|
+| `CLASS:Name` | the class itself; further `CLASS:Name` lines in the same file add more tokens to it |
+| `N` (an integer) | level line: tokens that apply when the class reaches level N |
+| `N:REPEATLEVEL:step[|SKIP=s][|MAX=m]` | level line repeated every *step* levels from N |
+| `SUBCLASS:Name` | an alternative variant of the current class (e.g. a specialization) |
+| `SUBCLASSLEVEL:N` | level line for the most recent subclass |
+| `SUBSTITUTIONCLASS:Name` | a substitution variant of the current class |
+| `SUBSTITUTIONLEVEL:N` | level line for the most recent substitution class |
+| `CLASS:Name.MOD` | modify a class; following level and subclass lines belong to the modification until the next `CLASS:` line |
+
+**KIT.** A kit starts with `STARTPACK:Name` and owns the lines that
+follow it, each of the form `TAG:value<TAB>tokens`, where `TAG` is one
+of `ABILITY`, `AGE`, `ALIGN`, `CLASS`, `DEITY`, `FEAT`, `FUNDS`,
+`GEAR`, `GENDER`, `KIT`, `LANGBONUS`, `LEVELABILITY`, `NAME`, `PROF`,
+`RACE`, `SELECT`, `SKILL`, `SPELLS`, `STAT`, `TABLE`, `TEMPLATE`.
+A `REGION:x` line applies to every kit that follows it in the file.
+
+**BIOSET.** `AGESET:n|Name` lines declare age categories; the
+`RACENAME:Race` lines that follow give per-race age, height, weight
+and appearance data for that age set. Heads repeat across files.
+
+**COMPANIONMOD.** Each line is a modifier applied to companions:
+`FOLLOWER:Type=Level` (for companions of a master with that level
+variable) or `MASTERBONUSRACE:Race`. Heads repeat by design.
+
+**ABILITYCATEGORY.** `ABILITYCATEGORY:Name` lines define the categories
+(pools) abilities belong to.
+
+**DATACONTROL.** One declaration per line:
+
+| Head | Declares |
+|---|---|
+| `FACTDEF:KIND|Name` | a named single-valued fact on objects of a kind |
+| `FACTSETDEF:KIND|Name` | a named multi-valued fact |
+| `DEFAULTVARIABLEVALUE:Type|value` | the default for a variable format |
+| `FUNCTION:Name` | a data-defined formula function |
+| `DYNAMICSCOPE:Name` | a scope for dynamic objects |
+
+**VARIABLE.** One declaration per line: `GLOBAL:[Format=]Name`,
+`LOCAL:Scope|[Format=]Name`, or `CHANNEL:Scope|[Format=]Name`.
+
+**DYNAMIC.** One object per line, `Scope:Name<TAB>tokens`, defining
+objects of a dynamic scope declared in a data control file.
+
+**GLOBALMODIFIER.** One `MODIFY:` modifier per line, applied globally.
+
+**DATATABLE.** Comma-separated values, not TAB-separated:
+
+```
+STARTTABLE:Name
+Column1,Column2,...
+FORMAT1,FORMAT2,...
+value,value,...
+...
+ENDTABLE:
+```
+
+Fields may be double-quoted (with `""` for a literal quote). Rows that
+are entirely empty, and lines starting with `#` or `"#`, are ignored.
+
+### 5.3 Modification order
+
+Within one kind, all files are read first. Then deferred operations
+from all those files run in three passes:
+
+1. every `.COPY` (copy, then apply the line's tokens to the copy),
+2. every `.MOD`,
+3. every `.FORGET`.
+
+Each pass processes operations in load order. Consequences:
+
+* A `.MOD` may appear before the definition it modifies, even in an
+  earlier file.
+* A `.COPY` sees the original object, not any `.MOD` applied to it.
+* Operations never cross kinds: a spell file cannot modify a class.
+* A `.MOD` whose target does not exist is an error — unless the target
+  was dropped by an INCLUDE/EXCLUDE filter.
+
+When a `.MOD` appends a token, the token is added after the object's
+existing tokens. Whether that replaces or adds to an earlier value
+depends on the tag: single-valued tags (such as `HD` or `COST`) take
+the last value, list-valued tags (such as `BONUS` or `ABILITY`)
+accumulate. The special value `.CLEAR` (as in `TYPE:.CLEAR`) removes
+all earlier values of that tag; several tags support further
+`.CLEAR.` variants inside their own value syntax (chapter 6).
+
+### 5.4 Source information
+
+Each object records the source tags from the file's header line
+(`SOURCELONG`, `SOURCESHORT`, `SOURCEWEB`, `SOURCEDATE`) unless the
+object's own tokens supply them. `SOURCEPAGE` is normally given per
+object.

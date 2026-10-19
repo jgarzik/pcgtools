@@ -87,14 +87,35 @@ enum Command {
         pcc: Vec<PathBuf>,
     },
 
-    /// Dump a PCC file and its LST data as JSON (prototype reader)
-    Dump {
-        /// Pathname of PCC file, relative to the data directory
-        pccfile: String,
+    /// Load a campaign selection and summarize the result
+    Load {
+        /// Selected PCC files
+        #[arg(required = true)]
+        pcc: Vec<PathBuf>,
 
-        /// Base directory where PCC and LST files are found
-        #[arg(short, long, default_value = ".")]
-        datadir: String,
+        /// Do not print diagnostics
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Load a campaign selection and print the whole dataset as JSON
+    Dump {
+        /// Selected PCC files
+        #[arg(required = true)]
+        pcc: Vec<PathBuf>,
+    },
+
+    /// Show one object, merged, with provenance
+    Show {
+        /// Selected PCC files
+        #[arg(short, long = "pcc", required = true)]
+        pcc: Vec<PathBuf>,
+
+        /// Object kind (SPELL, CLASS, ABILITY, ...)
+        kind: String,
+
+        /// Object key (abilities: CATEGORY|Key or Key)
+        key: String,
     },
 
     /// Parse a data file and print its syntax tree as JSON
@@ -121,7 +142,9 @@ fn main() -> ExitCode {
             cmd::campaign::campaigns(o, dir.as_deref(), gamemode.as_deref())
         }
         Command::Deps { pcc } => cmd::campaign::deps(o, pcc),
-        Command::Dump { pccfile, datadir } => cmd::misc::dump(pccfile, datadir),
+        Command::Load { pcc, quiet } => cmd::data::load(o, pcc, *quiet),
+        Command::Dump { pcc } => cmd::data::dump(o, pcc),
+        Command::Show { pcc, kind, key } => cmd::data::show(o, pcc, kind, key),
         Command::Parse { file } => cmd::misc::parse(file),
         Command::Roundtrip { paths } => cmd::misc::roundtrip(paths),
     };

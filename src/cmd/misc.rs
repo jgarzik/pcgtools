@@ -61,16 +61,3 @@ pub fn parse(file: &Path) -> CmdResult {
     print_json(&recs);
     Ok(true)
 }
-
-pub fn dump(pccfile: &str, datadir: &str) -> CmdResult {
-    let mut datadir = datadir.to_string();
-    if !datadir.ends_with('/') {
-        datadir.push('/');
-    }
-    let cfg = pcgtools::legacy::PccConfig { datadir };
-    let mut pcc = pcgtools::legacy::Pcc::new(&cfg);
-    pcc.read(pccfile, true)
-        .map_err(|e| pcgtools::Error::io(Path::new(pccfile), e))?;
-    pcc.display();
-    Ok(true)
-}

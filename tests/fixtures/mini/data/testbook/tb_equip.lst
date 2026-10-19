@@ -1,0 +1,5 @@
+Wooden Spoon	TYPE:Goods.Kitchen	COST:1	WT:0.5
+Cursed Spoon	TYPE:Goods.Kitchen	COST:1
+Wooden Spoon.COPY=Silver Spoon	COST:25
+Wooden Spoon	TYPE:Duplicate
+	WT:9

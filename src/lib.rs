@@ -15,8 +15,8 @@
 //! See `docs/FORMAT.md` for a description of the file formats.
 
 pub mod campaign;
+pub mod dataset;
 pub mod error;
-pub mod legacy;
 pub mod lst;
 pub mod pcc;
 pub mod text;

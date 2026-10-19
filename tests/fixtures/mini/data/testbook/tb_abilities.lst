@@ -1,0 +1,7 @@
+SOURCELONG:Test Book	SOURCESHORT:TB
+# feats
+Steady Hands	CATEGORY:FEAT	TYPE:General.Combat	BONUS:COMBAT|TOHIT|1	SOURCEPAGE:p.10
+Quick Step	CATEGORY:FEAT	KEY:QuickStep	TYPE:General	PREABILITY:1,CATEGORY=FEAT,Steady Hands
+CATEGORY=FEAT|Steady Hands.MOD	DESC:Hands do not shake.
+CATEGORY=FEAT|QuickStep.COPY=Quicker Step	TYPE:.CLEAR	TYPE:Advanced
+CATEGORY=FEAT|Loud Voice.MOD	DESC:filtered target, no error

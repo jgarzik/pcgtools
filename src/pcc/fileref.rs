@@ -197,9 +197,9 @@ mod tests {
 
     #[test]
     fn paths() {
-        let p = PathSpec::parse("@/pathfinder/core/spells.lst");
+        let p = PathSpec::parse("@/fantasy/core/spells.lst");
         assert_eq!(p.base, PathBase::Data);
-        assert_eq!(p.rel, "pathfinder/core/spells.lst");
+        assert_eq!(p.rel, "fantasy/core/spells.lst");
         assert_eq!(PathSpec::parse("*/_universal/x.lst").base, PathBase::Any);
         assert_eq!(PathSpec::parse("&x.lst").base, PathBase::Vendor);
         assert_eq!(PathSpec::parse("$/x.lst").base, PathBase::Homebrew);

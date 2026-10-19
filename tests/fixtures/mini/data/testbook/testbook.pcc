@@ -1,0 +1,21 @@
+# Synthetic test campaign for pcgtools
+CAMPAIGN:Test Book
+KEY:TB
+GAMEMODE:Testmode
+BOOKTYPE:Core Rules
+RANK:1
+SOURCELONG:Test Book
+SOURCESHORT:TB
+STAT:tb_stats.lst
+SIZE:tb_sizes.lst
+ABILITYCATEGORY:tb_abilitycategories.lst
+ABILITY:tb_abilities.lst
+ABILITY:@/common/shared_abilities.lst|(INCLUDE:CATEGORY=FEAT,Keen Nose)
+SPELL:tb_spells.lst
+SPELL:tb_spells_mod.lst|PRECAMPAIGN:1,TB
+SPELL:tb_spells_never.lst|PRECAMPAIGN:1,Missing Book
+CLASS:tb_classes.lst
+EQUIPMENT:tb_equip.lst|(EXCLUDE:Cursed Spoon)
+KIT:tb_kits.lst
+DATATABLE:tb_tables.lst
+PCC:@/common/common.pcc

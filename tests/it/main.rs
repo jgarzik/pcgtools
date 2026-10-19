@@ -8,3 +8,4 @@ mod cli;
 mod common;
 mod corpus;
 mod dataset;
+mod gamemode;

@@ -14,9 +14,11 @@
 
 use crate::catalog::{Catalog, Status};
 use crate::error::{Diagnostic, Diagnostics};
+use crate::gamemode::GameModes;
 use crate::lst::grammar::{classify, Role};
 use crate::lst::kind::FileKind;
 use crate::lst::line::{is_tag_name, LineKind, LstFile};
+use crate::pcc::Campaign;
 use crate::token::bonus::Bonus;
 use crate::token::pre::Prereq;
 use std::path::Path;
@@ -166,6 +168,26 @@ pub fn lint_lst(path: &Path, kind: FileKind, lf: &LstFile, opts: &LintOptions) -
             }
         }
         let _ = line_no;
+    }
+    diags
+}
+
+/// Check that each campaign's GAMEMODE values name a known game mode.
+pub fn lint_gamemodes<'a>(
+    campaigns: impl IntoIterator<Item = &'a Campaign>,
+    modes: &GameModes,
+) -> Diagnostics {
+    let mut diags = Diagnostics::default();
+    for c in campaigns {
+        if c.gamemodes.is_empty() && !c.name.is_empty() {
+            diags.push(Diagnostic::warning("campaign has no GAMEMODE").at(&c.path, 0));
+        }
+        for g in &c.gamemodes {
+            if modes.find(g).is_none() {
+                diags
+                    .push(Diagnostic::warning(format!("unknown game mode '{}'", g)).at(&c.path, 0));
+            }
+        }
     }
     diags
 }

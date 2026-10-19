@@ -1,0 +1,7 @@
+# synthetic game mode
+ALLOWEDMODES:Testmode|TM
+GAMEMODEKEY:Testmode
+BONUSSTACKS:Dodge.Circumstance
+BONUSSTACKS:Untyped
+TAB:SUMMARY		NAME:in_summary	VISIBLE:YES
+ACNAME:Defense

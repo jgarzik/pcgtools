@@ -220,3 +220,33 @@ fn campaigns_lists_fixture() {
     assert!(out.contains("TB\tTestmode\t1\tCore Rules"), "{}", out);
     assert!(out.contains("Common Stuff"));
 }
+
+#[test]
+fn gamemode_listing() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let o = pcgtools(&["--system-dir", &sys, "gamemode"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("Testmode\tTestmode|TM"));
+    let o = pcgtools(&["--system-dir", &sys, "gamemode", "TM", "-f", "level.lst"]);
+    assert!(o.status.success());
+    assert!(stdout(&o).contains("LEVEL:2\tMINXP:3000"), "{}", stdout(&o));
+    let o = pcgtools(&["--system-dir", &sys, "gamemode", "Nope"]);
+    assert!(!o.status.success());
+}
+
+#[test]
+fn lint_reports_unknown_gamemode() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let f = scratch("gm.pcc");
+    std::fs::write(&f, "CAMPAIGN:X\nGAMEMODE:Nowhere\n").unwrap();
+    let o = pcgtools(&["--system-dir", &sys, "lint", f.to_str().unwrap()]);
+    assert!(
+        stdout(&o).contains("unknown game mode 'Nowhere'"),
+        "{}",
+        stdout(&o)
+    );
+}

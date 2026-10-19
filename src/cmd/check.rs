@@ -36,8 +36,13 @@ pub fn lint(o: &GlobalOpts, a: LintArgs<'_>) -> CmdResult {
             diags.extend(lint_lst(f, kind, &lf, &a.opts));
         }
     } else {
-        let (_, plan, ds) = load_dataset(o, a.files);
+        let (reg, plan, ds) = load_dataset(o, a.files);
         diags.extend(plan.diags.clone());
+        if let Some(gm) = reg.dirs.gamemodes() {
+            let modes = pcgtools::gamemode::GameModes::scan(&gm);
+            let camps = plan.campaigns.iter().filter_map(|p| reg.get(p));
+            diags.extend(pcgtools::lint::lint_gamemodes(camps, &modes));
+        }
         let mut seen = HashSet::new();
         for pf in plan.ordered() {
             if !seen.insert((pf.kind, pf.path.clone())) {

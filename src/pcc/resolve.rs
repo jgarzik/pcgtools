@@ -18,6 +18,8 @@ pub struct DataDirs {
     pub data: Option<PathBuf>,
     pub vendor: Option<PathBuf>,
     pub homebrew: Option<PathBuf>,
+    /// the `system` directory (holds `gameModes/`)
+    pub system: Option<PathBuf>,
 }
 
 impl DataDirs {
@@ -32,6 +34,7 @@ impl DataDirs {
             data: opt("data"),
             vendor: opt("vendordata"),
             homebrew: opt("homebrewdata"),
+            system: opt("system"),
         }
     }
 
@@ -55,7 +58,16 @@ impl DataDirs {
         self.data = self.data.or(other.data);
         self.vendor = self.vendor.or(other.vendor);
         self.homebrew = self.homebrew.or(other.homebrew);
+        self.system = self.system.or(other.system);
         self
+    }
+
+    /// The `system/gameModes` directory, if known.
+    pub fn gamemodes(&self) -> Option<PathBuf> {
+        self.system
+            .as_ref()
+            .map(|s| s.join("gameModes"))
+            .filter(|p| p.is_dir())
     }
 
     /// Resolve a path spec written in the PCC file `pcc`.  Returns None

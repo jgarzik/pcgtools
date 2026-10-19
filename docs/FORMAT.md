@@ -14,7 +14,7 @@ Contents:
 4. [PCC campaign files](#4-pcc-campaign-files)
 5. [Per-kind structure and loading](#5-per-kind-structure-and-loading)
 6. [Token value syntax](#6-token-value-syntax)
-7. Game mode files (TBD)
+7. [Game mode files](#7-game-mode-files)
 8. PCG character files (TBD)
 
 Conventions: `<TAB>` is a horizontal tab (U+0009). Grammar fragments use
@@ -620,3 +620,58 @@ Newer data also uses a separate typed formula language in `MODIFY`
 tokens and data control files: `MODIFY:var|operation|formula` with
 operations such as `SET`, `ADD`, `MULTIPLY`, `MAX`, `MIN`, and a
 `PRIORITY=n` option. Its expressions use the same operator grammar.
+
+---
+
+## 7. Game mode files
+
+A *game mode* is a rules system (a particular edition of a game, or a
+house variant). Each lives in its own directory under
+`system/gameModes/`, and holds constants and UI settings that data
+files rely on. A directory named `default` supplies any file a mode
+does not provide itself.
+
+### 7.1 Line syntax
+
+All game mode files share one line shape:
+
+```
+line = head { TAB { TAB } token } ;
+head = TAG ":" value ;
+```
+
+The head tag says what the line declares; the remaining tokens are its
+attributes. Comments and blank lines follow the usual rules (2.3).
+Unlike LST files, leading whitespace is ignored.
+
+### 7.2 Identity
+
+| Tag (in `miscinfo.lst`) | Meaning |
+|---|---|
+| `GAMEMODEKEY` | the mode's identity; defaults to the directory name |
+| `ALLOWEDMODES` | `|`-separated names that campaign `GAMEMODE` tags may use for this mode |
+| `DISPLAYORDER` | ordering in menus |
+
+A campaign is usable under a mode when one of its `GAMEMODE` values
+equals the mode's key or one of its allowed names (case-insensitive).
+
+### 7.3 Files
+
+| File | Purpose | Typical heads |
+|---|---|---|
+| `miscinfo.lst` | assorted constants and UI setup | `ACNAME`, `BONUSSTACKS`, `BABMAXATT`, `BABATTCYC`, `BABMINVAL`, `SKILLMULTIPLIER`, `SPELLBASEDC`, `CURRENCYUNITABBREV`, `DEFAULTUNITSET`, `UNITSET`, `TAB`, `ROLLMETHOD`, `WIELDCATEGORY`, `ABILITYCATEGORY`, `CLASSTYPE`, `BASEDICE`, `ACTYPE`, `WEAPONTYPE`, ... |
+| `statsandchecks.lst` | bonus spells by stat score (older modes also declare stats and saves here) | `BONUSSPELLLEVEL` |
+| `level.lst` | experience tables; a `LEVEL:LEVEL` row gives a formula for higher levels | `XPTABLE`, `LEVEL` with `MINXP`, `CSKILLMAX`, `CCSKILLMAX` |
+| `load.lst` | carrying capacity | `SIZEMULT`, `LOADSCORE`, `ENCUMBRANCE` |
+| `sizeAdjustment.lst` | size categories (newer modes define sizes in data instead) | |
+| `rules.lst` | optional rules the user can toggle | `NAME` with `VAR`, `DEFAULT`, `EXCLUDE`, `DESC` |
+| `equipmentslots.lst` | where equipment can be worn | `NUMSLOTS`, `EQSLOT` with `CONTAINS`, `NUMBER` |
+| `codeControl.lst` | switches selecting engine behavior | `ALIGNMENTFEATURE`, `DOMAINFEATURE`, ... |
+| `migration.lst` | renamed object keys, for loading old characters | `RACE:Old` with `NEWKEY`, `MAXVER` |
+| `pointbuymethods_system.lst` | point-buy stat generation | `METHOD`, `STAT` |
+| `bio/biosettings.lst` | default age/height/weight tables (as BIOSET, 5.2) | `AGESET`, `RACENAME` |
+| `bio/traits.lst` | random personality traits | |
+| `paperInfo.lst`, `equipIcons.lst` | output page sizes, UI icons | |
+
+`BONUSSTACKS` lists, separated by `.`, the bonus types that stack with
+themselves (see 6.3); the line may repeat.

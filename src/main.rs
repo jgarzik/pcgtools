@@ -44,6 +44,10 @@ pub struct GlobalOpts {
     #[arg(long, global = true)]
     pub homebrew_dir: Option<PathBuf>,
 
+    /// System directory (contains gameModes/)
+    #[arg(long, global = true)]
+    pub system_dir: Option<PathBuf>,
+
     /// Emit JSON instead of text
     #[arg(long, global = true)]
     pub json: bool,
@@ -57,6 +61,7 @@ impl GlobalOpts {
             data: self.data_dir.clone(),
             vendor: self.vendor_dir.clone(),
             homebrew: self.homebrew_dir.clone(),
+            system: self.system_dir.clone(),
         };
         let install = self
             .pcgen_root
@@ -226,6 +231,16 @@ enum Command {
         min: String,
     },
 
+    /// List game modes, or show one game mode's settings
+    Gamemode {
+        /// Game mode name or alias
+        name: Option<String>,
+
+        /// Show only this file (e.g. miscinfo.lst, level.lst)
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+
     /// List known tags from the built-in catalog
     Tags {
         /// Only this scope (a file kind, GLOBAL, PRE, BONUS, CLASSLEVEL, ...)
@@ -333,6 +348,9 @@ fn main() -> ExitCode {
             check,
             write,
         } => cmd::edit::fmt(files, *check, *write),
+        Command::Gamemode { name, file } => {
+            cmd::campaign::gamemode(o, name.as_deref(), file.as_deref())
+        }
         Command::Tags { scope } => cmd::check::tags(o, scope.as_deref()),
         Command::Parse { file } => cmd::misc::parse(file),
         Command::Roundtrip { paths } => cmd::misc::roundtrip(paths),

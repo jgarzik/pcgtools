@@ -11,6 +11,7 @@
 use super::{print_json, report, CmdResult};
 use crate::GlobalOpts;
 use pcgtools::campaign::{LoadPlan, Registry};
+use pcgtools::gamemode::GameModes;
 use pcgtools::{Diagnostics, Error};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -94,4 +95,64 @@ pub fn deps(o: &GlobalOpts, pcc: &[PathBuf]) -> CmdResult {
     }
     let errs = report(&plan.diags);
     Ok(!errs)
+}
+
+pub fn gamemode(o: &GlobalOpts, name: Option<&str>, file: Option<&str>) -> CmdResult {
+    let dirs = o.dirs(None);
+    let Some(gmdir) = dirs.gamemodes() else {
+        return Err(Error::Other(
+            "no system directory known; use --system-dir or --pcgen-root".into(),
+        ));
+    };
+    let modes = GameModes::scan(&gmdir);
+    report(&modes.diags);
+
+    let Some(name) = name else {
+        if o.json {
+            let v: Vec<_> = modes
+                .modes
+                .iter()
+                .map(|m| json!({"key": m.key, "aliases": m.aliases, "dir": m.dir}))
+                .collect();
+            print_json(&v);
+        } else {
+            for m in &modes.modes {
+                println!("{}\t{}", m.key, m.aliases.join("|"));
+            }
+        }
+        return Ok(true);
+    };
+
+    let Some(gm) = modes.find(name) else {
+        eprintln!("unknown game mode '{}'", name);
+        return Ok(false);
+    };
+    report(&gm.diags);
+    if o.json {
+        match file {
+            Some(f) => print_json(&gm.file(f)),
+            None => print_json(gm),
+        }
+        return Ok(true);
+    }
+    println!("game mode {} ({})", gm.key, gm.dir.display());
+    println!("aliases: {}", gm.aliases.join(", "));
+    for (fname, f) in &gm.files {
+        if file.is_some_and(|w| w != fname) {
+            continue;
+        }
+        let inh = if f.inherited { " (from default)" } else { "" };
+        println!("== {}{}: {} lines", fname, inh, f.lines.len());
+        if file.is_some() {
+            for l in &f.lines {
+                let toks: Vec<String> = l
+                    .tokens
+                    .iter()
+                    .map(|(t, v)| format!("{}:{}", t, v))
+                    .collect();
+                println!("{}:{}\t{}", l.tag, l.value, toks.join("\t"));
+            }
+        }
+    }
+    Ok(true)
 }

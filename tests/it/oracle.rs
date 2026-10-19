@@ -2,8 +2,9 @@
 // sheets (code/testsuite/csheets/*.xml), read in place from PCGEN_ROOT.
 //
 // The gate covers the pf and 35e characters on BAB, saves, hit points,
-// armor class and skills.  ORACLE_ONLY=name limits the run to one
-// character; ORACLE_VERBOSE=1 prints every mismatch.
+// armor class and skills: any mismatch there fails the test.  Other
+// game modes are reported only.  ORACLE_ONLY=name limits the run to
+// one character; ORACLE_VERBOSE=1 prints every mismatch.
 
 use crate::common;
 use pcgtools::context::Context;
@@ -194,7 +195,7 @@ fn oracle_derived_stats() {
             eprintln!("  {}", m);
         }
     }
-    if std::env::var("ORACLE_GATE").is_ok() {
-        assert!(gate_ok, "derived statistics differ from the oracle");
+    if only.is_none() {
+        assert!(gate_ok, "pf/35e derived statistics differ from the oracle");
     }
 }

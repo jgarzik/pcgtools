@@ -52,6 +52,8 @@ pub enum SrcKind {
     EquipMod,
     Deity,
     Domain,
+    /// a companion modifier granting bonuses to the master
+    MasterBonus,
 }
 
 /// An active object and the tokens it currently contributes.
@@ -76,6 +78,8 @@ pub struct Item<'a> {
     pub name: String,
     pub obj: &'a Object,
     pub eqmods: Vec<&'a Object>,
+    /// choices made for each modifier (parallel to `eqmods`)
+    pub eqmod_choices: Vec<Vec<String>>,
     pub location: String,
 }
 
@@ -91,6 +95,8 @@ pub struct Sheet {
     pub skills: BTreeMap<String, i64>,
     pub armor_check: i64,
     pub abilities: Vec<String>,
+    /// equipped items: "location: item [eqmods]"
+    pub equipped: Vec<String>,
     pub passes: usize,
     /// names evaluated as zero because nothing defines them
     pub unknown: BTreeMap<String, usize>,
@@ -180,7 +186,7 @@ impl<'a> Calc<'a> {
         }
         if let Some(g) = gm {
             for l in g.lines("rules.lst", "NAME") {
-                if let Some(v) = l.get("VAR") {
+                if let Some(v) = l.get("VAR").or_else(|| l.get("PARM")) {
                     let on = l
                         .get("DEFAULT")
                         .is_some_and(|d| d.eq_ignore_ascii_case("yes"));
@@ -193,20 +199,13 @@ impl<'a> Calc<'a> {
     }
 
     fn equipped_items(&self) -> Vec<Item<'a>> {
-        let slots: HashSet<String> = self
-            .gm
-            .map(|g| {
-                g.lines("equipmentslots.lst", "EQSLOT")
-                    .map(|l| lower(&l.value))
-                    .collect()
-            })
-            .unwrap_or_default();
         let mut out = Vec::new();
         for e in self.ch.equipped() {
             let loc = lower(&e.location);
-            // items directly in the set, at a body slot
+            // items directly in the set are equipped unless merely
+            // carried; items inside containers are deeper in the tree
             let depth = e.id.matches('.').count();
-            let worn = depth == 2 && (slots.contains(&loc) || loc == "equipped");
+            let worn = depth == 2 && loc != "carried" && loc != "not carried";
             if !worn {
                 continue;
             }
@@ -224,6 +223,7 @@ impl<'a> Calc<'a> {
                 .or_else(|| self.ds.get(FileKind::Equipment, &name));
             let Some(obj) = obj else { continue };
             let mut eqmods = Vec::new();
+            let mut eqmod_choices: Vec<Vec<String>> = Vec::new();
             // eqmods named on the customization line
             if let Some(line) = self
                 .ch
@@ -237,9 +237,12 @@ impl<'a> Calc<'a> {
                         for part in data.split('$') {
                             if let Some(list) = part.strip_prefix("EQMOD=") {
                                 for k in list.split('.') {
-                                    let k = k.split('|').next().unwrap_or(k);
-                                    if let Some(m) = self.find_eqmod(k) {
+                                    // KEY|choice|choice...
+                                    let mut parts = k.split('|');
+                                    let key = parts.next().unwrap_or(k);
+                                    if let Some(m) = self.find_eqmod(key) {
                                         eqmods.push(m);
+                                        eqmod_choices.push(parts.map(str::to_string).collect());
                                     }
                                 }
                             }
@@ -253,6 +256,7 @@ impl<'a> Calc<'a> {
                     if let Some(m) = self.find_eqmod(k.split('|').next().unwrap_or(k)) {
                         if !eqmods.iter().any(|x| std::ptr::eq(*x, m)) {
                             eqmods.push(m);
+                            eqmod_choices.push(Vec::new());
                         }
                     }
                 }
@@ -261,6 +265,7 @@ impl<'a> Calc<'a> {
                 name,
                 obj,
                 eqmods,
+                eqmod_choices,
                 location: e.location.clone(),
             });
         }
@@ -434,6 +439,17 @@ impl<'a> Calc<'a> {
         bonus.clamp(0.0, MAX)
     }
 
+    /// Speed for a movement type, with MOVEADD bonuses.
+    pub fn move_speed(&self, mtype: &str) -> f64 {
+        let base = self.movement().get(&lower(mtype)).copied().unwrap_or(0.0);
+        if base <= 0.0 {
+            return 0.0;
+        }
+        base + self.bonus.total("MOVEADD", &format!("TYPE.{}", mtype))
+            + self.bonus.total("MOVEADD", &format!("TYPE={}", mtype))
+            + self.bonus.total("MOVEADD", "ALL")
+    }
+
     /// Movement types and speeds from active objects.
     pub fn movement(&self) -> BTreeMap<String, f64> {
         let mut m = BTreeMap::new();
@@ -548,8 +564,57 @@ impl<'a> Calc<'a> {
         eval_str(formula, &env).floor()
     }
 
+    /// Ranks bought in a skill.
+    pub fn base_ranks(&self, skill: &str) -> f64 {
+        self.ranks.get(&lower(skill)).copied().unwrap_or(0.0)
+    }
+
+    /// Total ranks: bought plus SKILLRANK bonuses, capped at the
+    /// maximum for the character's level (but never below the ranks
+    /// actually bought).
     pub fn skill_ranks(&self, skill: &str) -> f64 {
-        self.ranks.get(&lower(skill)).copied().unwrap_or(0.0) + self.bonus.total("SKILLRANK", skill)
+        let base = self.base_ranks(skill);
+        let ranks = base + self.bonus.total("SKILLRANK", skill);
+        if self.rules.get("SKILLMAX").copied().unwrap_or(false) || self.classes.is_empty() {
+            return ranks;
+        }
+        match self.max_ranks(skill) {
+            Some(max) => ranks.min(max.max(base)),
+            None => ranks,
+        }
+    }
+
+    /// Maximum ranks for a skill at the character's level, from the
+    /// game mode's experience table.
+    pub fn max_ranks(&self, skill: &str) -> Option<f64> {
+        let gm = self.gm?;
+        let table = self.ch.pcg.value("EXPERIENCETABLE");
+        let mut rows = gm.level_table(table.as_deref());
+        if rows.is_empty() {
+            rows = gm.level_table(None);
+        }
+        let level = self.total_level();
+        let row = rows
+            .iter()
+            .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
+            .or_else(|| {
+                rows.iter()
+                    .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
+            })?;
+        let class = self.is_class_skill(skill);
+        let f = if class {
+            &row.class_skill_max
+        } else {
+            &row.cross_class_skill_max
+        };
+        if f.is_empty() {
+            return None;
+        }
+        let env = LevelEnv {
+            calc: self,
+            level: level as f64,
+        };
+        Some(eval_str(f, &env))
     }
 
     pub fn is_class_skill(&self, skill: &str) -> bool {
@@ -776,6 +841,9 @@ impl<'a> Calc<'a> {
             } else {
                 0.0
             });
+        }
+        if let Some(t) = u.strip_prefix("MOVE[").and_then(|x| x.strip_suffix(']')) {
+            return Some(self.move_speed(t));
         }
         if let Some(inner) = u.strip_prefix("COUNT[").and_then(|x| x.strip_suffix(']')) {
             let orig = &name[6..name.len() - 1];
@@ -1383,6 +1451,17 @@ impl<'a> Calc<'a> {
             s.class = Some(o.key.clone());
             srcs.push(s);
         }
+        // bonuses a follower's race grants its master
+        for f in self.ch.pcg.lines_tagged("FOLLOWER") {
+            let Some(race) = f.text("RACE") else { continue };
+            for o in ds.objects(FileKind::CompanionMod) {
+                if o.head_tag.as_deref() == Some("MASTERBONUSRACE")
+                    && o.name.eq_ignore_ascii_case(&race)
+                {
+                    srcs.push(self.src(SrcKind::MasterBonus, o));
+                }
+            }
+        }
         if let Some(d) = self.ch.deity().and_then(|d| ds.get(FileKind::Deity, &d)) {
             srcs.push(self.src(SrcKind::Deity, d));
         }
@@ -1395,9 +1474,10 @@ impl<'a> Calc<'a> {
             let mut s = self.src(SrcKind::Equipment, it.obj);
             s.item = Some(i);
             srcs.push(s);
-            for m in &it.eqmods {
+            for (m, ch) in it.eqmods.iter().zip(&it.eqmod_choices) {
                 let mut s = self.src(SrcKind::EquipMod, m);
                 s.item = Some(i);
+                s.choices = ch.clone();
                 srcs.push(s);
             }
         }
@@ -1689,6 +1769,37 @@ impl<'a> Calc<'a> {
             }
             let _ = si;
         }
+        // temporary bonuses the user switched on, aimed at the character
+        for line in self.ch.pcg.lines_tagged("TEMPBONUS") {
+            if line.text("TBTARGET").as_deref() != Some("PC") {
+                continue;
+            }
+            let origin = line
+                .head()
+                .map(|h| format!("TempBonus {}", h.value_text()))
+                .unwrap_or_default();
+            let env = Ctx {
+                calc: self,
+                src: None,
+            };
+            for e in line.elems.iter().flatten().filter(|e| e.tag == "TBBONUS") {
+                let Ok(b) = Bonus::parse(&e.value_text()) else {
+                    continue;
+                };
+                if !b.prereqs().all(|p| self.passes(p, None)) {
+                    continue;
+                }
+                let Ok(x) = b.expr() else { continue };
+                let v = eval(&x, &env);
+                let btype = b.opts.iter().find_map(|o| match o {
+                    BonusOpt::Type(t) => Some(t.as_str()),
+                    _ => None,
+                });
+                for tg in &b.targets {
+                    table.add_from(&b.category, tg, btype, v, &origin);
+                }
+            }
+        }
         self.bonus = table;
         self.vars = vars;
         self.defined = defined;
@@ -1737,6 +1848,8 @@ impl<'a> Calc<'a> {
         b += match sk.get("ACHECK").map(upper).as_deref() {
             Some("YES") => ac,
             Some("DOUBLE") => 2.0 * ac,
+            // one point per five pounds carried
+            Some("WEIGHT") => -(self.carried_weight() / 5.0).floor(),
             _ => 0.0,
         };
         (self.skill_ranks(&sk.key) + b).floor() as i64
@@ -1888,6 +2001,20 @@ impl<'a> Calc<'a> {
                 )
             })
             .collect();
+        sheet.equipped = self
+            .items
+            .iter()
+            .map(|it| {
+                let mods: Vec<&str> = it.eqmods.iter().map(|m| m.key.as_str()).collect();
+                format!(
+                    "{}: {} ({}) [{}]",
+                    it.location,
+                    it.name,
+                    it.obj.key,
+                    mods.join(", ")
+                )
+            })
+            .collect();
         sheet.unknown = self.unknown.borrow().clone();
         sheet
     }
@@ -1925,6 +2052,22 @@ impl Env for Ctx<'_, '_> {
             .borrow_mut()
             .entry(name.to_string())
             .or_default() += 1;
+    }
+}
+
+/// Context for experience table formulas, where LEVEL is the level.
+struct LevelEnv<'c, 'a> {
+    calc: &'c Calc<'a>,
+    level: f64,
+}
+
+impl Env for LevelEnv<'_, '_> {
+    fn var(&self, name: &str) -> Option<f64> {
+        if name.eq_ignore_ascii_case("LEVEL") {
+            Some(self.level)
+        } else {
+            self.calc.var_value(name, None)
+        }
     }
 }
 

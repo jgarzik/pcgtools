@@ -152,6 +152,7 @@ pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> 
     println!("  skills: {}", skills.join(", "));
     if verbose {
         println!("  abilities: {}", sheet.abilities.join(", "));
+        println!("  equipped: {}", sheet.equipped.join("; "));
         println!("  passes: {}", sheet.passes);
         let unk: Vec<String> = sheet
             .unknown

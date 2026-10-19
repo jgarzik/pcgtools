@@ -1249,6 +1249,33 @@ fn feat_bonus(calc: &Calc, feat: &Object, category: &str, target: &str) -> f64 {
         .sum()
 }
 
+/// PCGen's own formula for a CLOSE, MEDIUM or LONG range the game mode
+/// gives no SPELLRANGE for.
+pub fn default_spell_range(range: &str) -> Option<&'static str> {
+    match range.trim().to_ascii_uppercase().as_str() {
+        "CLOSE" => Some("floor(CASTERLEVEL/2)*5+25"),
+        "MEDIUM" => Some("(CASTERLEVEL*10)+100"),
+        "LONG" => Some("(CASTERLEVEL*40)+400"),
+        _ => None,
+    }
+}
+
+/// A spell range in feet after its metamagic feats: each in turn adds
+/// its BONUS:SPELL|RANGE, then multiplies by its BONUS:SPELL|RANGEMULT
+/// when that is positive.
+pub fn metamagic_range(calc: &Calc, feats: &[String], feet: i64) -> i64 {
+    feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .fold(feet, |r, f| {
+            let r = r.saturating_add(feat_bonus(calc, f, "SPELL", "RANGE") as i64);
+            match feat_bonus(calc, f, "SPELL", "RANGEMULT") as i64 {
+                m if m > 0 => r.saturating_mul(m),
+                _ => r,
+            }
+        })
+}
+
 /// The name a prepared spell shows with its metamagic feats:
 /// ` [Feat, Feat] ` after the spell's name.
 pub fn metamagic_suffix(calc: &Calc, info: &SpellInfo) -> String {
@@ -1605,6 +1632,15 @@ mod tests {
         assert!(slot_available(&l, 1, false, false, true));
         assert!(!slot_available(&l, 1, true, false, true));
         assert!(slot_available(&l, 1, true, false, false));
+    }
+
+    #[test]
+    fn default_ranges() {
+        assert_eq!(default_spell_range(" long"), Some("(CASTERLEVEL*40)+400"));
+        assert!(default_spell_range("Close").is_some());
+        assert!(default_spell_range("MEDIUM").is_some());
+        assert_eq!(default_spell_range("Touch"), None);
+        assert_eq!(default_spell_range("Close or Medium"), None);
     }
 
     #[test]

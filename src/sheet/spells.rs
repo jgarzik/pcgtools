@@ -14,8 +14,9 @@ use super::{describe, output_name, source_text, Element, SheetCtx};
 use crate::dataset::Object;
 use crate::rules::calc::Calc;
 use crate::rules::spells::{
-    cast_per_day, caster_level, is_specialty, known_at, metamagic_suffix, owner_class, save_dc,
-    spell_type, Caster, CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
+    cast_per_day, caster_level, default_spell_range, is_specialty, known_at, metamagic_range,
+    metamagic_suffix, owner_class, save_dc, spell_type, Caster, CharSpell, SpellInfo, Spells,
+    INNATE_BOOK, KNOWN_BOOK,
 };
 
 /// Evaluate parenthesized parts of spell text: `(CASTERLEVEL)` becomes
@@ -154,17 +155,20 @@ impl Ctx<'_, '_> {
             },
         );
         let range = joined(sp, "RANGE");
-        let range_formula = c.gm.and_then(|g| {
-            g.lines("miscinfo.lst", "SPELLRANGE").find_map(|l| {
-                let (k, f) = l.value.split_once('|')?;
-                k.eq_ignore_ascii_case(range.trim()).then(|| f.to_string())
+        let range_formula =
+            c.gm.and_then(|g| {
+                g.lines("miscinfo.lst", "SPELLRANGE").find_map(|l| {
+                    let (k, f) = l.value.split_once('|')?;
+                    k.eq_ignore_ascii_case(range.trim()).then(|| f.to_string())
+                })
             })
-        });
+            .or_else(|| default_spell_range(&range).map(str::to_string));
         let range_text = match range_formula {
             Some(f) => {
                 let feet = c.eval_with(&f, &|n| {
                     n.eq_ignore_ascii_case("CASTERLEVEL").then_some(cl as f64)
                 }) as i64;
+                let feet = metamagic_range(c, &info.feats, feet);
                 format!("{} ({})", range, self.units.distance(feet as f64))
             }
             None => spell_text(&range, &|f| self.eval_spell(f, cl)),

@@ -699,6 +699,70 @@ fn spells_prepared_with_metamagic() {
 }
 
 #[test]
+fn spell_ranges_with_metamagic() {
+    let mut s = new_session(&[
+        "set stat MGT 14",
+        "class add Sage",
+        "class add Sage",
+        "spell add Sage Ember",
+        "spell add Sage Mend",
+        "ability add \"Wide Spell\" --force",
+        "ability add \"Sharp Spell\" --force",
+    ]);
+    let lines = pcgtools::pcg::PcgFile::parse(
+        "SPELLBOOK:Prepared Spells|TYPE:2\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Mend|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:0|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:2|FEATLIST:[FEAT:Wide Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Mend|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|FEATLIST:[FEAT:Sharp Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:3|FEATLIST:[FEAT:Wide Spell|FEAT:Sharp Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n\
+         SPELLNAME:Mend|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:2|FEATLIST:[FEAT:Sharp Spell|FEAT:Wide Spell]|SOURCE:[TYPE:CLASS|NAME:Sage]\n",
+    )
+    .lines;
+    s.ch.pcg.lines.extend(lines);
+    let m = session_sheet(&s);
+    let ranges = |level: usize| -> Vec<(String, String)> {
+        let prefix = format!(
+            "character/spells[0]/memorized_spells[0]/spellbook[0]/class[0]/level[{}]/spell[",
+            level
+        );
+        let mut out: Vec<(String, String)> = m
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix) && k.ends_with("]/name[0]"))
+            .map(|(k, v)| {
+                let base = k.strip_suffix("/name[0]").unwrap();
+                (v.clone(), m[&format!("{}/range[0]", base)].clone())
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    // without game mode formulas: close is 25 ft. + 5 per two caster
+    // levels, medium 100 ft. + 10 per level
+    assert_eq!(ranges(0), [pair("Mend", "Medium (120')")]);
+    assert_eq!(
+        ranges(1),
+        [
+            pair("Ember", "Close (30')"),
+            pair("Mend [Sharp Spell]", "Medium (130')")
+        ]
+    );
+    // each feat in turn adds its range, then multiplies
+    assert_eq!(
+        ranges(2),
+        [
+            pair("Ember [Wide Spell]", "Close (60')"),
+            pair("Mend [Sharp Spell, Wide Spell]", "Medium (260')")
+        ]
+    );
+    assert_eq!(
+        ranges(3),
+        [pair("Ember [Wide Spell, Sharp Spell]", "Close (70')")]
+    );
+}
+
+#[test]
 fn one_equipment_set_element_per_set() {
     let mut s = new_session(&[
         "equip add \"Tin Shield\"",

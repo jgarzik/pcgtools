@@ -2,5 +2,5 @@ SOURCELONG:Test Book	SOURCESHORT:TB
 Spark	SCHOOL:Evocation	SUBSCHOOL:Lightning	CLASSES:Tinker=0	DOMAINS:Cogs=1
 Glow	SCHOOL:Evocation	CLASSES:Tinker=0	SOURCEPAGE:p.1	DESCRIPTOR:Light	PRECLASS:1,Tinker=1
 Doomed Spell	SCHOOL:Necromancy
-Ember	SCHOOL:Evocation	CLASSES:Sage=1	SAVEINFO:Reflex half	DURATION:Instantaneous	TEMPDESC:Warding sparks.	TEMPBONUS:ANYPC|COMBAT|AC|2|TYPE=Deflection	TEMPBONUS:EQ|Armor;Shield|COMBAT|AC|1|TYPE=Enhancement
-Mend	SCHOOL:Transmutation	CLASSES:Sage=0	TEMPVALUE:MIN=1|MAX=3|TITLE=Caster level	TEMPBONUS:EQ|Weapon,[Ranged]|WEAPON|TOHIT,DAMAGE|%CHOICE|TYPE=Enhancement
+Ember	SCHOOL:Evocation	CLASSES:Sage=1	RANGE:Close	SAVEINFO:Reflex half	DURATION:Instantaneous	TEMPDESC:Warding sparks.	TEMPBONUS:ANYPC|COMBAT|AC|2|TYPE=Deflection	TEMPBONUS:EQ|Armor;Shield|COMBAT|AC|1|TYPE=Enhancement
+Mend	SCHOOL:Transmutation	CLASSES:Sage=0	RANGE:Medium	TEMPVALUE:MIN=1|MAX=3|TITLE=Caster level	TEMPBONUS:EQ|Weapon,[Ranged]|WEAPON|TOHIT,DAMAGE|%CHOICE|TYPE=Enhancement

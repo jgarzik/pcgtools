@@ -266,12 +266,37 @@ fn prof_bonus(
     keep: &dyn Fn(&Source) -> bool,
 ) -> f64 {
     let Some(p) = prof else { return 0.0 };
+    prof_bonus_named(s, &p.key, &p.types(), target, keep)
+}
+
+fn prof_bonus_named(
+    s: &SheetCtx,
+    key: &str,
+    types: &[&str],
+    target: &str,
+    keep: &dyn Fn(&Source) -> bool,
+) -> f64 {
     let b = &s.calc.bonus;
-    let mut t = b.total_where(&format!("WEAPONPROF={}", p.key), target, keep);
-    for ty in p.types() {
+    let mut t = b.total_where(&format!("WEAPONPROF={}", key), target, keep);
+    for ty in types {
         t += b.total_where(&format!("WEAPONPROF=TYPE.{}", ty), target, keep);
     }
     t
+}
+
+/// Bonuses to a weapon's proficiency; natural attacks are their own
+/// proficiency even when the data defines none.
+fn weapon_prof_bonus(
+    s: &SheetCtx,
+    w: &Weapon,
+    target: &str,
+    keep: &dyn Fn(&Source) -> bool,
+) -> f64 {
+    match prof_of(s, w) {
+        Some(p) => prof_bonus(s, Some(p), target, keep),
+        None if w.natural() => prof_bonus_named(s, &w.item.name, &[], target, keep),
+        None => 0.0,
+    }
 }
 
 fn all(_: &Source) -> bool {
@@ -320,7 +345,7 @@ fn to_hit_bonus(s: &SheetCtx, w: &Weapon, distance: Option<f64>) -> i64 {
     if !w.natural() && !proficient {
         t += gm_num(s, "WEAPONNONPROFPENALTY", -4.0);
     }
-    t += prof_bonus(s, prof, "TOHIT", &all) as i64 as f64;
+    t += weapon_prof_bonus(s, w, "TOHIT", &all) as i64 as f64;
     if let Some(d) = distance {
         if d <= gm_num(s, "SHORTRANGE", 30.0) {
             t += b.total("COMBAT", "TOHIT-SHORTRANGE") as i64 as f64;
@@ -692,8 +717,7 @@ fn damage(
         general += b.total("COMBAT", &format!("DAMAGE.{}", ty));
         general += b.total("DAMAGE", &format!("TYPE.{}", ty));
     }
-    let prof = prof_of(s, w);
-    general += prof_bonus(s, prof, "STATDAMAGE", &all);
+    general += weapon_prof_bonus(s, w, "STATDAMAGE", &all);
     if finessable(w) && !w.is("Finesseable") {
         general += b.total("COMBAT", "DAMAGE.FINESSEABLE");
     }
@@ -701,10 +725,10 @@ fn damage(
     let stat = |src: &Source| src.kind == "Stat";
     let str_part = b.total_where("COMBAT", "DAMAGE.MELEE", stat)
         + b.total_where("DAMAGE", "TYPE.MELEE", stat)
-        + prof_bonus(s, prof, "STATDAMAGE", &all);
+        + weapon_prof_bonus(s, w, "STATDAMAGE", &all);
     if w.melee() && !ranged && str_part > 0.0 {
         let mult = b.total("COMBAT", &format!("DAMAGEMULT:{}", hands))
-            + prof_bonus(s, prof, &format!("DAMAGEMULT:{}", hands), &all)
+            + weapon_prof_bonus(s, w, &format!("DAMAGEMULT:{}", hands), &all)
             + item_bonus(s, w, &format!("DAMAGEMULT:{}", hands));
         general = (general - str_part + mult * str_part).trunc();
     }
@@ -716,7 +740,7 @@ fn damage(
         }
     }
     total += general;
-    total += prof_bonus(s, prof, "DAMAGE", &all);
+    total += weapon_prof_bonus(s, w, "DAMAGE", &all);
     let total = total as i64;
     if dice == "0d0" {
         return "0".into();
@@ -866,10 +890,9 @@ fn crit_range(s: &SheetCtx, w: &Weapon) -> String {
     if r == 0 {
         return "none".into();
     }
-    let prof = prof_of(s, w);
-    let dbl = (prof_bonus(s, prof, "CRITRANGEDOUBLE", &all)
+    let dbl = (weapon_prof_bonus(s, w, "CRITRANGEDOUBLE", &all)
         + w.item.bonus(&s.calc, "EQMWEAPON", "CRITRANGEDOUBLE", true)) as i64;
-    let add = (prof_bonus(s, prof, "CRITRANGEADD", &all)
+    let add = (weapon_prof_bonus(s, w, "CRITRANGEADD", &all)
         + w.item.bonus(&s.calc, "EQMWEAPON", "CRITRANGEADD", true)) as i64;
     let low = 21 - (r * (dbl + 1) + add);
     if low < 20 {
@@ -882,8 +905,7 @@ fn crit_range(s: &SheetCtx, w: &Weapon) -> String {
 fn crit_mult(s: &SheetCtx, w: &Weapon) -> String {
     let m = w.item.data.get("CRITMULT").unwrap_or("0");
     let m: i64 = m.trim_start_matches('x').parse().unwrap_or(0);
-    let prof = prof_of(s, w);
-    (m + prof_bonus(s, prof, "CRITMULTADD", &all) as i64).to_string()
+    (m + weapon_prof_bonus(s, w, "CRITMULTADD", &all) as i64).to_string()
 }
 
 fn type_abbrevs(s: &SheetCtx, w: &Weapon) -> String {
@@ -973,8 +995,8 @@ fn reach(s: &SheetCtx, w: &Weapon) -> String {
         .get("REACHMULT")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
-    let prof = prof_of(s, w);
-    let r = (race_reach + (item_reach - 5.0).max(0.0)) * mult + prof_bonus(s, prof, "REACH", &all);
+    let r =
+        (race_reach + (item_reach - 5.0).max(0.0)) * mult + weapon_prof_bonus(s, w, "REACH", &all);
     pattern(r, "#.##")
 }
 

@@ -160,6 +160,45 @@ pub struct EquipSetEntry {
     pub quantity: Option<f64>,
 }
 
+/// Copies of a spell placed in a book or list, as a SPELLNAME line
+/// records them.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct SpellCopy {
+    pub spell: String,
+    pub class: String,
+    pub book: String,
+    /// the level of the slot it takes (raised by metamagic)
+    pub level: i64,
+    /// metamagic feat keys, in the order applied
+    pub feats: Vec<String>,
+    /// the domain whose list it is cast from, if not the class's
+    pub domain: Option<String>,
+    /// pages one copy takes in a spellbook
+    pub pages: i64,
+}
+
+/// Feat keys of a SPELLNAME line's FEATLIST.
+fn line_feats(l: &PcgLine) -> Vec<String> {
+    l.get("FEATLIST")
+        .map(|e| e.children().iter().map(Elem::value_text).collect())
+        .unwrap_or_default()
+}
+
+/// The domain a SPELLNAME line's SOURCE names, if it is one.
+fn line_domain(l: &PcgLine) -> Option<String> {
+    let src = l.get("SOURCE")?;
+    let kid = |t: &str| {
+        src.children()
+            .iter()
+            .find(|c| c.tag == t)
+            .map(Elem::value_text)
+    };
+    kid("TYPE")
+        .is_some_and(|t| t.eq_ignore_ascii_case("DOMAIN"))
+        .then(|| kid("NAME"))
+        .flatten()
+}
+
 /// A character, backed by its PCG file.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Character {
@@ -1025,6 +1064,21 @@ impl Character {
         );
     }
 
+    /// Domains a given class granted.
+    pub fn class_domains_of(&self, class: &str) -> Vec<String> {
+        self.pcg
+            .lines_tagged("DOMAIN")
+            .filter(|l| {
+                l.get("SOURCE").is_some_and(|src| {
+                    src.children()
+                        .iter()
+                        .any(|c| c.tag == "NAME" && c.value_text().eq_ignore_ascii_case(class))
+                })
+            })
+            .filter_map(|l| l.head().map(Elem::value_text))
+            .collect()
+    }
+
     /// Domains a class granted (their SOURCE names a class).
     pub fn class_domains(&self) -> Vec<String> {
         self.pcg
@@ -1236,45 +1290,105 @@ impl Character {
             .collect()
     }
 
+    /// Spell books and lists recorded with SPELLBOOK lines: (name,
+    /// type).  Types: 1 known spells, 2 prepared list, 3 spellbook
+    /// (an item), 4 innate.
+    pub fn spell_books(&self) -> Vec<(String, i64)> {
+        self.pcg
+            .lines_tagged("SPELLBOOK")
+            .filter_map(|l| Some((l.head()?.value_text(), num(l.text("TYPE")).unwrap_or(2))))
+            .collect()
+    }
+
+    /// Record a spell book or list of a type (see [`Self::spell_books`]).
+    pub fn add_spell_book(&mut self, name: &str, kind: i64) {
+        self.insert_ordered(
+            "SPELLBOOK",
+            PcgLine::new(vec![
+                Elem::text("SPELLBOOK", name),
+                Elem::raw("TYPE", &kind.to_string()),
+            ]),
+        );
+    }
+
+    /// Remove a spell book or list and every spell in it.  Returns
+    /// whether there was one.
+    pub fn remove_spell_book(&mut self, name: &str) -> bool {
+        let before = self.pcg.lines.len();
+        self.pcg.lines.retain(|l| match l.tag() {
+            Some("SPELLBOOK") => l.head().is_none_or(|h| h.value_text() != name),
+            Some("SPELLNAME") => l.text("BOOK").as_deref() != Some(name),
+            _ => true,
+        });
+        before != self.pcg.lines.len()
+    }
+
     /// Add a spell to a class's book at a level.  A book not yet
     /// recorded is made a prepared list.  Another copy of a spell
     /// already in a list adds to the times on its line.
     pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
-        if !self
-            .pcg
-            .lines_tagged("SPELLBOOK")
-            .any(|l| l.head().is_some_and(|h| h.value_text() == book))
-            && book != "Known Spells"
-        {
-            self.insert_ordered(
-                "SPELLBOOK",
-                PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "2")]),
-            );
+        let copy = SpellCopy {
+            spell: spell.into(),
+            class: class.into(),
+            book: book.into(),
+            level,
+            ..Default::default()
+        };
+        self.add_spell_copy(&copy, times);
+    }
+
+    /// Add copies of a spell to a book or list (made a prepared list if
+    /// not yet recorded).  Copies already in a list (at the same level,
+    /// with the same feats) add to the times on their line, and their
+    /// pages to its pages.  Returns the times now on the line.
+    pub fn add_spell_copy(&mut self, c: &SpellCopy, times: i64) -> i64 {
+        if c.book != "Known Spells" && self.spell_books().iter().all(|(b, _)| *b != c.book) {
+            self.add_spell_book(&c.book, 2);
         }
-        if book != "Known Spells" {
-            if let Some(&i) = self
-                .spell_lines(spell, class, Some(book), Some(level))
-                .first()
-            {
-                let had = num::<i64>(self.pcg.lines[i].text("TIMES")).unwrap_or(1);
+        if c.book != "Known Spells" {
+            let found = self
+                .spell_lines(&c.spell, &c.class, Some(&c.book), Some(c.level))
+                .into_iter()
+                .find(|&i| {
+                    let l = &self.pcg.lines[i];
+                    line_feats(l) == c.feats && line_domain(l) == c.domain
+                });
+            if let Some(i) = found {
+                let l = &self.pcg.lines[i];
+                let had = num::<i64>(l.text("TIMES")).unwrap_or(1);
+                let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
                 self.set_elem(i, "TIMES", &(had + times).to_string());
-                return;
+                if c.pages != 0 {
+                    self.set_elem(i, "SPELLNUMPAGES", &(pages + c.pages * times).to_string());
+                }
+                return had + times;
             }
         }
-        self.insert_ordered(
-            "SPELLNAME",
-            PcgLine::new(vec![
-                Elem::text("SPELLNAME", spell),
-                Elem::raw("TIMES", &times.to_string()),
-                Elem::text("CLASS", class),
-                Elem::text("BOOK", book),
-                Elem::raw("SPELLLEVEL", &level.to_string()),
-                Elem::list(
-                    "SOURCE",
-                    vec![Elem::raw("TYPE", "CLASS"), Elem::text("NAME", class)],
-                ),
-            ]),
-        );
+        let mut elems = vec![
+            Elem::text("SPELLNAME", &c.spell),
+            Elem::raw("TIMES", &times.to_string()),
+            Elem::text("CLASS", &c.class),
+            Elem::text("BOOK", &c.book),
+            Elem::raw("SPELLLEVEL", &c.level.to_string()),
+        ];
+        if c.pages > 0 {
+            elems.push(Elem::raw("SPELLNUMPAGES", &(c.pages * times).to_string()));
+        }
+        if !c.feats.is_empty() {
+            elems.push(Elem::list(
+                "FEATLIST",
+                c.feats.iter().map(|f| Elem::text("FEAT", f)).collect(),
+            ));
+        }
+        elems.push(Elem::list(
+            "SOURCE",
+            match &c.domain {
+                Some(d) => vec![Elem::raw("TYPE", "DOMAIN"), Elem::text("NAME", d)],
+                None => vec![Elem::raw("TYPE", "CLASS"), Elem::text("NAME", &c.class)],
+            },
+        ));
+        self.insert_ordered("SPELLNAME", PcgLine::new(elems));
+        times
     }
 
     /// SPELLNAME lines of a class's spell, optionally only in a book
@@ -1305,16 +1419,69 @@ impl Character {
             .collect()
     }
 
+    /// Copies of a class's spell saved in books and lists.
+    pub fn spell_copies(
+        &self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+    ) -> Vec<(SpellCopy, i64)> {
+        self.spell_lines(spell, class, book, None)
+            .into_iter()
+            .map(|i| {
+                let l = &self.pcg.lines[i];
+                let times = num::<i64>(l.text("TIMES")).unwrap_or(1);
+                let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
+                (
+                    SpellCopy {
+                        spell: l.head().map(Elem::value_text).unwrap_or_default(),
+                        class: l.text("CLASS").unwrap_or_default(),
+                        book: l.text("BOOK").unwrap_or_else(|| "Known Spells".into()),
+                        level: num(l.text("SPELLLEVEL")).unwrap_or(0),
+                        feats: line_feats(l),
+                        domain: line_domain(l),
+                        pages: if times > 0 { pages / times } else { pages },
+                    },
+                    times,
+                )
+            })
+            .collect()
+    }
+
     /// Remove one copy of a spell from a class's book: the times on
     /// its latest line go down by one, and the line goes at none.
     /// Returns whether there was one.
     pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
-        let Some(&i) = self.spell_lines(spell, class, book, None).last() else {
+        self.remove_spell_copy(spell, class, book, None)
+    }
+
+    /// Remove one copy of a spell, optionally only one prepared with
+    /// the given feats (none for a plain copy): the times on its latest
+    /// line go down by one (and its pages by one copy's), and the line
+    /// goes at none.  Returns whether there was one.
+    pub fn remove_spell_copy(
+        &mut self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+        feats: Option<&[String]>,
+    ) -> bool {
+        let Some(i) = self
+            .spell_lines(spell, class, book, None)
+            .into_iter()
+            .rev()
+            .find(|&i| feats.is_none_or(|f| line_feats(&self.pcg.lines[i]) == f))
+        else {
             return false;
         };
-        let had = num::<i64>(self.pcg.lines[i].text("TIMES")).unwrap_or(1);
+        let l = &self.pcg.lines[i];
+        let had = num::<i64>(l.text("TIMES")).unwrap_or(1);
+        let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
         if had > 1 {
             self.set_elem(i, "TIMES", &(had - 1).to_string());
+            if pages > 0 {
+                self.set_elem(i, "SPELLNUMPAGES", &(pages - pages / had).to_string());
+            }
         } else {
             self.pcg.lines.remove(i);
         }

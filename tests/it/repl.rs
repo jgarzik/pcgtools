@@ -831,3 +831,80 @@ fn absurd_kit_quantities_are_refused() {
     let e = err(&mut s, "kit apply \"Hoard Kit\"");
     assert!(e.contains("quantity"), "{}", e);
 }
+
+/// A second-level Sage (3 level-0 casts, 2 level-1 plus one bonus
+/// spell for Might 14) who knows Ember.
+fn sage() -> Session {
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    for c in [
+        "set stat MGT 14",
+        "class add Sage",
+        "class add Sage",
+        "spell add Sage Ember",
+    ] {
+        ok(&mut s, c);
+    }
+    s
+}
+
+fn pcg_text(s: &Session) -> String {
+    String::from_utf8(s.ch.pcg.encode()).unwrap()
+}
+
+#[test]
+fn spell_lists() {
+    let mut s = sage();
+    ok(&mut s, "spellbook add Morning");
+    assert!(pcg_text(&s).contains("SPELLBOOK:Morning|TYPE:2\n"));
+    assert!(err(&mut s, "spellbook add morning").contains("already"));
+    // a list may not be named for a class, or hold the line's separators
+    assert!(err(&mut s, "spellbook add Sage").contains("class"));
+    assert!(err(&mut s, "spellbook add \"A|B\"").contains("may not contain"));
+    assert!(err(&mut s, "spellbook rm \"Known Spells\"").contains("cannot"));
+    ok(&mut s, "spell prep Sage Ember Morning");
+    assert_eq!(
+        ok(&mut s, "spellbook ls"),
+        "Known Spells\tknown spells\t1\nInnate\tinnate\t0\nMorning\tprepared list\t1"
+    );
+    // removing a list removes what was prepared in it
+    ok(&mut s, "spellbook rm Morning");
+    assert!(!pcg_text(&s).contains("Morning"));
+    assert!(err(&mut s, "spellbook rm Morning").contains("no spell book"));
+}
+
+#[test]
+fn preparing_spells() {
+    let mut s = sage();
+    // into "Prepared Spells" unless a list is named
+    assert!(ok(&mut s, "spell prep Sage Ember").contains("Prepared Spells"));
+    let text = pcg_text(&s);
+    assert!(
+        text.contains("SPELLBOOK:Prepared Spells|TYPE:2\n"),
+        "{}",
+        text
+    );
+    assert!(
+        text.contains(
+            "SPELLNAME:Ember|TIMES:1|CLASS:Sage|BOOK:Prepared Spells|SPELLLEVEL:1|SOURCE:[TYPE:CLASS|NAME:Sage]\n"
+        ),
+        "{}",
+        text
+    );
+    ok(&mut s, "spell prep Sage Ember");
+    ok(&mut s, "spell prep Sage Ember");
+    assert!(pcg_text(&s).contains("SPELLNAME:Ember|TIMES:3|"));
+    // the level's three slots are full
+    let e = err(&mut s, "spell prep Sage Ember");
+    assert!(e.contains("only prepare 3 spells for level 1"), "{}", e);
+    ok(&mut s, "spell prep Sage Ember --force");
+    assert!(pcg_text(&s).contains("SPELLNAME:Ember|TIMES:4|"));
+    // only spells known, of a class that prepares them
+    assert!(err(&mut s, "spell prep Sage Mend").contains("does not know"));
+    assert!(err(&mut s, "spell prep Sage Spark").contains("not on"));
+    ok(&mut s, "class add Chanter");
+    assert!(err(&mut s, "spell prep Chanter Spark").contains("only add to Known Spells"));
+    // unpreparing takes one copy away
+    ok(&mut s, "spell unprep Sage Ember");
+    assert!(pcg_text(&s).contains("SPELLNAME:Ember|TIMES:3|"));
+    assert!(err(&mut s, "spell unprep Sage Ember Morning").contains("not prepared"));
+}

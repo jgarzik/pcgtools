@@ -23,6 +23,8 @@ use std::collections::BTreeMap;
 /// The default spell book and the book of innate abilities.
 pub const KNOWN_BOOK: &str = "Known Spells";
 pub const INNATE_BOOK: &str = "Innate";
+/// The prepared list spells go in unless another is named.
+pub const PREPARED_BOOK: &str = "Prepared Spells";
 
 /// Who a spell belongs to.
 #[derive(Debug, Clone, PartialEq)]
@@ -291,7 +293,7 @@ impl<'a> Spells<'a> {
         out
     }
 
-    fn caster_index(&self, cls: &Object) -> Option<usize> {
+    pub fn caster_index(&self, cls: &Object) -> Option<usize> {
         self.casters.iter().position(|c| match c {
             Caster::Class(o) => std::ptr::eq(*o, cls),
             Caster::Race => false,
@@ -834,7 +836,7 @@ pub fn spell_type(cls: &Object) -> Option<&str> {
 }
 
 /// Is a spell's school one the class may not use?
-fn prohibited(calc: &Calc, cls: &Object, spell: &Object) -> bool {
+pub fn prohibited(calc: &Calc, cls: &Object, spell: &Object) -> bool {
     let mut schools: Vec<String> = cls
         .values("PROHIBITED")
         .flat_map(|v| v.split(','))
@@ -1282,9 +1284,279 @@ pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
     dc as i64
 }
 
+/// The highest spell level slots are counted to.
+const MAX_SPELL_LEVEL: usize = 25;
+
+/// Slots of one spell level of a prepared list: casts per day for any
+/// spell and for specialty (or domain) spells only, and the copies of
+/// each kind already prepared there.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SlotLevel {
+    pub non: i64,
+    pub spec: i64,
+    pub mem_non: i64,
+    pub mem_spec: i64,
+}
+
+/// Is there a slot for one more spell at `level`?  Lower levels'
+/// shortfalls are made up from this level's spare slots first; spare
+/// slots of higher levels count only with `use_higher`.  Arcane casters
+/// may fill specialty slots' shortfalls from ordinary slots; divine
+/// casters may not, and their specialty (domain) spells need a
+/// specialty slot.
+pub fn slot_available(
+    levels: &[SlotLevel],
+    level: usize,
+    divine: bool,
+    use_higher: bool,
+    specialty: bool,
+) -> bool {
+    let at = |i: usize| levels.get(i).copied().unwrap_or_default();
+    // make up a shortfall from spare slots
+    let fill = |spare: &mut i64, short: &mut i64| {
+        while *spare > 0 && *short < 0 {
+            *spare -= 1;
+            *short += 1;
+        }
+    };
+    let (mut low_spec, mut low_non) = (0i64, 0i64);
+    for i in 0..level {
+        let l = at(i);
+        let (mut exc_spec, mut exc_non) = (l.spec - l.mem_spec, l.non - l.mem_non);
+        fill(&mut exc_non, &mut low_non);
+        fill(&mut exc_spec, &mut low_spec);
+        if !divine {
+            fill(&mut exc_non, &mut low_spec);
+            fill(&mut exc_non, &mut exc_spec);
+        }
+        low_spec += exc_spec.min(0);
+        low_non += exc_non.min(0);
+    }
+    let (mut good_spec, mut good_non) = (0i64, 0i64);
+    for i in level..=MAX_SPELL_LEVEL.max(level) {
+        if !use_higher && i > level {
+            break;
+        }
+        let l = at(i);
+        let (mut exc_spec, mut exc_non) = (l.spec - l.mem_spec, l.non - l.mem_non);
+        fill(&mut exc_non, &mut low_non);
+        fill(&mut exc_non, &mut good_non);
+        fill(&mut exc_spec, &mut low_spec);
+        fill(&mut exc_spec, &mut good_spec);
+        if !divine {
+            fill(&mut exc_non, &mut low_spec);
+            fill(&mut exc_non, &mut good_spec);
+            fill(&mut exc_non, &mut exc_spec);
+        }
+        let free = if specialty {
+            if divine {
+                exc_spec > 0
+            } else {
+                exc_non + exc_spec > 0
+            }
+        } else {
+            exc_non > 0 && exc_non + exc_spec > 0
+        };
+        if free {
+            return true;
+        }
+        good_spec += exc_spec.min(0);
+        good_non += exc_non.min(0);
+    }
+    false
+}
+
+/// Specialty (or domain) slots a class adds at a level of a prepared
+/// list: those of its specialty, once it has a specialty spell (for a
+/// divine caster, a domain spell above level 0) at or below the level.
+fn specialty_slots(calc: &Calc, sp: &Spells, cls: &Object, level: i64) -> i64 {
+    let domains: Vec<String> = calc
+        .ch
+        .pcg
+        .lines_tagged("DOMAIN")
+        .filter(|l| {
+            l.get("SOURCE")
+                .and_then(|e| e.children().iter().find(|c| c.tag == "NAME"))
+                .is_some_and(|n| n.value_text().eq_ignore_ascii_case(&cls.key))
+        })
+        .filter_map(|l| l.head().map(|h| h.value_text()))
+        .collect();
+    if specialties(calc, cls).is_empty() && calc.ch.domains().is_empty() {
+        return 0;
+    }
+    let divine = spell_type(cls).is_some_and(|t| t.eq_ignore_ascii_case("Divine"));
+    let Some(ci) = sp.caster_index(cls) else {
+        return 0;
+    };
+    for ix in 0..=level {
+        let here: Vec<&CharSpell> = sp.by_caster[ci]
+            .iter()
+            .filter(|c| c.infos.iter().any(|i| i.level == ix))
+            .collect();
+        let found = if ix > 0 && divine && !domains.is_empty() {
+            here.iter().any(|c| {
+                domains
+                    .iter()
+                    .any(|d| sp.levels_on('D', d, c.spell).contains(&ix))
+            })
+        } else {
+            here.iter().any(|c| is_specialty(calc, c))
+        };
+        if found {
+            return specialty_slots_at(calc, sp, cls, &domains, level);
+        }
+    }
+    0
+}
+
+/// Specialty slots of a level: bonuses to them, and (when the casting
+/// stat allows the level) the specialty's own and one for a class
+/// whose domains give it spells it can cast.
+fn specialty_slots_at(
+    calc: &Calc,
+    sp: &Spells,
+    cls: &Object,
+    domains: &[String],
+    level: i64,
+) -> i64 {
+    let mut total = calc.bonus.total(
+        "SPECIALTYSPELLKNOWN",
+        &format!("CLASS.{};LEVEL.{}", cls.key, level),
+    );
+    if let Some(t) = spell_type(cls) {
+        total += calc.bonus.total(
+            "SPECIALTYSPELLKNOWN",
+            &format!("TYPE.{};LEVEL.{}", t, level),
+        );
+    }
+    let total = total as i64;
+    if let Some(st) = cls.get("SPELLSTAT") {
+        let max = calc.var(&format!("MAXLEVELSTAT={}", st)).unwrap_or(0.0);
+        if level as f64 > max {
+            return total;
+        }
+    }
+    let own = |o: &Object| {
+        o.get("KNOWNSPELLSFROMSPECIALTY")
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    let from = calc.subclass_of(cls).map_or_else(|| own(cls), own);
+    // a domain whose spells start below the highest level cast
+    let max_cast = (0..10)
+        .find(|l| cast_per_day(calc, cls, *l, true) == 0)
+        .unwrap_or(10);
+    let domain = own(cls) == 0
+        && max_cast > 1
+        && domains.iter().any(|d| {
+            sp.lists
+                .get(&('D', lower(d)))
+                .is_some_and(|m| m.keys().any(|l| *l < max_cast))
+        });
+    total + from + i64::from(domain)
+}
+
+/// Can a class prepare one more spell at a level of a list?  `Err`
+/// says why not.
+pub fn check_prepared_slot(
+    calc: &Calc,
+    sp: &Spells,
+    cls: &Object,
+    book: &str,
+    level: i64,
+    specialty: bool,
+) -> std::result::Result<(), String> {
+    let Some(ci) = sp.caster_index(cls) else {
+        return Err(format!("{} casts no spells", cls.key));
+    };
+    let levels: Vec<SlotLevel> = (0..=MAX_SPELL_LEVEL as i64)
+        .map(|i| {
+            let non = cast_per_day(calc, cls, i, true);
+            let (mut mem_non, mut mem_spec) = (0, 0);
+            for (cs, info) in sp.spells_in(ci, book, Some(i)) {
+                if is_specialty(calc, cs) {
+                    mem_spec += info.times;
+                } else {
+                    mem_non += info.times;
+                }
+            }
+            SlotLevel {
+                non,
+                spec: specialty_slots(calc, sp, cls, i),
+                mem_non,
+                mem_spec,
+            }
+        })
+        .collect();
+    let divine = spell_type(cls).is_some_and(|t| t.eq_ignore_ascii_case("Divine"));
+    let use_higher = calc
+        .ch
+        .pcg
+        .value("USEHIGHERPREPPED")
+        .is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+    let lvl = level.max(0) as usize;
+    if slot_available(&levels, lvl, divine, use_higher, specialty) {
+        return Ok(());
+    }
+    let cast = levels.get(lvl).map_or(0, |l| l.non + l.spec);
+    if !specialty && slot_available(&levels, lvl, divine, use_higher, true) {
+        Err("the remaining slots must be filled with specialty or domain spells".into())
+    } else if specialty && slot_available(&levels, lvl, divine, use_higher, false) {
+        Err("the remaining slots must be filled with spells not of the specialty or domain".into())
+    } else {
+        Err(format!(
+            "{} can only prepare {} spells for level {}",
+            cls.key, cast, level
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lv(non: i64, spec: i64, mem_non: i64, mem_spec: i64) -> SlotLevel {
+        SlotLevel {
+            non,
+            spec,
+            mem_non,
+            mem_spec,
+        }
+    }
+
+    #[test]
+    fn prepared_slots() {
+        // two slots at level 1, one used
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 1, 0)];
+        assert!(slot_available(&l, 1, false, false, false));
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 2, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+        // a level with no casts has no slot
+        assert!(!slot_available(&l, 2, false, false, false));
+        // a higher level's spare slot counts only when allowed
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 2, 0), lv(1, 0, 0, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+        assert!(slot_available(&l, 1, false, true, false));
+        // a lower level's overflow takes this level's spare slot
+        let l = [lv(1, 0, 2, 0), lv(1, 0, 0, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+    }
+
+    #[test]
+    fn specialty_slots_by_caster_type() {
+        // one ordinary and one specialty slot, the ordinary one used
+        let l = [lv(0, 0, 0, 0), lv(1, 1, 1, 0)];
+        // only a specialty spell fits
+        assert!(!slot_available(&l, 1, false, false, false));
+        assert!(slot_available(&l, 1, false, false, true));
+        assert!(slot_available(&l, 1, true, false, true));
+        // the specialty slot used: an arcane caster's extra specialty
+        // spell may take an ordinary slot, a divine caster's may not
+        let l = [lv(0, 0, 0, 0), lv(2, 1, 0, 1)];
+        assert!(slot_available(&l, 1, false, false, true));
+        assert!(!slot_available(&l, 1, true, false, true));
+        assert!(slot_available(&l, 1, true, false, false));
+    }
 
     #[test]
     fn list_groups() {

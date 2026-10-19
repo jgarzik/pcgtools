@@ -19,10 +19,11 @@ use crate::error::{Error, Result};
 use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
 use crate::pcc::resolve::DataDirs;
-use crate::pcg::character::{money_text, Character};
+use crate::pcg::character::{money_text, Character, SpellCopy};
 use crate::query::Query;
 use crate::rules::calc::{Calc, Sheet};
 use crate::rules::equip::EqItem;
+use crate::rules::spells;
 use crate::rules::statgen::{self, PointBuy, Rng};
 use crate::token::pre::Prereq;
 use std::collections::VecDeque;
@@ -99,7 +100,14 @@ Commands (names may be quoted; most accept --force to skip checks):
                                add or remove an equipment modifier, or resize
   kit apply KEY                apply a starting kit
   spell add CLASS SPELL [LEVEL] [BOOK]   add a spell (book: Known Spells)
-  spell rm CLASS SPELL [BOOK]  remove a spell
+  spell rm CLASS SPELL [BOOK]  remove a spell (one copy)
+  spell prep CLASS SPELL [LIST] [--level N] [--domain D]
+                               prepare a known spell (list: Prepared Spells),
+                               needing a free slot
+  spell unprep CLASS SPELL [LIST]
+                               remove a prepared copy
+  spellbook add NAME | spellbook rm NAME | spellbook ls
+                               spell lists and books
   follower add NAME TYPE RACE [FILE]     add a follower or companion
   follower rm NAME | follower ls
   undo                         undo the last change
@@ -865,8 +873,10 @@ impl Session {
                     }
                     changed(self, format!("removed {}", spell))
                 }
+                "prep" | "unprep" => self.cmd_prep(&w, force, changed),
                 other => Err(Error::Other(format!("unknown spell command '{}'", other))),
             },
+            "spellbook" => self.cmd_spellbook(&w, changed),
             "follower" => match arg(1)? {
                 "add" => {
                     let (name, kind) = (arg(2)?.to_string(), arg(3)?.to_string());
@@ -2141,6 +2151,298 @@ fn raise_stats(ch: &mut Character, keys: &[String]) {
 
 /// Most of one item a kit may hand out.
 const MAX_KIT_QTY: f64 = 10_000.0;
+
+/// Spell books and lists, and preparing spells.
+impl Session {
+    /// A name for a new spell list: not a class's, nor holding the
+    /// characters that separate a saved line's parts.
+    fn check_book_name(&self, name: &str) -> Result<()> {
+        if name.trim().is_empty() || name.contains(['|', ':', '[', ']']) {
+            return Err(Error::Other(
+                "a spell list name may not contain | : [ or ]".into(),
+            ));
+        }
+        if self.ctx.dataset.get(FileKind::Class, name).is_some() {
+            return Err(Error::Other(format!(
+                "a spell list may not be named for the class {}",
+                name
+            )));
+        }
+        Ok(())
+    }
+
+    fn cmd_spellbook(
+        &mut self,
+        w: &[&str],
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        let name = || {
+            w.get(2)
+                .copied()
+                .ok_or_else(|| Error::Other("missing spell list name".into()))
+        };
+        let fixed = |n: &str| {
+            n.eq_ignore_ascii_case(spells::KNOWN_BOOK)
+                || n.eq_ignore_ascii_case(spells::INNATE_BOOK)
+        };
+        match w.get(1).copied().unwrap_or("") {
+            "ls" => {
+                let mut c = self.calc();
+                c.run();
+                let sp = spells::Spells::new(&c);
+                let types = self.ch.spell_books();
+                let out: Vec<String> = sp
+                    .books
+                    .iter()
+                    .map(|b| {
+                        let kind = match types.iter().find(|(n, _)| n == b).map(|(_, t)| *t) {
+                            _ if b == spells::KNOWN_BOOK => 1,
+                            _ if b == spells::INNATE_BOOK => 4,
+                            Some(t) => t,
+                            None => 2,
+                        };
+                        let kind = match kind {
+                            1 => "known spells",
+                            3 => "spellbook",
+                            4 => "innate",
+                            _ => "prepared list",
+                        };
+                        let count: i64 = sp
+                            .by_caster
+                            .iter()
+                            .flatten()
+                            .flat_map(|cs| cs.infos.iter())
+                            .filter(|i| i.book == *b)
+                            .map(|i| i.times.max(1))
+                            .sum();
+                        format!("{}\t{}\t{}", b, kind, count)
+                    })
+                    .collect();
+                Ok(Outcome::Text(out.join("\n")))
+            }
+            "add" => {
+                let name = name()?;
+                let taken = fixed(name)
+                    || self
+                        .ch
+                        .spell_books()
+                        .iter()
+                        .any(|(b, _)| b.eq_ignore_ascii_case(name));
+                if taken {
+                    return Err(Error::Other(format!("there is already a list {}", name)));
+                }
+                self.check_book_name(name)?;
+                self.checkpoint();
+                self.ch.add_spell_book(name, 2);
+                changed(self, format!("added spell list {}", name))
+            }
+            "rm" | "remove" => {
+                let name = name()?;
+                if fixed(name) {
+                    return Err(Error::Other(format!("{} cannot be removed", name)));
+                }
+                self.checkpoint();
+                if !self.ch.remove_spell_book(name) {
+                    self.undo.pop();
+                    return Err(Error::Other(format!("no spell book named '{}'", name)));
+                }
+                changed(self, format!("removed spell list {}", name))
+            }
+            other => Err(Error::Other(format!(
+                "unknown spellbook command '{}'",
+                other
+            ))),
+        }
+    }
+
+    /// `spell prep` and `spell unprep`.
+    fn cmd_prep(
+        &mut self,
+        w: &[&str],
+        force: bool,
+        changed: impl Fn(&Session, String) -> Result<Outcome>,
+    ) -> Result<Outcome> {
+        // options with a value, then the positional words
+        let mut pos: Vec<&str> = Vec::new();
+        let mut level: Option<i64> = None;
+        let mut domain: Option<String> = None;
+        let mut it = w.iter().copied();
+        while let Some(x) = it.next() {
+            let mut val = || {
+                it.next()
+                    .ok_or_else(|| Error::Other(format!("{} needs a value", x)))
+            };
+            match x {
+                "--level" => {
+                    let v = val()?;
+                    level = Some(
+                        v.parse()
+                            .map_err(|_| Error::Other(format!("bad spell level '{}'", v)))?,
+                    );
+                }
+                "--domain" => domain = Some(val()?.to_string()),
+                _ => pos.push(x),
+            }
+        }
+        let arg = |i: usize| {
+            pos.get(i)
+                .copied()
+                .ok_or_else(|| Error::Other("missing argument (try 'help')".into()))
+        };
+        let cls = self.find(FileKind::Class, arg(2)?)?.key.clone();
+        if !self
+            .ch
+            .classes()
+            .iter()
+            .any(|c| c.name.eq_ignore_ascii_case(&cls))
+        {
+            return Err(Error::Other(format!("the character has no {} levels", cls)));
+        }
+        let spell = self.find(FileKind::Spell, arg(3)?)?.key.clone();
+        let book = pos
+            .get(4)
+            .copied()
+            .unwrap_or(spells::PREPARED_BOOK)
+            .to_string();
+
+        if arg(1)? == "unprep" {
+            self.checkpoint();
+            if !self.ch.remove_spell_copy(&spell, &cls, Some(&book), None) {
+                self.undo.pop();
+                return Err(Error::Other(format!(
+                    "{} is not prepared in {}",
+                    spell, book
+                )));
+            }
+            return changed(self, format!("unprepared {} from {}", spell, book));
+        }
+
+        if book.eq_ignore_ascii_case(spells::KNOWN_BOOK)
+            || book.eq_ignore_ascii_case(spells::INNATE_BOOK)
+        {
+            return Err(Error::Other(format!(
+                "spells are not prepared in {}; use 'spell add'",
+                book
+            )));
+        }
+        let books = self.ch.spell_books();
+        if !books.iter().any(|(b, _)| *b == book) {
+            self.check_book_name(&book)?;
+        }
+        let (copy, warn) = {
+            let mut c = self.calc();
+            c.run();
+            let ds = &self.ctx.dataset;
+            let cls_obj = ds.get(FileKind::Class, &cls).unwrap();
+            let sp_obj = ds.get(FileKind::Spell, &spell).unwrap();
+            if cls_obj
+                .get("MEMORIZE")
+                .is_some_and(|v| v.eq_ignore_ascii_case("NO"))
+            {
+                return Err(Error::Other(format!(
+                    "{} can only add to {}",
+                    cls,
+                    spells::KNOWN_BOOK
+                )));
+            }
+            let sps = spells::Spells::new(&c);
+            let Some(ci) = sps.caster_index(cls_obj) else {
+                return Err(Error::Other(format!("{} casts no spells", cls)));
+            };
+            // the list it is cast from: a domain's if asked for, else
+            // the class's, else one of the class's domains'
+            let class_domains: Vec<&Object> = self
+                .ch
+                .class_domains_of(&cls)
+                .iter()
+                .filter_map(|d| ds.get(FileKind::Domain, d))
+                .collect();
+            let on_domain = |d: &Object| sps.levels_on('D', &d.key, sp_obj);
+            let (owner_domain, levels): (Option<&Object>, Vec<i64>) = match &domain {
+                Some(d) => {
+                    let d = self.find(FileKind::Domain, d)?;
+                    (Some(d), on_domain(d))
+                }
+                None => {
+                    let own: Vec<i64> = sps
+                        .class_lists(&c, cls_obj)
+                        .iter()
+                        .flat_map(|l| sps.levels_on('C', l, sp_obj))
+                        .collect();
+                    match class_domains.iter().find(|d| !on_domain(d).is_empty()) {
+                        Some(d) if own.is_empty() => (Some(*d), on_domain(d)),
+                        _ => (None, own),
+                    }
+                }
+            };
+            let Some(base) = level.or_else(|| levels.iter().copied().min()) else {
+                return Err(Error::Other(match owner_domain {
+                    Some(d) => format!("{} is not on the {} domain's list", spell, d.key),
+                    None => format!("{} is not on the {} list", spell, cls),
+                }));
+            };
+            let owner = match owner_domain {
+                Some(d) => spells::Owner::Domain(d, Some(cls_obj.key.clone())),
+                None => spells::Owner::Class(cls_obj),
+            };
+            let known = sps.by_caster[ci].iter().any(|cs| {
+                std::ptr::eq(cs.spell, sp_obj)
+                    && cs.owner == owner
+                    && cs.infos.iter().any(|i| i.book == spells::KNOWN_BOOK)
+            });
+            let mut warn = String::new();
+            let mut fail = |msg: String| -> Result<()> {
+                if force {
+                    warn.push_str(&format!("warning: {}\n", msg));
+                    Ok(())
+                } else {
+                    Err(Error::Other(format!("{} (use --force to override)", msg)))
+                }
+            };
+            if !known {
+                fail(format!("{} does not know {}", cls, spell))?;
+            }
+            let probe = spells::CharSpell {
+                spell: sp_obj,
+                owner: owner.clone(),
+                fixed_cl: None,
+                infos: Vec::new(),
+            };
+            let specialty = spells::is_specialty(&c, &probe);
+            if !specialty && spells::prohibited(&c, cls_obj, sp_obj) {
+                fail(format!("{} is prohibited", spell))?;
+            }
+            let fails = c.failing_prereqs(sp_obj);
+            if !fails.is_empty() {
+                fail(format!("does not qualify: {}", fails.join(", ")))?;
+            }
+            if let Err(e) = spells::check_prepared_slot(&c, &sps, cls_obj, &book, base, specialty) {
+                fail(e)?;
+            }
+            (
+                SpellCopy {
+                    spell: spell.clone(),
+                    class: cls.clone(),
+                    book: book.clone(),
+                    level: base,
+                    feats: Vec::new(),
+                    domain: owner_domain.map(|d| d.key.clone()),
+                    pages: 0,
+                },
+                warn,
+            )
+        };
+        self.checkpoint();
+        let times = self.ch.add_spell_copy(&copy, 1);
+        changed(
+            self,
+            format!(
+                "{}prepared {} (level {}) in {}, {} in all",
+                warn, spell, copy.level, book, times
+            ),
+        )
+    }
+}
 
 /// Default equipment-set location for an item, by its type: weapons
 /// in the primary hand, other items (shields too, though they are also

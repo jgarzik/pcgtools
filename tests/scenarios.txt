@@ -576,3 +576,41 @@ equip buy Longsword
 equip wear Longsword
 equip buy Torch 5
 equip sell Torch 2
+
+== wizard_prepared_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 16
+race Human
+set align NG
+class add Wizard
+class add Wizard
+class add Wizard
+spell add Wizard "Magic Missile"
+spell add Wizard Shield
+spell add Wizard Web
+spell prep Wizard "Magic Missile"
+spell prep Wizard "Magic Missile"
+spell prep Wizard Shield
+spell prep Wizard Web
+spell prep Wizard "Detect Magic"
+spellbook add Evening
+spell prep Wizard Web Evening
+
+== cleric_prepared_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat WIS 15
+race Dwarf
+set align LG
+class add Cleric
+class add Cleric
+class add Cleric
+domain add Sun
+domain add Good
+spell prep Cleric Bless
+spell prep Cleric "Cure Light Wounds"
+spell prep Cleric "Heat Metal"
+spell prep Cleric Aid
+spell prep Cleric Guidance
+spell prep Cleric Guidance

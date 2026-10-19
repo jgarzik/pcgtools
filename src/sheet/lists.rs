@@ -536,6 +536,35 @@ pub fn domains(s: &SheetCtx) -> Option<Element> {
 
 pub fn weapon_proficiencies(s: &SheetCtx) -> Element {
     let ds = &s.ctx.dataset;
+    let keys = weapon_prof_keys(s);
+    // proficiencies the data does not define are dropped; the rest
+    // show their output names
+    let natural: Vec<String> = crate::rules::equip::natural_weapons(&s.calc)
+        .into_iter()
+        .map(|n| n.name)
+        .collect();
+    let mut items: Vec<(String, String)> = keys
+        .iter()
+        .filter_map(|k| match ds.get(FileKind::WeaponProf, k) {
+            Some(o) => Some((o.key.to_lowercase(), output_name(o))),
+            // made up for the character: the unarmed strike and natural
+            // attacks
+            None if k == "Unarmed Strike" || natural.contains(k) => {
+                Some((k.to_lowercase(), k.clone()))
+            }
+            None => None,
+        })
+        .filter(|(_, n)| !n.is_empty())
+        .collect();
+    items.dedup();
+    items.sort();
+    let names: Vec<&str> = items.iter().map(|(_, n)| n.as_str()).collect();
+    Element::leaf("weapon_proficiencies", names.join(", "))
+}
+
+/// Keys of the weapon proficiencies the character has.
+pub fn weapon_prof_keys(s: &SheetCtx) -> Vec<String> {
+    let ds = &s.ctx.dataset;
     let c = &s.calc;
     let mut keys: Vec<String> = Vec::new();
     let mut add = |k: &str| {
@@ -543,24 +572,73 @@ pub fn weapon_proficiencies(s: &SheetCtx) -> Element {
             keys.push(k.to_string());
         }
     };
+    // the saved list is a record, except for proficiencies chosen
+    // from an object's bonus choices (saved with their SOURCE)
     for l in s.ch.pcg.lines_tagged("WEAPONPROF") {
+        if l.get("SOURCE").is_none() {
+            continue;
+        }
         if let Some(h) = l.head() {
             for e in h.children().iter().filter(|e| e.tag == "WEAPON") {
                 add(&e.value_text());
             }
-            let v = h.value_text();
-            if !v.is_empty() {
-                add(&v);
+        }
+    }
+    // proficiency types, as changed by CHANGEPROF (`TYPE.x=Simple`,
+    // `Key=Martial`)
+    let mut changed: Vec<(String, String)> = Vec::new();
+    for src in &c.sources {
+        for t in src.tokens.iter().filter(|t| t.tag == "CHANGEPROF") {
+            for part in t.value.split('|') {
+                if let Some((what, to)) = part.split_once('=') {
+                    for w in what.split(',') {
+                        changed.push((w.to_string(), to.to_string()));
+                    }
+                }
             }
         }
     }
+    let prof_types = |o: &Object| -> Vec<String> {
+        let mut t: Vec<String> = Vec::new();
+        let mut moved = false;
+        for (what, to) in &changed {
+            let hit = match what
+                .strip_prefix("TYPE.")
+                .or_else(|| what.strip_prefix("TYPE="))
+            {
+                Some(ty) => o.is_type(ty),
+                None => o.key.eq_ignore_ascii_case(what),
+            };
+            if hit {
+                t.push(to.clone());
+                moved = true;
+            }
+        }
+        if !moved {
+            t.extend(o.types().iter().map(|x| x.to_string()));
+        }
+        t
+    };
     for src in &c.sources {
         for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
             let Some(rest) = t.value.strip_prefix("WEAPONPROF|") else {
                 continue;
             };
-            for item in rest.split('|') {
-                if Prereq::is_pre_tag(item.split(':').next().unwrap_or("")) {
+            let items: Vec<&str> = rest.split('|').collect();
+            let pres_ok = items
+                .iter()
+                .filter(|i| {
+                    Prereq::is_pre_tag(i.split(':').next().unwrap_or("")) || i.starts_with("!PRE")
+                })
+                .filter_map(|i| Prereq::parse(i).ok())
+                .all(|p| c.passes(&p, Some(src)));
+            if !pres_ok {
+                continue;
+            }
+            for item in items {
+                if Prereq::is_pre_tag(item.split(':').next().unwrap_or(""))
+                    || item.starts_with("!PRE")
+                {
                     continue;
                 }
                 if let Some(ty) = item
@@ -568,13 +646,30 @@ pub fn weapon_proficiencies(s: &SheetCtx) -> Element {
                     .or_else(|| item.strip_prefix("TYPE."))
                 {
                     for o in ds.objects(FileKind::WeaponProf) {
-                        if ty.split('.').all(|t| o.is_type(t)) {
+                        let types = prof_types(o);
+                        if ty
+                            .split('.')
+                            .all(|t| types.iter().any(|x| x.eq_ignore_ascii_case(t)))
+                        {
                             add(&o.key);
                         }
+                    }
+                    // the unarmed strike is a simple weapon even when the
+                    // data does not define it
+                    if ty.eq_ignore_ascii_case("Simple")
+                        && ds.get(FileKind::WeaponProf, "Unarmed Strike").is_none()
+                    {
+                        add("Unarmed Strike");
                     }
                 } else if item == "%LIST" {
                     for ch in &src.choices {
                         add(ch);
+                    }
+                } else if item.eq_ignore_ascii_case("DEITYWEAPONS") {
+                    if let Some(d) = c.deity() {
+                        for w in d.values("DEITYWEAP").flat_map(|v| v.split('|')) {
+                            add(w);
+                        }
                     }
                 } else {
                     add(item);
@@ -582,19 +677,11 @@ pub fn weapon_proficiencies(s: &SheetCtx) -> Element {
             }
         }
     }
-    let mut items: Vec<(String, String)> = keys
-        .iter()
-        .map(|k| {
-            let name = ds
-                .get(FileKind::WeaponProf, k)
-                .map(|o| o.name.clone())
-                .unwrap_or_else(|| k.clone());
-            (k.to_lowercase(), name)
-        })
-        .collect();
-    items.sort();
-    let names: Vec<&str> = items.iter().map(|(_, n)| n.as_str()).collect();
-    Element::leaf("weapon_proficiencies", names.join(", "))
+    // natural attacks are proficiencies of their own
+    for n in crate::rules::equip::natural_weapons(c) {
+        add(&n.name);
+    }
+    keys
 }
 
 pub fn languages(s: &SheetCtx) -> Element {

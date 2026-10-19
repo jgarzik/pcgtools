@@ -266,8 +266,9 @@ fn saving_throws(s: &SheetCtx) -> Element {
     out
 }
 
-/// Iterative attack string: one entry per attack, `/`-separated.
-fn attack_string(s: &SheetCtx, to_hit: i64) -> String {
+/// Base attack bonus of each attack in a full attack: BAB, then
+/// lower by the attack cycle while attacks remain.
+pub fn bab_sequence(s: &SheetCtx) -> Vec<i64> {
     let c = &s.calc;
     let bab = c.bonus.total("COMBAT", "BASEAB") as i64;
     let max_attacks: i64 = s
@@ -290,13 +291,13 @@ fn attack_string(s: &SheetCtx, to_hit: i64) -> String {
             src.kind == "Class" && src.key == cls.key
         }) as i64;
     }
-    let mut working = bab + to_hit;
+    let mut working = bab;
     let mut attack_total = class_bab;
     let mut sub_total = bab;
     let mut left = max_attacks;
-    let mut parts = Vec::new();
+    let mut out = Vec::new();
     loop {
-        parts.push(signed(working));
+        out.push(working);
         working -= cycle;
         attack_total -= cycle;
         sub_total -= cycle;
@@ -305,7 +306,16 @@ fn attack_string(s: &SheetCtx, to_hit: i64) -> String {
             break;
         }
     }
-    parts.join("/")
+    out
+}
+
+/// Iterative attack string: one entry per attack, `/`-separated.
+pub fn attack_string(s: &SheetCtx, to_hit: i64) -> String {
+    bab_sequence(s)
+        .iter()
+        .map(|v| signed(v + to_hit))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn attack(s: &SheetCtx) -> Element {

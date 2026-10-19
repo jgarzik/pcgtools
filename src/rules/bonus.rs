@@ -120,7 +120,7 @@ impl BonusTable {
     ) {
         self.add(category, target, btype, value);
         let cat = category.to_ascii_uppercase();
-        let value = if fractional(&cat) {
+        let value = if fractional(&format!("{}.{}", cat, target.to_ascii_uppercase())) {
             value
         } else {
             value.trunc()
@@ -242,7 +242,7 @@ impl BonusTable {
     /// suffix, as written in data.
     pub fn add(&mut self, category: &str, target: &str, btype: Option<&str>, value: f64) {
         let cat = category.to_ascii_uppercase();
-        let value = if fractional(&cat) {
+        let value = if fractional(&format!("{}.{}", cat, target.to_ascii_uppercase())) {
             value
         } else {
             value.trunc()

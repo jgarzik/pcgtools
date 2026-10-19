@@ -33,20 +33,20 @@ pub fn weight_allowance(s: &SheetCtx) -> Element {
 }
 
 /// An item placed in the character's equipment set.
-struct Placed<'a> {
-    item: EqItem<'a>,
-    id: String,
+pub(super) struct Placed<'a> {
+    pub item: EqItem<'a>,
+    pub id: String,
     /// set name of the top-level node the item is under
-    root: String,
-    parent: Option<usize>,
-    equipped: bool,
-    carried: f64,
-    qty: f64,
+    pub root: String,
+    pub parent: Option<usize>,
+    pub equipped: bool,
+    pub carried: f64,
+    pub qty: f64,
 }
 
 /// Master items (one per saved item) and the items placed in the
 /// calculation equipment set, in set order.
-fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
+pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
     let c = &s.calc;
     let pcg = &s.ch.pcg;
     let natural = natural_weapons(c);
@@ -61,6 +61,10 @@ fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
             {
                 let mut n = n.clone();
                 n.qty = num(l.text("QUANTITY").as_deref());
+                n.output_index = l
+                    .text("OUTPUTORDER")
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
                 return Some(n);
             }
             EqItem::from_pcg(c, l)
@@ -118,13 +122,11 @@ fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
                     .map(|o| EqItem::from_data(c, o))
             });
         let Some(mut item) = found else { continue };
-        if item.modified.is_none() {
-            if let Some(m) = master
-                .iter()
-                .find(|m| m.name.eq_ignore_ascii_case(&item.name))
-            {
-                item.output_index = m.output_index;
-            }
+        if let Some(m) = master
+            .iter()
+            .find(|m| m.long_name().eq_ignore_ascii_case(&item.long_name()))
+        {
+            item.output_index = m.output_index;
         }
         item.qty = *qty;
         let parts: Vec<&str> = id.split('.').collect();
@@ -333,7 +335,12 @@ fn item_element(s: &SheetCtx, items: &[Placed], i: usize, full: bool, qty: f64) 
 
 /// Placed items in sheet order, with quantities merged for identical
 /// items in the same place.
-fn merged(items: &[Placed]) -> Vec<(usize, f64)> {
+pub(super) fn merged(items: &[Placed]) -> Vec<(usize, f64)> {
+    merged_by(items, false)
+}
+
+/// [`merged`]; with `by_name`, identical items merge wherever they are.
+pub(super) fn merged_by(items: &[Placed], by_name: bool) -> Vec<(usize, f64)> {
     let parent_name = |p: &Placed| {
         p.parent
             .map(|x| items[x].item.name.clone())
@@ -364,9 +371,10 @@ fn merged(items: &[Placed]) -> Vec<(usize, f64)> {
             let mut j = i + 1;
             while j < list.len() {
                 let b = list[j].0;
-                if items[b].item.name == items[a].item.name
-                    && place(&items[b]) == place(&items[a])
-                    && parent_name(&items[b]) == parent_name(&items[a])
+                if items[b].item.long_name() == items[a].item.long_name()
+                    && (by_name
+                        || place(&items[b]) == place(&items[a])
+                            && parent_name(&items[b]) == parent_name(&items[a]))
                     && items[b].item.temporary.is_none()
                 {
                     list[i].1 += list[j].1;

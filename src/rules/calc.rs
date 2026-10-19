@@ -2925,8 +2925,21 @@ impl<'a> Calc<'a> {
                                 vec![tg.clone()]
                             };
                             let origin = s.source();
-                            for tg in tgs {
-                                table.add_from(&cat, &tg, btype, v, &origin);
+                            // a category naming the choice
+                            // (WEAPONPROF=%LIST) applies once per choice
+                            let cats: Vec<String> =
+                                if cat.contains("%LIST") || cat.contains("%CHOICE") {
+                                    s.choices
+                                        .iter()
+                                        .map(|c| cat.replace("%LIST", c).replace("%CHOICE", c))
+                                        .collect()
+                                } else {
+                                    vec![cat.clone()]
+                                };
+                            for cat in &cats {
+                                for tg in &tgs {
+                                    table.add_from(cat, tg, btype, v, &origin);
+                                }
                             }
                         }
                     }

@@ -746,6 +746,32 @@ impl<'a> EqItem<'a> {
         (name, self.size.clone())
     }
 
+    /// An item made up for the sheet (such as the unarmed strike).
+    pub fn synthetic(obj: Object, size: &str) -> EqItem<'a> {
+        EqItem {
+            name: obj.name.clone(),
+            key: obj.key.clone(),
+            output_name: None,
+            data: Cow::Owned(obj.clone()),
+            base: Cow::Owned(obj),
+            custom: false,
+            size: size.to_string(),
+            resized_cost: None,
+            weight: 0.0,
+            cost_mod: 0.0,
+            weight_mod: 0.0,
+            sprops: Vec::new(),
+            eqmods: Vec::new(),
+            alt_eqmods: Vec::new(),
+            qty: 1.0,
+            output_index: 0,
+            sub_index: 0,
+            modified: None,
+            temporary: None,
+            note: String::new(),
+        }
+    }
+
     /// A copy of this item carrying temporary bonuses from `source`:
     /// it costs only what its modifiers add and weighs nothing.
     pub fn temporary_copy(&self, source: &str, bonuses: Vec<String>) -> EqItem<'a> {
@@ -813,6 +839,7 @@ pub fn natural_weapons<'a>(calc: &Calc<'a>) -> Vec<EqItem<'a>> {
                 let mut tokens = vec![
                     tok("TYPE", f[1]),
                     tok("DAMAGE", f[3]),
+                    tok("ATTACKS", f[2]),
                     tok("CRITRANGE", "1"),
                     tok("CRITMULT", "x2"),
                     tok("SIZE", &size),

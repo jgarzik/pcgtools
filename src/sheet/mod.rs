@@ -20,6 +20,7 @@ mod lists;
 mod skills;
 pub mod tree;
 pub mod units;
+mod weapons;
 
 use crate::context::Context;
 use crate::dataset::Object;
@@ -271,6 +272,7 @@ pub fn build(ch: &Character, ctx: &Context) -> Element {
     for e in combat::build_after_skills(&s) {
         root.push(e);
     }
+    root.push(weapons::build(&s));
     root.push(gear::protection(&s));
     root.push(lists::class_features(&s));
     root.push(gear::equipment(&s));

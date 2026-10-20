@@ -930,6 +930,7 @@ class add Sage --subclass "Sage 1st" --choose Acrobatics --choose Athletics --ch
 gamemode Pathfinder
 campaign Core Rulebook
 full
+differs character/spells[0]/known_spells[0]/class[0]/@concentration -- PCGen counts no ranger levels toward the caster level: it looks up the level of the data's class, not the character's copy
 set stat WIS 14
 set stat DEX 14
 race Dwarf

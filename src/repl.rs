@@ -622,6 +622,7 @@ impl Session {
                         .ok_or_else(|| Error::Other("no file name; use 'save PATH'".into()))?,
                 };
                 self.ch.write(&path)?;
+                self.ch.path = Some(path.clone());
                 self.path = Some(path.clone());
                 self.dirty = false;
                 Ok(Outcome::Text(format!("saved {}", path.display())))

@@ -185,6 +185,15 @@ impl Context {
                 )));
             }
         }
+        // PCGen drops a follower whose file it cannot find
+        for (name, _, _, file) in c.followers() {
+            if !c.follower_file_found(&file) {
+                d.push(Diagnostic::warning(format!(
+                    "follower '{}': file '{}' not found; it is not loaded",
+                    name, file
+                )));
+            }
+        }
         d
     }
 }

@@ -3804,7 +3804,7 @@ impl<'a> Calc<'a> {
             srcs.push(s);
         }
         // bonuses a follower's race grants its master
-        for f in self.ch.pcg.lines_tagged("FOLLOWER") {
+        for f in self.ch.loaded_followers() {
             let Some(race) = f.text("RACE") else { continue };
             for o in ds.objects(FileKind::CompanionMod) {
                 if o.head_tag.as_deref() == Some("MASTERBONUSRACE")

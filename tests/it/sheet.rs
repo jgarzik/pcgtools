@@ -1184,3 +1184,51 @@ fn spell_like_concentration_counts_every_casting_class() {
     s.exec("class add Chanter").unwrap();
     assert_eq!(conc(&s).as_deref(), Some("+6"));
 }
+
+#[test]
+fn followers_need_their_files() {
+    let dirs = DataDirs {
+        data: Some(common::fixture("mini/data")),
+        system: Some(common::fixture("mini/system")),
+        ..Default::default()
+    };
+    let familiars = |ch: &Character| {
+        let ctx = Context::for_character(ch, dirs.clone());
+        sheet::build(ch, &ctx).child("companions").map_or(0, |c| {
+            c.children.iter().filter(|e| e.tag == "familiar").count()
+        })
+    };
+    let mut s = new_session(&[
+        "class add Tinker",
+        "follower add Whiskers Familiar Gearling",
+    ]);
+    // not yet saved, so nothing says where its file would be
+    assert_eq!(familiars(&s.ch), 1);
+    let dir = std::env::temp_dir().join(format!("pcgtools-follower-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcg = dir.join("pip.pcg");
+    s.exec(&format!("save \"{}\"", pcg.display())).unwrap();
+    // PCGen drops a follower whose file it cannot find, and says so
+    assert_eq!(familiars(&s.ch), 0);
+    let ch = Character::read(&pcg).unwrap();
+    assert_eq!(familiars(&ch), 0);
+    let ctx = Context::for_character(&ch, dirs.clone());
+    let warned = ctx.check_references(&ch);
+    assert!(
+        warned
+            .items
+            .iter()
+            .any(|d| d.message.contains("follower 'Whiskers'")),
+        "{:?}",
+        warned.items
+    );
+    // one beside the character's file is found
+    std::fs::write(dir.join("Whiskers.pcg"), "").unwrap();
+    assert_eq!(familiars(&ch), 1);
+    assert!(Context::for_character(&ch, dirs.clone())
+        .check_references(&ch)
+        .items
+        .iter()
+        .all(|d| !d.message.contains("follower")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

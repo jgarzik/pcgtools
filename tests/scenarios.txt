@@ -7,6 +7,7 @@
 # differs PATH -- WHY  a sheet value where PCGen is known to be wrong
 # varies PATH -- WHY   one where PCGen is only sometimes wrong
 # full               also compare what PCGen's fuller sheet adds
+# warns TEXT -- WHY    a complaint PCGen makes on loading, as it should
 # anything else      an editor command, as typed in `pcgtools repl`
 
 == fighter_35e
@@ -972,3 +973,13 @@ feat add "Uncanny Concentration"
 spell add Sorcerer "Magic Missile"
 spell add Wizard "Mage Armor"
 spell prep Wizard "Mage Armor"
+
+== missing_follower_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat WIS 14
+race Human
+set align TN
+class add Druid
+follower add Rex "Animal Companion" "Companion (Wolf)" Rex.pcg --force
+warns Unable to find follower at Rex.pcg -- the file is not there, so the follower is dropped

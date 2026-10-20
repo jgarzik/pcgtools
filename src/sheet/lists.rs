@@ -647,7 +647,7 @@ pub fn companions(s: &SheetCtx) -> Element {
         ("companion", "ANIMAL COMPANION"),
         ("follower", "FOLLOWER"),
     ] {
-        for l in s.ch.pcg.lines_tagged("FOLLOWER") {
+        for l in s.ch.loaded_followers() {
             if !l.text("TYPE").is_some_and(|t| t.eq_ignore_ascii_case(ty)) {
                 continue;
             }

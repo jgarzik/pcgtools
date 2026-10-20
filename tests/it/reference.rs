@@ -5,7 +5,8 @@
 // editor, its sheet is exported by a PCGen build, and every value of
 // that sheet must match the sheet pcgtools builds from the saved file.
 // PCGen complaints about loading the saved file also fail the test,
-// apart from those it also makes about a bare new character.
+// apart from those it also makes about a bare new character and those
+// the scenario expects.
 //
 // A scenario with a `full` line is also exported with PCGen's fuller
 // sheet template, and what that sheet adds which pcgtools builds with
@@ -40,6 +41,8 @@ struct Scenario {
     varies: Vec<String>,
     /// also compare the fuller sheet's additions
     full: bool,
+    /// text of complaints PCGen is expected to make on loading
+    warns: Vec<String>,
 }
 
 /// Parse the scenario file: `== name` starts a scenario, `gamemode`
@@ -59,6 +62,7 @@ fn scenarios(text: &str) -> Vec<Scenario> {
                 differs: Vec::new(),
                 varies: Vec::new(),
                 full: false,
+                warns: Vec::new(),
             });
             continue;
         }
@@ -76,6 +80,9 @@ fn scenarios(text: &str) -> Vec<Scenario> {
         } else if let Some(v) = line.strip_prefix("varies ") {
             let path = v.split_once(" -- ").map_or(v, |(p, _)| p);
             s.varies.push(path.trim().to_string());
+        } else if let Some(w) = line.strip_prefix("warns ") {
+            let text = w.split_once(" -- ").map_or(w, |(t, _)| t);
+            s.warns.push(text.trim().to_string());
         } else {
             s.commands.push(line.to_string());
         }
@@ -273,12 +280,29 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    problems.extend(
-        complaints
-            .into_iter()
-            .filter(|c| !baseline.contains(c))
-            .map(|c| format!("PCGen: {}", c)),
-    );
+    let complaints: Vec<String> = complaints
+        .into_iter()
+        .filter(|c| !baseline.contains(c))
+        .collect();
+    for w in &s.warns {
+        if !complaints.iter().any(|c| c.contains(w.as_str())) {
+            problems.push(format!(
+                "PCGen no longer warns '{}'; remove its 'warns' line",
+                w
+            ));
+        }
+    }
+    let unexpected: Vec<&String> = complaints
+        .iter()
+        .filter(|c| !s.warns.iter().any(|w| c.contains(w.as_str())))
+        .collect();
+    // the lines introducing the warnings say nothing of their own
+    if !unexpected
+        .iter()
+        .all(|c| c.contains("The following warnings were encountered"))
+    {
+        problems.extend(unexpected.iter().map(|c| format!("PCGen: {}", c)));
+    }
     // our sheet is built from the saved file, as PCGen's is
     let ch = Character::read(&pcg).unwrap();
     let ctx = Context::for_character(&ch, dirs);

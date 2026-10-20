@@ -16,7 +16,7 @@
 use super::{Elem, PcgFile, PcgLine};
 use crate::error::Result;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The order PCGen writes sections in; new lines are inserted after
 /// the last existing line of the same or an earlier tag.
@@ -250,6 +250,9 @@ fn line_domain(l: &PcgLine) -> Option<String> {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Character {
     pub pcg: PcgFile,
+    /// where the file was read from or last written to
+    #[serde(skip)]
+    pub path: Option<PathBuf>,
 }
 
 /// A number as saved: no trailing `.0` for whole values.
@@ -289,11 +292,12 @@ impl Character {
     pub fn read(path: &Path) -> Result<Character> {
         Ok(Character {
             pcg: PcgFile::read(path)?,
+            path: Some(path.to_path_buf()),
         })
     }
 
     pub fn from_pcg(pcg: PcgFile) -> Character {
-        Character { pcg }
+        Character { pcg, path: None }
     }
 
     /// A new, empty character.
@@ -333,7 +337,7 @@ impl Character {
         l.push(PcgLine::blank());
         l.push(PcgLine::comment("Character Equipment"));
         l.push(PcgLine::new(vec![Elem::raw("MONEY", "0")]));
-        Character { pcg }
+        Character { pcg, path: None }
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
@@ -1853,6 +1857,31 @@ impl Character {
                 ))
             })
             .collect()
+    }
+
+    /// The FOLLOWER lines PCGen keeps when it loads the character:
+    /// those naming the follower, its companion list and a file it
+    /// finds, beside the character's own file or as written.  (PCGen
+    /// also looks in its character directory, which is not known here.)
+    /// A character not read from a file keeps them all.
+    pub fn loaded_followers(&self) -> impl Iterator<Item = &PcgLine> {
+        self.pcg.lines_tagged("FOLLOWER").filter(|l| {
+            let named = l.head().is_some_and(|h| !h.value_text().is_empty());
+            let typed = l.text("TYPE").is_some_and(|t| !t.is_empty());
+            named && typed && l.text("FILE").is_some_and(|f| self.follower_file_found(&f))
+        })
+    }
+
+    /// Does PCGen find a follower file the character names?
+    pub fn follower_file_found(&self, file: &str) -> bool {
+        let Some(path) = &self.path else {
+            return true;
+        };
+        if file.is_empty() {
+            return false;
+        }
+        let beside = path.parent().unwrap_or(Path::new(".")).join(file);
+        beside.exists() || Path::new(file).exists()
     }
 
     pub fn add_follower(&mut self, name: &str, kind: &str, race: &str, file: &str) {

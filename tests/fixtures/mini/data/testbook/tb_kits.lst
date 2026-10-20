@@ -40,3 +40,6 @@ CLASS:Tinker	LEVEL:1
 SKILL:Climbing|Swimming	RANK:1
 SKILL:Diving	RANK:1
 SKILL:Tongues	RANK:1	SELECTION:Gear Cant,Trade Tongue
+
+STARTPACK:Knack Kit
+ABILITY:CATEGORY=FEAT|Skill Knack(Climbing)

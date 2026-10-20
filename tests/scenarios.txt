@@ -87,6 +87,13 @@ campaign 3.5 RSRD - Campaign Set - Core Books I - III
 race Goblin
 kit apply "Goblin Default"
 
+# a kit ability with its choice after the name
+== gnome_kit_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+race Gnome
+kit apply "Gnome Default"
+
 == fighter_pf
 gamemode Pathfinder
 campaign Core Rulebook

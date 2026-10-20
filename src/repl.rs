@@ -2618,10 +2618,26 @@ impl Session {
                         }
                     };
                     for k in list.split('|') {
-                        let o = self.find_in(FileKind::Ability, Some(&cat), k)?;
+                        // a choice may follow the name: `Name(Choice)`
+                        let (o, choice) = match self.find_in(FileKind::Ability, Some(&cat), k) {
+                            Ok(o) => (o, None),
+                            Err(e) => match crate::rules::calc::split_choice(k) {
+                                (name, Some(ch)) => {
+                                    match self.find_in(FileKind::Ability, Some(&cat), name) {
+                                        Ok(o) => (o, Some(ch.to_string())),
+                                        Err(_) => return Err(e),
+                                    }
+                                }
+                                _ => return Err(e),
+                            },
+                        };
                         let (key, c) = (o.key.clone(), o.category.clone().unwrap_or(cat.clone()));
-                        self.ch.add_ability(&cat, &c, &key, &[]);
-                        done.push(key);
+                        let choices: Vec<String> = choice.into_iter().collect();
+                        self.ch.add_ability(&cat, &c, &key, &choices);
+                        done.push(match choices.first() {
+                            Some(ch) => format!("{} ({})", key, ch),
+                            None => key,
+                        });
                     }
                 }
                 "SKILL" => self.kit_skill(sl, &mut done, &mut short)?,

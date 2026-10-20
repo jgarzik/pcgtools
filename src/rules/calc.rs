@@ -179,7 +179,7 @@ fn lower(s: &str) -> String {
 }
 
 /// Split "Key (Choice)" into key and choice.
-fn split_choice(s: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_choice(s: &str) -> (&str, Option<&str>) {
     if !s.ends_with(')') {
         return (s, None);
     }

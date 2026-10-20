@@ -497,6 +497,22 @@ fn kit_class_levels_count_like_class_add() {
 }
 
 #[test]
+fn kit_abilities_carry_their_choice() {
+    // the choice is written straight after the name
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    ok(&mut s, "kit apply \"Knack Kit\"");
+    let a: Vec<(String, Vec<String>)> =
+        s.ch.abilities()
+            .into_iter()
+            .map(|a| (a.key, a.applied_to))
+            .collect();
+    assert_eq!(
+        a,
+        [("Skill Knack".to_string(), vec!["Climbing".to_string()])]
+    );
+}
+
+#[test]
 fn kit_skills_draw_from_the_skill_pool() {
     let new = || Session::create("Testmode", &["TB".into()], "Nova", dirs());
     let ranks = |s: &Session| -> Vec<(String, Vec<(String, f64)>)> {

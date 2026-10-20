@@ -919,6 +919,18 @@ equip wear "Ring of Sustenance"
 equip add "Ring of Swimming"
 equip wear "Ring of Swimming"
 
+== item_spells_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat WIS 12
+race Human
+set align NG
+class add Fighter
+equip add "Ring of Feather Falling"
+equip wear "Ring of Feather Falling"
+equip add "Hand of Glory"
+equip wear "Hand of Glory"
+
 == sage_autorank_fantasycraft
 gamemode FantasyCraft
 campaign Fantasy Craft Core Rulebook (Demo)

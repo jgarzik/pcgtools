@@ -171,6 +171,71 @@ fn pcgen_sheet(
     ))
 }
 
+/// Names of the books of spell-like abilities (SPELLS on the race,
+/// items and so on) on a sheet.
+fn innate_books(sheet: &Element) -> Vec<String> {
+    let path = ["spells", "spells_innate", "class_innate"];
+    let mut at = Some(sheet);
+    for p in path {
+        at = at.and_then(|e| e.child(p));
+    }
+    at.map(|ci| {
+        ci.children
+            .iter()
+            .filter(|c| c.tag == "spellbook")
+            .filter_map(|c| book_name(c).map(str::to_string))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn book_name(e: &Element) -> Option<&str> {
+    e.attrs
+        .iter()
+        .find(|(k, _)| k == "name")
+        .map(|(_, v)| v.as_str())
+}
+
+/// PCGen numbers the books of spell-like abilities in the order of a
+/// set hashed on object identity, which changes with unrelated details
+/// of the character, so no rule can reproduce it.  On both sheets, put
+/// those books in name order (keeping the numbers where they stand).
+fn sort_books(e: &mut Element, innate: &[String]) {
+    let slots: Vec<usize> = (0..e.children.len())
+        .filter(|&i| {
+            let c = &e.children[i];
+            c.tag == "spellbook" && book_name(c).is_some_and(|n| innate.iter().any(|b| b == n))
+        })
+        .collect();
+    if slots.len() > 1 {
+        let numbers: Vec<Option<String>> = slots
+            .iter()
+            .map(|&i| {
+                e.children[i]
+                    .attrs
+                    .iter()
+                    .find(|(k, _)| k == "number")
+                    .map(|(_, v)| v.clone())
+            })
+            .collect();
+        let mut books: Vec<Element> = slots.iter().map(|&i| e.children[i].clone()).collect();
+        books.sort_by(|a, b| book_name(a).cmp(&book_name(b)));
+        for ((&i, mut book), number) in slots.iter().zip(books).zip(numbers) {
+            if let Some(n) = number {
+                for (k, v) in &mut book.attrs {
+                    if k == "number" {
+                        *v = n.clone();
+                    }
+                }
+            }
+            e.children[i] = book;
+        }
+    }
+    for c in &mut e.children {
+        sort_books(c, innate);
+    }
+}
+
 /// Build, export and compare one scenario: problems found, and
 /// (values matched, values compared).
 fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>, usize, usize) {
@@ -217,7 +282,14 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
     // our sheet is built from the saved file, as PCGen's is
     let ch = Character::read(&pcg).unwrap();
     let ctx = Context::for_character(&ch, dirs);
-    let ours = sheet::build(&ch, &ctx);
+    let mut expected = expected;
+    let mut ours = sheet::build(&ch, &ctx);
+    let innate: Vec<String> = [&expected, &ours]
+        .iter()
+        .flat_map(|s| innate_books(s))
+        .collect();
+    sort_books(&mut expected, &innate);
+    sort_books(&mut ours, &innate);
     let mut diff = sheet::compare(&expected, &ours);
     if s.full || std::env::var_os("REF_FULL").is_some() {
         let full = work.join("full");
@@ -381,6 +453,38 @@ fn reference_sheets() {
         "scenarios differ from PCGen:\n{}",
         failed.join("\n")
     );
+}
+
+#[test]
+fn innate_books_compare_in_name_order() {
+    let a = Element::parse_xml(
+        "<character><spells><spells_innate><class_innate>\
+         <spellbook number=\"2\" name=\"Ring\"><n>r</n></spellbook>\
+         <spellbook number=\"3\" name=\"Hand\"><n>h</n></spellbook>\
+         </class_innate></spells_innate><memorized_spells>\
+         <spellbook number=\"2\" name=\"Ring\"/><spellbook number=\"3\" name=\"Hand\"/>\
+         <spellbook number=\"4\" name=\"Tome\"/></memorized_spells></spells></character>",
+    )
+    .unwrap();
+    let b = Element::parse_xml(
+        "<character><spells><spells_innate><class_innate>\
+         <spellbook number=\"2\" name=\"Hand\"><n>h</n></spellbook>\
+         <spellbook number=\"3\" name=\"Ring\"><n>r</n></spellbook>\
+         </class_innate></spells_innate><memorized_spells>\
+         <spellbook number=\"2\" name=\"Hand\"/><spellbook number=\"3\" name=\"Ring\"/>\
+         <spellbook number=\"4\" name=\"Tome\"/></memorized_spells></spells></character>",
+    )
+    .unwrap();
+    assert!(!sheet::compare(&a, &b).mismatches.is_empty());
+    let innate = innate_books(&a);
+    assert_eq!(innate, ["Ring", "Hand"]);
+    let (mut a, mut b) = (a, b);
+    sort_books(&mut a, &innate);
+    sort_books(&mut b, &innate);
+    assert!(sheet::compare(&a, &b).mismatches.is_empty());
+    assert!(a.to_xml().contains("number=\"2\" name=\"Hand\""));
+    // a book that is not innate keeps its place
+    assert!(a.to_xml().contains("number=\"4\" name=\"Tome\""));
 }
 
 #[test]

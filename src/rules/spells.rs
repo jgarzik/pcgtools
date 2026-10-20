@@ -294,6 +294,9 @@ impl<'a> Spells<'a> {
                 if !ok {
                     continue;
                 }
+                // PCGen adds these books while walking a set hashed on
+                // object identity, an order that shifts with unrelated
+                // details of the character; source order is as good as any
                 self.add_book(book);
                 for sp in spells {
                     let (name, dc) = match sp.split_once(',') {

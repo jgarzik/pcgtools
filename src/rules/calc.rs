@@ -2047,7 +2047,7 @@ impl<'a> Calc<'a> {
             o.values(tag)
                 .filter_map(|v| Bonus::parse(&format!("{}|{}", head, v)).ok())
                 .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
-                .filter_map(|b| b.expr().ok().map(|e| eval(&e, &env)))
+                .map(|b| eval_str(&b.formula, &env))
                 .sum()
         };
         let lock = self.bonus.total("MONSKILLPTS", "LOCKNUMBER").trunc();

@@ -478,6 +478,25 @@ fn skill_points_count_variables_the_class_defines() {
 }
 
 #[test]
+fn kit_class_levels_count_like_class_add() {
+    // a kit's class levels gain the hit points and skill points the
+    // same levels added by hand would; this game mode never recounts
+    // skill points, so the saved pool must be right as gained
+    let saved = |cmds: &[&str]| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        for c in cmds {
+            ok(&mut s, c);
+        }
+        let ch = Character::from_pcg(PcgFile::parse(&pcg_text(&s)));
+        let hp: Vec<Option<i64>> = ch.levels().iter().map(|l| l.hp).collect();
+        (ch.skill_points_left("Drillmaster"), hp)
+    };
+    let by_hand = saved(&["class add Drillmaster", "class add Drillmaster"]);
+    assert!(by_hand.0 >= 4.0, "{:?}", by_hand);
+    assert_eq!(saved(&["kit apply \"Drill Kit\""]), by_hand);
+}
+
+#[test]
 fn monster_skill_points() {
     // skill points gained by each level of a class, after some commands
     let gains = |class: &str, setup: &[&str], n: usize| {
@@ -931,6 +950,9 @@ fn absurd_kit_quantities_are_refused() {
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
     let e = err(&mut s, "kit apply \"Hoard Kit\"");
     assert!(e.contains("quantity"), "{}", e);
+    // or of class levels
+    let e = err(&mut s, "kit apply \"Legion Kit\"");
+    assert!(e.contains("levels"), "{}", e);
 }
 
 /// A second-level Sage (3 level-0 casts, 2 level-1 plus one bonus

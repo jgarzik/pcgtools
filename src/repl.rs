@@ -690,39 +690,7 @@ impl Session {
                     let grants = self.stat_increases_for_new_level(o);
                     let pending = self.check_stat_increases(grants, &raise, force)?;
                     let o = self.ctx.dataset.get(FileKind::Class, &key).unwrap_or(o);
-                    // the stats rise before the level's skill points are
-                    // counted, if the game mode says so
-                    let int_before = {
-                        let mut c = self.calc();
-                        c.run();
-                        c.rule("INTBEFORE")
-                    };
-                    let mut work = self.ch.clone();
-                    if int_before {
-                        raise_stats(&mut work, &raise);
-                    }
-                    // the level is held while it is counted, so what the
-                    // class defines (a variable its points read) applies
-                    work.add_level(&key, 0, 0.0);
-                    // the hit die as the rules adjust it (a class without
-                    // one gains no rolled hit points) and the skill points
-                    // this level is worth, as the rules count them now
-                    let (hd, skills) = {
-                        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &work);
-                        c.run();
-                        let char_level = self.ch.total_level() + 1;
-                        let class_level = self
-                            .ch
-                            .classes()
-                            .iter()
-                            .find(|x| x.name.eq_ignore_ascii_case(&key))
-                            .map_or(1, |x| x.level + 1);
-                        (
-                            c.hit_die(o),
-                            c.skill_points_for_level(o, char_level)
-                                + c.bonus_skill_points(o, class_level, char_level),
-                        )
-                    };
+                    let (hd, skills, work) = self.new_level_worth(o, &raise);
                     let (lo, hi) = self.hit_point_range(&work, o, hd);
                     let hp: i64 = match w.get(3).filter(|v| !v.starts_with("--")) {
                         Some(v) => v
@@ -2327,6 +2295,39 @@ impl Session {
         Ok(())
     }
 
+    /// The hit die (as the rules adjust it; a class without one gains
+    /// no rolled hit points) and skill points a new level of `class` is
+    /// worth.  The level is held while it is counted, so what the class
+    /// defines (a variable its points read) applies, and the stats in
+    /// `raise` rise first if the game mode counts them before.  Also
+    /// returns the working copy of the character holding the level.
+    fn new_level_worth(&self, class: &Object, raise: &[String]) -> (i64, f64, Character) {
+        let int_before = {
+            let mut c = self.calc();
+            c.run();
+            c.rule("INTBEFORE")
+        };
+        let mut work = self.ch.clone();
+        if int_before {
+            raise_stats(&mut work, raise);
+        }
+        work.add_level(&class.key, 0, 0.0);
+        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &work);
+        c.run();
+        let char_level = self.ch.total_level() + 1;
+        let class_level = self
+            .ch
+            .classes()
+            .iter()
+            .find(|x| x.name.eq_ignore_ascii_case(&class.key))
+            .map_or(1, |x| x.level + 1);
+        let hd = c.hit_die(class);
+        let skills = c.skill_points_for_level(class, char_level)
+            + c.bonus_skill_points(class, class_level, char_level);
+        drop(c);
+        (hd, skills, work)
+    }
+
     /// Apply a starting kit's lines: funds, gear, stats, abilities,
     /// skills, languages, templates, deity, alignment and class levels.
     /// Gear is paid for at the kit's rate (EQUIPBUY, the full price by
@@ -2482,12 +2483,21 @@ impl Session {
                     done.push(key);
                 }
                 "CLASS" => {
-                    let o = self.find(FileKind::Class, val)?;
-                    let key = o.key.clone();
-                    let hd: i64 = o.get("HD").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let key = self.find(FileKind::Class, val)?.key.clone();
                     let levels: u32 = tok("LEVEL").and_then(|v| v.parse().ok()).unwrap_or(1);
+                    if levels > MAX_KIT_LEVELS {
+                        return Err(Error::Other(format!(
+                            "kit {} asks for an unreasonable number of {} levels",
+                            kit.key, key
+                        )));
+                    }
+                    // each level is gained as one added by hand is
                     for _ in 0..levels {
-                        self.ch.add_level(&key, hd, 0.0);
+                        let (hd, skills, _) = {
+                            let o = self.find(FileKind::Class, &key)?;
+                            self.new_level_worth(o, &[])
+                        };
+                        self.ch.add_level(&key, hd, skills);
                     }
                     done.push(format!("{} {}", key, levels));
                 }
@@ -2716,6 +2726,9 @@ fn raise_stats(ch: &mut Character, keys: &[String]) {
 
 /// Most of one item a kit may hand out.
 const MAX_KIT_QTY: f64 = 10_000.0;
+
+/// Most class levels one kit line may grant.
+const MAX_KIT_LEVELS: u32 = 100;
 
 /// Spell books and lists, and preparing spells.
 impl Session {

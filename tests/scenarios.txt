@@ -75,6 +75,16 @@ class add Cleric
 equip add "Mace (Heavy)"
 equip wear "Mace (Heavy)"
 
+# the kit's class level brings its skill points, which this game mode
+# never recounts; the ranks bought after it need all of them
+== goblin_kit_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+race Goblin
+kit apply "Goblin Default"
+skill Climb 4
+skill Jump 4
+
 == fighter_pf
 gamemode Pathfinder
 campaign Core Rulebook

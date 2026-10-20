@@ -1,6 +1,6 @@
 [package]
 name = "pcgtools"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -16,6 +16,7 @@ include = [
     "/tests",
     "/README.md",
     "/FORMAT.md",
+    "/BUGS.md",
     "/gen_catalog.py",
     "/LICENSE",
 ]

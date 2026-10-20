@@ -291,8 +291,8 @@ valid, and whether they are deprecated.
 
 ## Limitations
 
-* Version 1 character files (from very old releases) are not read.
-* Network (`http:`) file references are not fetched.
+[BUGS.md](BUGS.md) lists the known gaps and the places where pcgtools
+differs from PCGen.
 
 ## Contributing
 

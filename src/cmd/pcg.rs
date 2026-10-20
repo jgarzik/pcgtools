@@ -109,6 +109,7 @@ pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> 
     report(&ctx.diags);
     let mut calc = pcgtools::rules::calc::Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &c);
     let sheet = calc.run();
+    warn_unsettled(&sheet);
     for key in explain {
         let (cat, tgt) = key.split_once('.').unwrap_or((key.as_str(), ""));
         println!("{}:", key);
@@ -164,11 +165,18 @@ pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> 
     Ok(true)
 }
 
-pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>) -> CmdResult {
+pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>, full: bool) -> CmdResult {
     let c = Character::read(file)?;
     let ctx = Context::for_character(&c, o.dirs(None));
     report(&ctx.diags);
-    let sheet = pcgtools::sheet::build(&c, &ctx);
+    let sheet = if full {
+        pcgtools::sheet::build_full(&c, &ctx)
+    } else {
+        pcgtools::sheet::build(&c, &ctx)
+    };
+    warn_unsettled(
+        &pcgtools::rules::calc::Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &c).run(),
+    );
     let Some(exp_path) = compare else {
         if o.json {
             print_json(&sheet);
@@ -222,4 +230,15 @@ pub fn vars(o: &GlobalOpts, file: &Path, scope: Option<&str>) -> CmdResult {
         eprintln!("unknown names: {}", u.join(", "));
     }
     Ok(true)
+}
+
+/// Warn when the rules did not settle on values within the passes
+/// allowed (the data feeds a value back into itself).
+fn warn_unsettled(sheet: &pcgtools::rules::calc::Sheet) {
+    if !sheet.converged {
+        eprintln!(
+            "warning: values did not settle after {} passes; some may be wrong",
+            sheet.passes
+        );
+    }
 }

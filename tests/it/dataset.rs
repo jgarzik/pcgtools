@@ -63,19 +63,24 @@ fn objects_and_operations() {
     assert_eq!(vals("CLASSES"), vec!["Tinker=1"]);
     assert_eq!(vals("DESCRIPTOR"), vec!["Fire"]);
     assert!(vals("PRECLASS").is_empty());
+    // .CLEAR.x drops only x from a list, whatever its separator
+    let marsh = ds.get(FileKind::Race, "Marshborn").unwrap();
+    let vals = |tag: &str| marsh.values(tag).collect::<Vec<_>>();
+    assert_eq!(vals("LANGBONUS"), vec!["Old Script,Gear Cant"]);
+    assert_eq!(vals("MONCSKILL"), vec!["Climb", "Jump"]);
 
     // spells: MOD applied, FORGET applied, PRECAMPAIGN-gated file skipped
     let spark = ds.get(FileKind::Spell, "Spark").unwrap();
     assert_eq!(spark.get("DESC"), Some("A tiny spark."));
     assert!(ds.get(FileKind::Spell, "Doomed Spell").is_none());
-    assert_eq!(ds.objects(FileKind::Spell).len(), 2);
+    assert_eq!(ds.objects(FileKind::Spell).len(), 4);
 
     // class: merged CLASS lines, level lines, subclass, .MOD with level line
     let t = ds.get(FileKind::Class, "Tinker").unwrap();
     assert_eq!(t.get("HD"), Some("8"));
     assert!(t.values("FACT").any(|v| v == "Abb|Tnk"));
     let levels: Vec<&str> = t.sublines.iter().map(|s| s.value.as_str()).collect();
-    assert_eq!(levels, vec!["1:REPEATLEVEL:1", "1", "3", "5"]);
+    assert_eq!(levels, vec!["1:REPEATLEVEL:1", "1", "3", "4", "5"]);
     assert_eq!(t.children.len(), 1);
     assert_eq!(t.children[0].sublines.len(), 1);
 
@@ -94,10 +99,10 @@ fn objects_and_operations() {
     // kits group their lines
     let kit = ds.get(FileKind::Kit, "Cook Kit").unwrap();
     let tags: Vec<&str> = kit.sublines.iter().map(|s| s.tag.as_str()).collect();
-    assert_eq!(tags, vec!["REGION", "GEAR", "STAT"]);
+    assert_eq!(tags, vec!["REGION", "FUNDS", "FUNDS", "GEAR", "STAT"]);
 
     // included campaign's languages
-    assert_eq!(ds.objects(FileKind::Language).len(), 2);
+    assert_eq!(ds.objects(FileKind::Language).len(), 3);
 
     // tables
     assert_eq!(ds.tables.len(), 1);
@@ -176,4 +181,32 @@ fn duplicates_by_source_date_and_allowed() {
         ds.get(FileKind::Language, "Hush").unwrap().get("TYPE"),
         Some("Spoken")
     );
+}
+
+fn load_plain() -> Dataset {
+    let data = common::fixture("mini/data");
+    let mut reg = Registry::new(DataDirs {
+        data: Some(data.clone()),
+        ..Default::default()
+    });
+    let plan = LoadPlan::build(&mut reg, &[data.join("plain/plain.pcc")]);
+    Dataset::load(&plan)
+}
+
+#[test]
+fn files_not_in_utf8_are_skipped() {
+    let ds = load_plain();
+    // as PCGen does, the whole file is left out
+    assert!(ds.get(FileKind::Race, "Stranger").is_none());
+    assert!(ds.get(FileKind::Race, "None Selected").is_some());
+    assert!(ds.diags.items.iter().any(|d| d.message.contains("UTF-8")));
+}
+
+#[test]
+fn tag_prefixed_heads_keep_the_tag_in_the_name() {
+    // only class-like kinds have TAG:name heads; elsewhere the whole
+    // head is the name
+    let ds = load_plain();
+    assert!(ds.get(FileKind::Deity, "DEITY:Nobody").is_some());
+    assert!(ds.get(FileKind::Deity, "Nobody").is_none());
 }

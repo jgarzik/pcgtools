@@ -7,7 +7,7 @@ use pcgtools::gamemode::GameModes;
 fn fixture_modes() {
     let modes = GameModes::scan(&common::fixture("mini/system/gameModes"));
     assert!(modes.diags.is_empty(), "{:?}", modes.diags);
-    assert_eq!(modes.modes.len(), 2);
+    assert_eq!(modes.modes.len(), 3);
 
     let tm = modes.find("tm").expect("alias lookup");
     assert_eq!(tm.key, "Testmode");
@@ -32,6 +32,12 @@ fn fixture_modes() {
     assert_eq!(fast.len(), 3);
     assert_eq!(fast[2].level, "LEVEL");
     assert_eq!(fast[2].min_xp, "LEVEL*1000");
+    // rows before the first XPTABLE make up a table of their own
+    let pm = modes.find("Plainmode").unwrap();
+    let first = pm.level_table(None);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].min_xp, "(LEVEL*LEVEL-LEVEL)*500");
+    assert_eq!(pm.level_table(Some("Steep")).len(), 3);
 
     let sc: Vec<_> = tm.lines("statsandchecks.lst", "BONUSSPELLLEVEL").collect();
     assert_eq!(sc[0].get("BASESTATSCORE"), Some("12"));
@@ -69,4 +75,16 @@ fn corpus_modes() {
     unknown.sort();
     unknown.dedup();
     eprintln!("GAMEMODE values with no game mode: {:?}", unknown);
+}
+
+#[test]
+fn load_only_the_named_mode() {
+    let dir = common::fixture("mini/system/gameModes");
+    let (by_key, _) = GameModes::load_named(&dir, "testmode");
+    assert_eq!(by_key.map(|m| m.key), Some("Testmode".to_string()));
+    // an allowed alias finds the mode as well
+    let (by_alias, _) = GameModes::load_named(&dir, "TM");
+    assert_eq!(by_alias.map(|m| m.key), Some("Testmode".to_string()));
+    let (none, _) = GameModes::load_named(&dir, "Nomode");
+    assert!(none.is_none());
 }

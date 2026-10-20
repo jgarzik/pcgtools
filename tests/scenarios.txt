@@ -1,0 +1,991 @@
+# Characters built with the editor and checked against PCGen's own
+# sheet for them (tests/it/reference.rs).
+#
+# == name            starts a scenario (also the character's name)
+# gamemode MODE      game mode of the new character
+# campaign KEY       a campaign to use (repeatable)
+# differs PATH -- WHY  a sheet value where PCGen is known to be wrong
+# varies PATH -- WHY   one where PCGen is only sometimes wrong
+# full               also compare what PCGen's fuller sheet adds
+# warns TEXT -- WHY    a complaint PCGen makes on loading, as it should
+# anything else      an editor command, as typed in `pcgtools repl`
+
+== fighter_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+full
+set stat STR 16
+set stat DEX 13
+set stat CON 14
+race Dwarf
+set align LN
+class add Fighter
+class add Fighter
+feat add "Power Attack"
+ability add "Fighter Feat|Cleave"
+skill Climb 4
+equip add "Chainmail"
+equip wear "Chainmail"
+equip add "Waraxe (Dwarven)"
+equip wear "Waraxe (Dwarven)"
+
+== wizard_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 17
+set stat DEX 14
+set stat CON 12
+race Elf
+set align CG
+class add Wizard
+class add Wizard
+class add Wizard
+skill Concentration 6
+skill Spellcraft 6
+spell add Wizard "Magic Missile"
+spell add Wizard "Mage Armor"
+spell add Wizard "Web"
+equip add Quarterstaff
+equip wear Quarterstaff
+
+== multiclass_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 16
+set stat WIS 12
+race Human
+set align TN
+class add Rogue
+class add Rogue
+class add Ranger
+skill Hide 5 Rogue
+skill "Move Silently" 5 Rogue
+equip add "Leather"
+equip wear "Leather"
+equip add "Shortbow"
+equip wear "Shortbow"
+equip add "Arrows (20)"
+
+== cleric_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat WIS 16
+set stat CON 14
+race "None Selected"
+class add Cleric
+class add Cleric
+equip add "Mace (Heavy)"
+equip wear "Mace (Heavy)"
+
+# the kit's class level brings its skill points, which this game mode
+# never recounts; the kit's own ranks (none in a Warrior skill, so two
+# points each) spend all of them
+== goblin_kit_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+race Goblin
+kit apply "Goblin Default"
+
+# a kit ability with its choice after the name
+== gnome_kit_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+race Gnome
+kit apply "Gnome Default"
+
+== fighter_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 16
+set stat DEX 14
+set stat CON 14
+race Human
+set align LN
+class add Fighter
+class add Fighter
+class add Fighter
+feat add "Power Attack"
+feat add "Weapon Focus" Longsword
+skill Climb 3
+equip add "Chain Shirt"
+equip wear "Chain Shirt"
+equip add Longsword
+equip wear Longsword
+
+== sorcerer_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat CHA 17
+set stat DEX 14
+race Elf
+set align CN
+class add Sorcerer
+class add Sorcerer
+spell add Sorcerer "Magic Missile"
+spell add Sorcerer "Shield"
+
+== soldier_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+set stat STR 16
+set stat CON 14
+race Human
+class add Soldier
+class add Soldier
+
+== modern_human
+gamemode Modern
+campaign MSRD - Basics
+set stat STR 14
+set stat DEX 14
+race Human
+class add Strong
+class add Strong
+
+# the class's points come from a variable it defines, so they count
+# only with the level held; the ranks bought need all of them
+== fast_hero_pulp
+gamemode Modern
+campaign Pulp Fantasy Roleplaying Game
+set stat DEX 15
+race Human
+class add Fast
+class add Fast
+skill Balance 5
+skill Hide 5
+skill Tumble 5
+
+== fighter_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat STR 16
+set stat DEX 14
+set stat CON 14
+race Dwarf
+set align LN
+class add Fighter
+class add Fighter
+equip add "Chain Mail"
+equip wear "Chain Mail"
+equip add Longsword
+equip wear Longsword
+
+== fighter_pf2
+gamemode Pathfinder_2
+campaign PF2 - Core Rulebook
+set stat STR 16
+race Human
+class add Fighter
+
+== gunslinger_deadlands
+gamemode Deadlands
+campaign PE - Deadlands Core Rulebook - Deadlands D20
+set stat DEX 16
+race Human
+class add Gunslinger
+
+== explorer_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+race Human
+class add Explorer
+
+== gunslinger_gaslight
+gamemode Gaslight
+campaign BPI ~ Gaslight
+varies character/skills[0]/max_class_skill_level[0] -- PCGen sometimes evaluates the bare variable named by CSKILLMAX before its stat bonus applies (14 with it, as MaxRank+0 also gives); which it does changes between runs
+race Human
+class add Gunslinger
+
+== assassin_killshot
+gamemode Killshot
+campaign Killshot - The Director's Cut
+race Human
+class add Assassin
+
+== fighter_sagaborn
+gamemode Sagaborn
+campaign Sagaborn - Sagaborn Roleplaying System
+race Human
+class add Fighter
+
+== soldier_spycraft
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+class add Soldier
+
+== cleric_pf
+gamemode Pathfinder
+campaign Core Rulebook
+full
+set stat WIS 16
+set stat CON 14
+set stat STR 12
+race Human
+set align LG
+deity Iomedae
+class add Cleric
+class add Cleric
+class add Cleric
+domain add Glory
+domain add Law
+spell add Cleric Bless
+spell add Cleric "Cure Light Wounds"
+spell add Cleric "Spiritual Weapon"
+equip add "Scale Mail"
+equip wear "Scale Mail"
+equip add "Shield (Heavy/Wooden)"
+equip wear "Shield (Heavy/Wooden)"
+equip add Longsword
+equip wear Longsword
+
+== monk_pf
+gamemode Pathfinder
+campaign Core Rulebook
+full
+set stat DEX 16
+set stat WIS 16
+set stat STR 14
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk --stat WIS
+skill Acrobatics 4
+skill Perception 4
+
+== magic_gear_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 17
+set stat DEX 13
+set stat CON 14
+race Human
+set align NG
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Fighter
+equip add Longsword
+equip customize Longsword +PLUS1W
+equip wear Longsword
+equip add "Full Plate"
+equip customize "Full Plate" +PLUS1A
+equip wear "Full Plate"
+template add "Inherent Strength Bonus +2"
+
+== rogue_pf_levels
+gamemode Pathfinder
+campaign Core Rulebook
+full
+set stat DEX 17
+set stat INT 14
+race Halfling
+set align CN
+class add Rogue
+class add Rogue
+class add Rogue
+class add Rogue --stat DEX
+class add Rogue
+class add Rogue
+class add Rogue
+skill Stealth 7
+skill "Disable Device" 7
+skill Perception 7
+equip add "Studded Leather"
+equip wear "Studded Leather"
+equip add "Rapier"
+equip wear "Rapier"
+
+== archer_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 16
+set stat STR 13
+race Human
+class add Fighter
+class add Fighter
+feat add "Point Blank Shot"
+ability add "Fighter Feat|Far Shot"
+feat add "Precise Shot"
+equip add Longbow
+equip wear Longbow
+equip add "Arrows (20)"
+equip add Javelin 3
+equip wear Javelin Carried
+
+== wizard_bonus_slot_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat INT 17
+race Human
+class add Wizard
+class add Wizard
+class add Wizard
+ability add "Special Ability|+1 Level 1 Spell Cast" Wizard
+
+== kasatha_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+campaign Starfinder Character Operations Manual
+set stat DEX 16
+set stat STR 14
+race Kasatha
+class add Soldier
+class add Soldier
+feat add "Double Draw"
+
+== theurge_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+set stat WIS 15
+race Human
+set align TN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Cleric --stat WIS
+class add Cleric
+class add Cleric
+skill "Knowledge (Arcana)" 6 Wizard
+skill "Knowledge (Religion)" 6 Cleric
+class add "Mystic Theurge"
+
+== thaumaturgist_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat WIS 16
+set stat CON 12
+race Human
+set align LN
+class add Cleric
+class add Cleric
+class add Cleric
+class add Cleric --stat WIS
+class add Cleric
+class add Cleric
+class add Cleric
+feat add "Spell Focus" Conjuration
+class add Thaumaturgist --stat WIS
+
+== worg_advanced_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+campaign 3.5 RSRD Monsters
+race Worg
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+class add "Magical Beast" --force
+
+== wizard_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat INT 16
+set stat DEX 14
+set stat CON 13
+race Human
+set align NG
+class add Wizard
+class add Wizard
+class add Wizard
+spell add Wizard "Magic Missile"
+spell add Wizard "Magic Weapon"
+
+== rogue_5e
+gamemode 5e
+campaign 5e - System Reference Document
+set stat DEX 16
+set stat INT 12
+race Halfling
+set align CN
+class add Rogue
+class add Rogue
+class add Rogue
+equip add "Studded Leather"
+equip wear "Studded Leather"
+equip add Rapier
+equip wear Rapier
+
+== technomancer_sf
+gamemode Starfinder
+campaign Starfinder Core Rulebook
+set stat INT 16
+set stat DEX 14
+race Human
+class add Technomancer
+class add Technomancer
+class add Technomancer
+spell add Technomancer "Magic Missile"
+equip add "Laser pistol (azimuth)"
+equip wear "Laser pistol (azimuth)"
+equip add "Second Skin"
+equip wear "Second Skin"
+
+== fast_hero_modern
+gamemode Modern
+campaign MSRD - Basics
+set stat DEX 16
+set stat STR 12
+race Human
+class add Fast
+class add Fast
+class add Fast
+equip add "Beretta 93R (9mm machine pistol)"
+equip wear "Beretta 93R (9mm machine pistol)"
+equip add "Concealable Vest"
+equip wear "Concealable Vest"
+
+== monk_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat DEX 15
+set stat WIS 15
+set stat STR 13
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk --stat WIS
+
+== gunslinger_deadlands_gear
+gamemode Deadlands
+campaign PE - Deadlands Core Rulebook - Deadlands D20
+set stat DEX 16
+set stat CON 14
+race Human
+class add Gunslinger
+class add Gunslinger
+class add Gunslinger
+equip add "Colt Peacemaker (Pistol/SA)"
+equip wear "Colt Peacemaker (Pistol/SA)"
+equip add Duster
+equip wear Duster
+
+== soldier_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+set stat STR 16
+set stat CON 14
+race Human
+class add Soldier
+class add Soldier
+class add Soldier
+equip add "Long Sword"
+equip wear "Long Sword"
+equip add "Moderate Leather Armor"
+equip wear "Moderate Leather Armor"
+
+== soldier_spycraft_gear
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+set stat STR 14
+set stat DEX 14
+class add Soldier
+class add Soldier
+class add Soldier
+equip add "Kevlar vest"
+equip wear "Kevlar vest"
+
+== arcane_gaslight
+gamemode Gaslight
+campaign BPI ~ Gaslight
+varies character/skills[0]/max_class_skill_level[0] -- PCGen sometimes evaluates the bare variable named by CSKILLMAX before its stat bonus applies (16 with it, as MaxRank+0 also gives); which it does changes between runs
+set stat INT 16
+race Human
+class add Apprentice
+class add Apprentice
+class add Apprentice
+equip add "Adams 1854 Revolver"
+equip wear "Adams 1854 Revolver"
+
+== fighter_sagaborn_gear
+gamemode Sagaborn
+campaign Sagaborn - Sagaborn Roleplaying System
+set stat STR 16
+race Human
+class add Fighter
+class add Fighter
+class add Fighter
+equip add Longsword
+equip wear Longsword
+equip add "Armor ~ Leather"
+equip wear "Armor ~ Leather"
+
+== theurge_choices_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+set stat WIS 15
+set stat CHA 14
+race Human
+set align TN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Sorcerer --stat CHA
+class add Sorcerer
+class add Cleric
+class add Cleric
+class add Cleric --stat WIS
+skill "Knowledge (Arcana)" 6 Wizard
+skill "Knowledge (Religion)" 6 Cleric
+class add "Mystic Theurge" --choose Wizard --choose Cleric
+class add "Mystic Theurge" --choose Wizard --choose Cleric
+
+== faceman_spycraft
+gamemode Spycraft
+campaign Spycraft Espionage Handbook
+class add Faceman --choose "Arabic (Modern)" --choose Armenian
+
+== expert_3e
+gamemode 3e
+campaign 3.0 SRD - Campaign Set - Core Books I - III
+set stat INT 14
+race "None Selected"
+class add Expert --choose Appraise --choose Bluff --choose Climb --choose Diplomacy --choose Hide --choose Listen --choose "Move Silently" --choose Search --choose Spot --choose Swim
+skill Climb 4
+skill Hide 4
+skill Spot 4
+skill Jump 2
+
+== defender_midnight
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+campaign Midnight - Campaign Source Book
+set stat STR 14
+set stat DEX 13
+set align LN
+class add Defender
+class add Defender
+class add Defender
+
+== pointbuy_pf
+gamemode Pathfinder
+campaign Core Rulebook
+stats buy "Standard Fantasy"
+set stat STR 16
+set stat CON 14
+set stat WIS 8
+set stat DEX 12
+race Human
+set align LN
+class add Fighter
+feat add "Power Attack"
+equip add Longsword
+equip wear Longsword
+
+== stat_increase_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+stats roll "4d6 drop lowest" --seed 11
+race Human
+set align LN
+class add Fighter
+set stat CON 15
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Fighter
+
+== gear_buyer_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 15
+set stat CON 14
+race Human
+set align LG
+class add Fighter
+kit apply "Starting Gold CRB ~ Maximum"
+equip buy "Chain Shirt"
+equip wear "Chain Shirt"
+equip buy Longsword
+equip wear Longsword
+equip buy Torch 5
+equip sell Torch 2
+
+== wizard_prepared_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 16
+race Human
+set align NG
+class add Wizard
+class add Wizard
+class add Wizard
+spell add Wizard "Magic Missile"
+spell add Wizard Shield
+spell add Wizard Web
+spell add Wizard Sleep
+feat add "Extend Spell"
+spell prep Wizard "Magic Missile"
+spell prep Wizard "Magic Missile"
+spell prep Wizard Shield
+spell prep Wizard Web
+spell prep Wizard "Detect Magic"
+spell prep Wizard Sleep --meta "Extend Spell"
+spellbook add Evening
+spell prep Wizard Web Evening
+
+== cleric_prepared_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat WIS 15
+race Dwarf
+set align LG
+class add Cleric
+class add Cleric
+class add Cleric
+domain add Sun
+domain add Good
+spell prep Cleric Bless
+spell prep Cleric "Cure Light Wounds"
+spell prep Cleric "Heat Metal"
+spell prep Cleric Aid
+spell prep Cleric Guidance
+spell prep Cleric Guidance
+
+== wizard_metamagic_pf
+gamemode Pathfinder
+campaign Core Rulebook
+full
+set stat INT 17
+race Human
+set align LN
+class add Wizard
+class add Wizard
+class add Wizard
+class add Wizard --stat INT
+class add Wizard
+feat add "Heighten Spell"
+feat add "Extend Spell"
+spell add Wizard "Magic Missile"
+spell add Wizard Sleep
+spell add Wizard "Burning Hands"
+spell prep Wizard "Magic Missile"
+spell prep Wizard Sleep --meta "Heighten Spell"
+spell prep Wizard "Burning Hands" --meta "Extend Spell,Heighten Spell"
+spell prep Wizard "Burning Hands" --meta "Heighten Spell,Extend Spell"
+
+== wizard_spellbook_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+race Gnome
+set align CN
+class add Wizard
+class add Wizard
+spell add Wizard Sleep
+spell add Wizard Light
+equip add "Spellbook (Wizard's/Blank)" 2
+spell prep Wizard Sleep
+spell scribe Wizard Sleep "Spellbook (Wizard's/Blank) #2"
+spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
+spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
+spell scribe Wizard Sleep "Spellbook (Wizard's/Blank)"
+
+== equipment_sets_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 12
+race Human
+set align LN
+class add Fighter
+equip add "Chainmail"
+equip add "Longsword"
+equip add "Shortbow"
+equip wear "Longsword"
+eqset add Travel
+equip wear "Chainmail"
+equip wear "Longsword" Carried
+equip wear "Shortbow" "Both Hands"
+eqset add Junk
+eqset copy Travel Camp
+equip unwear "Chainmail" --set Camp
+eqset rm Junk
+eqset add Empty
+eqset use Travel
+
+== wizard_lost_spellbook_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 15
+race Human
+set align TN
+class add Wizard
+class add Wizard
+spell add Wizard Sleep
+spell add Wizard Light
+equip add "Spellbook (Wizard's/Blank)" 2
+equip add "Blessed Book"
+spell scribe Wizard Sleep "Spellbook (Wizard's/Blank)"
+spell scribe Wizard Light "Spellbook (Wizard's/Blank) #2"
+spell scribe Wizard Sleep "Blessed Book"
+spell scribe Wizard Light "Blessed Book"
+spell prep Wizard Sleep
+equip sell "Spellbook (Wizard's/Blank)" 1
+equip rm "Blessed Book"
+
+== temp_self_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 12
+set stat CON 14
+race Human
+set align LG
+class add Fighter
+equip add Chainmail
+equip wear Chainmail
+equip add Longsword
+equip wear Longsword
+temp add "Bull's Strength"
+temp add Bless
+temp add Barkskin --value 6
+temp add "Magic Vestment (Armor)" Chainmail --value 8
+
+== temp_weapon_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 15
+set stat DEX 13
+race Dwarf
+set align LN
+class add Fighter
+equip add Longsword
+equip wear Longsword
+equip add Dagger
+equip wear Dagger Carried
+temp add "Magic Weapon" Longsword
+temp add "Magic Weapon (Greater)" Dagger --value 8
+temp mods on
+
+== temp_off_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 14
+race Elf
+set align CG
+class add Rogue
+equip add Rapier
+equip wear Rapier
+temp add "Cat's Grace"
+temp add "Bull's Strength"
+temp off "Cat's Grace"
+temp add "Magic Weapon" Rapier
+temp off "Magic Weapon"
+
+== temp_feat_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat STR 16
+set stat CON 12
+race Human
+set align TN
+class add Fighter
+feat add "Power Attack"
+equip add Greatsword
+equip wear Greatsword
+temp add "Power Attack (Two-Handed)" Greatsword
+
+== temp_mods_off_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat DEX 15
+set stat INT 12
+race Halfling
+set align CN
+class add Rogue
+skill "Disable Device" 4
+equip add "Studded Leather"
+equip wear "Studded Leather"
+temp add "Disable Device"
+temp add "Magic Vestment (Armor)" "Studded Leather" --value 8
+temp add "Cloak of Chaos"
+temp mods off
+
+== psionic_fist_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+campaign 3.5 RSRD Psionics
+set stat STR 13
+set stat DEX 15
+set stat CON 12
+set stat INT 12
+set stat WIS 15
+race Human
+set align LN
+class add Monk
+class add Monk
+class add Monk
+class add Monk --stat WIS
+class add Monk
+class add Monk
+class add Monk
+feat add "Wild Talent"
+skill Concentration 10
+class add "Psionic Fist" --stat WIS
+
+== xp_penalty_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 15
+set stat DEX 14
+set stat INT 13
+set stat WIS 12
+set stat CHA 12
+race Elf
+set align CG
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Fighter
+class add Rogue
+class add Cleric
+class add Bard --stat DEX
+class add Wizard
+class add Duelist --force
+
+== xp_penalty_any_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat STR 14
+set stat DEX 14
+set stat WIS 12
+race Human
+set align CN
+class add Fighter
+class add Fighter
+class add Fighter
+class add Fighter --stat STR
+class add Rogue
+class add Rogue
+class add Rogue
+class add Cleric --stat DEX
+
+== half_dragon_gnoll_pf
+gamemode Pathfinder
+campaign Core Rulebook
+campaign Bestiary
+set stat STR 15
+set stat INT 12
+race Gnoll
+set align CE
+class add Humanoid --force
+class add Humanoid --force
+class add Fighter
+template add Half-Dragon
+skill Survival 3 Humanoid
+skill Climb 1 Fighter
+
+== hit_die_bonus_arcanis
+gamemode 35e
+campaign Player's Guide to Arcanis
+set stat CON 14
+set stat CHA 14
+race Human
+set align LG
+deity Sarish
+class add "Holy Champion (Inner Demon)"
+class add "Holy Champion (Inner Demon)"
+class add "Holy Champion (Inner Demon)" 3
+
+== bonus_languages_35e
+gamemode 35e
+campaign 3.5 RSRD - Campaign Set - Core Books I - III
+set stat INT 14
+race Human
+set align NG
+class add Wizard
+lang add Elven
+lang add Dwarven
+
+== ring_slots_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat DEX 14
+race Human
+set align NG
+class add Rogue
+equip add "Hand of Glory"
+equip wear "Hand of Glory"
+equip add "Ring of Protection +1"
+equip wear "Ring of Protection +1"
+equip add "Ring of Sustenance"
+equip wear "Ring of Sustenance"
+equip add "Ring of Swimming"
+equip wear "Ring of Swimming"
+
+== item_spells_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat WIS 12
+race Human
+set align NG
+class add Fighter
+equip add "Ring of Feather Falling"
+equip wear "Ring of Feather Falling"
+equip add "Hand of Glory"
+equip wear "Hand of Glory"
+
+== sage_autorank_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+set stat INT 14
+race Human
+class add Sage --subclass "Sage 1st" --choose Acrobatics --choose Athletics --choose Bluff --choose Impress
+
+== situations_pf
+gamemode Pathfinder
+campaign Core Rulebook
+full
+differs character/spells[0]/known_spells[0]/class[0]/@concentration -- PCGen counts no ranger levels toward the caster level: it looks up the level of the data's class, not the character's copy
+set stat WIS 14
+set stat DEX 14
+race Dwarf
+set align NG
+class add Ranger
+class add Ranger
+class add Ranger
+skill Survival 3
+skill Acrobatics 2
+equip add "Ring of Jumping"
+equip wear "Ring of Jumping"
+
+== concentration_pf
+gamemode Pathfinder
+campaign Core Rulebook
+campaign Ultimate Magic
+full
+set stat CHA 17
+set stat INT 14
+race Gnome
+set align CG
+class add Sorcerer
+class add Sorcerer
+class add Wizard
+feat add "Combat Casting"
+feat add "Uncanny Concentration"
+spell add Sorcerer "Magic Missile"
+spell add Wizard "Mage Armor"
+spell prep Wizard "Mage Armor"
+
+== missing_follower_pf
+gamemode Pathfinder
+campaign Core Rulebook
+set stat WIS 14
+race Human
+set align TN
+class add Druid
+follower add Rex "Animal Companion" "Companion (Wolf)" Rex.pcg --force
+warns Unable to find follower at Rex.pcg -- the file is not there, so the follower is dropped

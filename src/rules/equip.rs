@@ -66,6 +66,15 @@ pub struct EqItem<'a> {
     pub note: String,
 }
 
+/// What a container holds (see [`EqItem::capacity`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Capacity {
+    /// weight it carries; None for no limit
+    pub weight: Option<f64>,
+    /// (item type, how many; None for any number)
+    pub items: Vec<(String, Option<f64>)>,
+}
+
 fn num(v: Option<&str>) -> f64 {
     v.and_then(|x| x.trim().parse().ok()).unwrap_or(0.0)
 }
@@ -276,6 +285,37 @@ impl<'a> EqItem<'a> {
         self.size = new.to_string();
     }
 
+    /// What a container holds, from CONTAINS: the weight it carries
+    /// (None for UNLIM) and how many items of each type (None for any
+    /// number).  A resized container's limits scale by the new size's
+    /// BONUS:ITEMCAPACITY for the item's types, as PCGen resizes it.
+    pub fn capacity(&self, calc: &Calc<'a>) -> Option<Capacity> {
+        let spec = self.data.get("CONTAINS")?;
+        let mult = if self.resized_cost.is_some() {
+            size_bonus(calc, &self.size, "ITEMCAPACITY", &self.types(calc))
+        } else {
+            1.0
+        };
+        let limit = |v: &str| -> Option<f64> {
+            if v.trim().eq_ignore_ascii_case("UNLIM") {
+                None
+            } else {
+                v.trim().parse::<f64>().ok().map(|n| n * mult)
+            }
+        };
+        let mut parts = spec.split('|');
+        let first = parts.next().unwrap_or("").trim_start_matches('*');
+        let weight = limit(first.split_once('%').map_or(first, |(_, w)| w));
+        let items = parts
+            .filter(|p| !p.is_empty())
+            .map(|p| match p.split_once('=') {
+                Some((t, n)) => (t.to_string(), limit(n)),
+                None => (p.to_string(), None),
+            })
+            .collect();
+        Some(Capacity { weight, items })
+    }
+
     pub fn is_type(&self, calc: &Calc<'a>, t: &str) -> bool {
         self.types(calc).iter().any(|x| x.eq_ignore_ascii_case(t))
     }
@@ -384,7 +424,7 @@ impl<'a> EqItem<'a> {
     }
 
     fn eval(&self, calc: &Calc<'a>, formula: &str, head: &[EqMod]) -> f64 {
-        calc.eval_with(formula, &|n| self.term(calc, n, head))
+        calc.eval_item(formula, &|n| self.term(calc, n, head))
     }
 
     /// Does a prerequisite on a modifier's bonus hold for this item?
@@ -612,8 +652,14 @@ impl<'a> EqItem<'a> {
         } else {
             Vec::new()
         };
+        // a copy's temporary bonuses count with its primary head
+        let temporary: &[String] = match &self.temporary {
+            Some((_, b)) if eqmods => b,
+            _ => &[],
+        };
         let values = objs
             .flat_map(|o| o.values("BONUS"))
+            .chain(temporary.iter().map(String::as_str))
             .chain(size_penalty.iter().copied());
         {
             for v in values {
@@ -787,6 +833,15 @@ impl<'a> EqItem<'a> {
         }
     }
 
+    /// What a copy carrying temporary bonuses adds to its name on
+    /// weapon and armor lists: " \[source\]".
+    pub fn applied_name(&self) -> String {
+        match &self.temporary {
+            Some((src, _)) => format!(" [{}]", src),
+            None => String::new(),
+        }
+    }
+
     /// A copy of this item carrying temporary bonuses from `source`:
     /// it costs only what its modifiers add and weighs nothing.
     pub fn temporary_copy(&self, source: &str, bonuses: Vec<String>) -> EqItem<'a> {
@@ -823,9 +878,10 @@ impl<'a> EqItem<'a> {
             .iter()
             .filter_map(|l| Some((l.get("SIZEDIFF")?.trim().parse().ok()?, l.value.as_str())))
             .collect();
-        // conditional switches take precedence over size differences
-        let switches = lines.iter().any(|l| l.get("SWITCH").is_some());
-        if !by_diff.is_empty() && !switches {
+        // size differences decide only for items that do not say how
+        // they are wielded, or when the game mode sizes weapons as
+        // objects; otherwise conditional switches adjust WIELD
+        if !by_diff.is_empty() && (base.is_empty() || calc.rule("SIZEOBJ")) {
             let (Some(item), Some(pc)) = (pos(&self.size), pos(&calc.size_key())) else {
                 return base;
             };
@@ -842,6 +898,8 @@ impl<'a> EqItem<'a> {
                 .map(|(_, n)| n.to_string())
                 .unwrap_or(base);
         }
+        // the last switch whose prerequisites pass wins
+        let mut wield = base.clone();
         for l in &lines {
             if !l.value.eq_ignore_ascii_case(&base) {
                 continue;
@@ -854,10 +912,10 @@ impl<'a> EqItem<'a> {
                 .filter_map(|(t, v)| Prereq::from_token(t, v).ok())
                 .all(|p| self.passes(calc, &p, None));
             if ok {
-                return to.to_string();
+                wield = to.to_string();
             }
         }
-        base
+        wield
     }
 
     /// Name with the modified part: `Claw (Natural/Primary)`.

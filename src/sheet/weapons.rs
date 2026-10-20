@@ -10,7 +10,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::combat::{bab_sequence, bab_sequence_for};
-use super::gear::{merged_by, placed, Placed};
+use super::gear::{merged_by, placed, Placed, TEMP_BONUS_PLACE};
 use super::units::{pattern, Units};
 use super::{signed, Element, SheetCtx};
 use crate::dataset::Object;
@@ -31,6 +31,8 @@ enum Hand {
     Equipped,
     Carried,
     NotCarried,
+    /// a copy of an unworn weapon carrying temporary bonuses
+    TempBonus,
 }
 
 impl Hand {
@@ -43,6 +45,7 @@ impl Hand {
             Hand::Equipped => "Equipped",
             Hand::Carried => "Carried",
             Hand::NotCarried => "Not Carried",
+            Hand::TempBonus => TEMP_BONUS_PLACE,
         }
     }
 }
@@ -136,7 +139,9 @@ fn hand_of(p: &Placed, items: &[Placed]) -> Hand {
         }
         None => p.root.to_lowercase(),
     };
-    if root.starts_with("not carried") {
+    if p.parent.is_none() && p.root == TEMP_BONUS_PLACE {
+        Hand::TempBonus
+    } else if root.starts_with("not carried") {
         Hand::NotCarried
     } else if root.starts_with("carried") {
         Hand::Carried
@@ -184,14 +189,8 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
                 contents.push(x.item.clone());
             }
         }
-        let range = p
-            .item
-            .data
-            .get("RANGE")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.0)
-            + p.item.bonus(c, "EQMWEAPON", "RANGEADD", true);
         let has = |t: &str| types.iter().any(|x| x == t);
+        let range = weapon_range(c, &p.item, has("THROWN"), has("PROJECTILE"));
         if has("MELEE") && has("RANGED") {
             let mut melee: Vec<String> = types
                 .iter()
@@ -272,8 +271,87 @@ fn weapons<'a>(s: &SheetCtx<'a>) -> Vec<Weapon<'a>> {
     for (i, w) in out.iter_mut().enumerate() {
         w.index = i;
         w.wield = w.item.wield_category(c);
+        w.wield = wield_bumped(s, w);
     }
     out
+}
+
+/// The wield category after bonuses that make a weapon easier or
+/// harder to wield: `WEAPONPROF=key|WIELDCATEGORY`, the most negative
+/// `WEAPONPROF=TYPE.x|WIELDCATEGORY` over the item's types, and the
+/// item's own `WEAPON|WIELDCATEGORY`.  Each step moves along the game
+/// mode's `UP` and `DOWN` lists; a step off the list leaves no
+/// category.
+fn wield_bumped(s: &SheetCtx, w: &Weapon) -> String {
+    let c = &s.calc;
+    let b = &c.bonus;
+    let mut bump = 0i64;
+    if let Some(p) = prof_of(s, w) {
+        bump += b.total(&format!("WEAPONPROF={}", p.key), "WIELDCATEGORY") as i64;
+        bump += w
+            .item
+            .types(c)
+            .iter()
+            .map(|t| b.total(&format!("WEAPONPROF=TYPE.{}", t), "WIELDCATEGORY") as i64)
+            .min()
+            .unwrap_or(0)
+            .min(0);
+    }
+    bump += w.item.bonus(c, "WEAPON", "WIELDCATEGORY", true) as i64;
+    if bump == 0 {
+        return w.wield.clone();
+    }
+    let Some(gm) = s.ctx.gamemode.as_ref() else {
+        return w.wield.clone();
+    };
+    let dir = if bump > 0 { "UP" } else { "DOWN" };
+    gm.lines("miscinfo.lst", "WIELDCATEGORY")
+        .filter(|l| l.value.eq_ignore_ascii_case(&w.wield))
+        .find_map(|l| l.get(dir))
+        .and_then(|list| {
+            list.split('|')
+                .nth(bump.unsigned_abs() as usize - 1)
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// A weapon's range: its own range and item bonuses; for thrown (or
+/// projectile) weapons the character's RANGEADD, then RANGEMULT (in
+/// percent) applied, then POSTRANGEADD.
+fn weapon_range(
+    c: &crate::rules::calc::Calc,
+    item: &EqItem,
+    thrown: bool,
+    projectile: bool,
+) -> f64 {
+    let mut r = item
+        .data
+        .get("RANGE")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0)
+        + item.bonus(c, "EQMWEAPON", "RANGEADD", true).trunc();
+    let item_mult = item.bonus(c, "EQMWEAPON", "RANGEMULT", true).trunc();
+    let mut mult = 1.0
+        + if item_mult > 0.0 {
+            item_mult - 1.0
+        } else {
+            0.0
+        };
+    let mut post = 0.0;
+    let kind = if thrown {
+        Some("THROWN")
+    } else if projectile {
+        Some("PROJECTILE")
+    } else {
+        None
+    };
+    if let Some(k) = kind {
+        r += c.bonus.total("RANGEADD", k).trunc();
+        post = c.bonus.total("POSTRANGEADD", k).trunc();
+        mult += c.bonus.total("RANGEMULT", k).trunc() / 100.0;
+    }
+    (r * mult).trunc() + post
 }
 
 /// Weapon proficiency of an item.
@@ -365,6 +443,22 @@ fn light(w: &Weapon) -> bool {
 
 fn two_handed(w: &Weapon) -> bool {
     w.wield.eq_ignore_ascii_case("TwoHanded")
+}
+
+/// Whether PCGen fails to find how the weapon is wielded: with no
+/// `Light` or `OneHanded` wield category in the game mode, a weapon
+/// with a proficiency (the unarmed strike always has one) has none.
+/// Asking how it is wielded then fails, which empties the attacks of
+/// melee weapons (checked for two-handed use) and the damage of every
+/// weapon not finesseable by type (checked for finesse), but leaves
+/// the attacks of purely ranged weapons.
+fn wield_unknown(s: &SheetCtx, w: &Weapon) -> bool {
+    let defined = s.ctx.gamemode.as_ref().is_some_and(|g| {
+        g.lines("miscinfo.lst", "WIELDCATEGORY").any(|l| {
+            l.value.eq_ignore_ascii_case("Light") || l.value.eq_ignore_ascii_case("OneHanded")
+        })
+    });
+    !defined && (w.is("Unarmed") || prof_of(s, w).is_some())
 }
 
 fn finessable(w: &Weapon) -> bool {
@@ -461,20 +555,7 @@ fn num(v: Option<&str>) -> f64 {
 
 /// An item's own WEAPON bonus, with temporary bonuses on a copy.
 fn item_bonus(s: &SheetCtx, w: &Weapon, target: &str) -> f64 {
-    let c = &s.calc;
-    let mut t = w.item.bonus(c, "WEAPON", target, true);
-    if let Some((_, bonuses)) = &w.item.temporary {
-        for v in bonuses {
-            if let Ok(b) = crate::token::bonus::Bonus::parse(v) {
-                if b.category.eq_ignore_ascii_case("WEAPON")
-                    && b.targets.iter().any(|x| x.eq_ignore_ascii_case(target))
-                {
-                    t += c.eval_formula(&b.formula);
-                }
-            }
-        }
-    }
-    t
+    w.item.bonus(&s.calc, "WEAPON", target, true)
 }
 
 /// Mode-dependent part of the to-hit bonus.
@@ -514,6 +595,9 @@ fn mode_bonus(s: &SheetCtx, w: &Weapon, mode: Mode, ranged: bool) -> i64 {
 /// Attack sequence for a weapon in a mode, at a distance (ranged).
 fn to_hit(s: &SheetCtx, w: &Weapon, all_w: &[Weapon], mode: Mode, distance: Option<f64>) -> String {
     let b = &s.calc.bonus;
+    if w.melee() && wield_unknown(s, w) {
+        return String::new();
+    }
     let two = two_handed(w);
     // weapons too big for one hand can only be used two-handed
     if w.melee() && two && !matches!(mode, Mode::TwoHands) && distance.is_none() {
@@ -690,6 +774,9 @@ fn damage(
 ) -> String {
     let c = &s.calc;
     let b = &c.bonus;
+    if (w.melee() || !w.is("Finesseable")) && wield_unknown(s, w) {
+        return String::new();
+    }
     let two = two_handed(w);
     let mode = forced.unwrap_or_else(|| {
         if w.natural() && w.hand == Hand::Secondary {
@@ -698,6 +785,9 @@ fn damage(
             Dmg::Basic
         } else if w.hand == Hand::Secondary && w.name == w.item.name {
             Dmg::OffHand
+        } else if w.hand == Hand::Primary {
+            // held in one hand, however big
+            Dmg::Basic
         } else if w.hand == Hand::Both || two {
             Dmg::TwoHands
         } else {
@@ -770,9 +860,21 @@ fn damage(
     }
 }
 
+/// The die of a UDAM list for a size: one value serves every size,
+/// otherwise the list has one value per size.
+fn udam_at(list: &str, size: usize) -> Option<&str> {
+    let v: Vec<&str> = list.split(',').collect();
+    if v.len() == 1 {
+        Some(v[0])
+    } else {
+        v.get(size).copied()
+    }
+}
+
 /// Unarmed damage dice: the best of 1d2, the classes' unarmed damage
-/// (UDAM on level lines), unarmed damage from the race, templates and
-/// abilities (UDAM lists by size), and the race's (1d3 at medium size,
+/// (UDAM on level lines, at the class level plus any BONUS:UDAM levels
+/// for it), unarmed damage from the race, templates and
+/// abilities (UDAM), and the race's (1d3 at medium size,
 /// scaled by size).
 fn unarmed_dice(s: &SheetCtx) -> String {
     let c = &s.calc;
@@ -813,7 +915,10 @@ fn unarmed_dice(s: &SheetCtx) -> String {
         }
     };
     for (cls, lvl) in c.classes() {
-        // the last level line at or below the class level with UDAM
+        // the last level line with UDAM at or below the class level,
+        // moved by BONUS:UDAM|CLASS.x levels
+        let lvl = (*lvl as i64)
+            .saturating_add(c.bonus.total("UDAM", &format!("CLASS.{}", cls.key)) as i64);
         let line = cls
             .sublines
             .iter()
@@ -822,14 +927,13 @@ fn unarmed_dice(s: &SheetCtx) -> String {
                 sl.value
                     .split(':')
                     .next()
-                    .and_then(|x| x.trim().parse::<u32>().ok())
-                    .is_some_and(|n| n > 0 && n <= *lvl)
+                    .and_then(|x| x.trim().parse::<i64>().ok())
+                    .is_some_and(|n| n > 0 && n <= lvl)
             })
             .filter_map(|sl| sl.tokens.iter().find(|t| t.tag == "UDAM"))
             .next_back();
         if let Some(t) = line {
-            let list: Vec<&str> = t.value.split(',').collect();
-            if let Some(d) = list.get(size_at) {
+            if let Some(d) = udam_at(&t.value, size_at) {
                 consider(d);
             }
         }
@@ -838,11 +942,8 @@ fn unarmed_dice(s: &SheetCtx) -> String {
         if src.kind == crate::rules::calc::SrcKind::Class {
             continue;
         }
-        if let Some(u) = src.obj.get("UDAM") {
-            let list: Vec<&str> = u.split(',').collect();
-            if let Some(d) = list.get(size_at) {
-                consider(d);
-            }
+        if let Some(d) = src.obj.get("UDAM").and_then(|u| udam_at(u, size_at)) {
+            consider(d);
         }
     }
     let race_die = adjust_dice(s, "1d3", pos(&race_size) - pos(&medium));
@@ -926,23 +1027,34 @@ fn crit_mult(s: &SheetCtx, w: &Weapon) -> String {
     (m + weapon_prof_bonus(s, w, "CRITMULTADD", &all) as i64).to_string()
 }
 
+/// Damage type abbreviations; a double weapon adds its second head's
+/// (from `ALTTYPE`) after a `/`.
 fn type_abbrevs(s: &SheetCtx, w: &Weapon) -> String {
-    let mut out: Vec<String> = s
-        .ctx
-        .gamemode
-        .as_ref()
-        .map(|g| {
-            g.lines("miscinfo.lst", "WEAPONTYPE")
-                .filter_map(|l| {
-                    let (name, abb) = l.value.split_once('|')?;
-                    w.is(name).then(|| abb.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort();
-    out.dedup();
-    out.concat()
+    let abbrevs = |is: &dyn Fn(&str) -> bool| {
+        let mut out: Vec<String> = s
+            .ctx
+            .gamemode
+            .as_ref()
+            .map(|g| {
+                g.lines("miscinfo.lst", "WEAPONTYPE")
+                    .filter_map(|l| {
+                        let (name, abb) = l.value.split_once('|')?;
+                        is(name).then(|| abb.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out.dedup();
+        out.concat()
+    };
+    let mut out = abbrevs(&|t| w.is(t));
+    if w.is("Double") {
+        let alt = w.item.data.get("ALTTYPE").unwrap_or("");
+        out.push('/');
+        out += &abbrevs(&|t| alt.split('.').any(|x| x.eq_ignore_ascii_case(t)));
+    }
+    out
 }
 
 /// Whether attacks follow the attack bonus progression, and how many
@@ -1073,10 +1185,7 @@ fn template(src: &Source) -> bool {
 fn common(s: &SheetCtx, w: &Weapon, all_w: &[Weapon]) -> Element {
     let c = &s.calc;
     let star = if w.equipped { "*" } else { "" };
-    let applied = match &w.item.temporary {
-        Some((src, _)) => format!(" [{}]", src),
-        None => String::new(),
-    };
+    let applied = w.item.applied_name();
     let short = if w.name == w.item.name {
         w.item.output_name()
     } else {

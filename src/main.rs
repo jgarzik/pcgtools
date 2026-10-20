@@ -96,6 +96,11 @@ enum PcgCommand {
         /// Compare with this expected sheet (XML) and list differences
         #[arg(long)]
         compare: Option<PathBuf>,
+
+        /// Build the fuller sheet: add a row for each skill situation
+        /// with a bonus and each spell's concentration
+        #[arg(long)]
+        full: bool,
     },
 
     /// Show declared variables and their values
@@ -469,7 +474,11 @@ fn main() -> ExitCode {
             PcgCommand::Show { file } => cmd::pcg::show(o, file),
             PcgCommand::Lint { file } => cmd::pcg::lint(o, file),
             PcgCommand::Vars { file, scope } => cmd::pcg::vars(o, file, scope.as_deref()),
-            PcgCommand::Sheet { file, compare } => cmd::pcg::sheet(o, file, compare.as_deref()),
+            PcgCommand::Sheet {
+                file,
+                compare,
+                full,
+            } => cmd::pcg::sheet(o, file, compare.as_deref(), *full),
             PcgCommand::Stats {
                 file,
                 verbose,

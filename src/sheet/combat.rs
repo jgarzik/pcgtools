@@ -29,11 +29,13 @@ pub fn stats<'a>(s: &SheetCtx<'a>) -> Vec<&'a Object> {
     s.calc.stats_in_order()
 }
 
-fn stat_mod_at(s: &SheetCtx, i: usize) -> i64 {
+/// The modifier of the stat at a display position, signed; empty when
+/// the game mode has fewer stats.
+fn stat_mod_at(s: &SheetCtx, i: usize) -> String {
     stats(s)
         .get(i)
-        .map(|o| s.calc.stat_mod(&o.key) as i64)
-        .unwrap_or(0)
+        .map(|o| signed(s.calc.stat_mod(&o.key) as i64))
+        .unwrap_or_default()
 }
 
 /// Bonuses that come from equipment.
@@ -184,7 +186,7 @@ fn initiative(s: &SheetCtx) -> Element {
     let comp = c.var("INITCOMP").unwrap_or(0.0) as i64;
     let mut e = Element::new("initiative");
     e.add("total", signed(misc + comp));
-    e.add("dex_mod", signed(stat_mod_at(s, 1)));
+    e.add("dex_mod", stat_mod_at(s, 1));
     e.add("misc_mod", signed(misc));
     e
 }
@@ -248,7 +250,7 @@ fn saving_throws(s: &SheetCtx) -> Element {
         st.add("ability", ability);
         st.add("total", signed(base + misc));
         st.add("base", signed(base));
-        let abil = signed(stat_mod_at(s, *stat));
+        let abil = stat_mod_at(s, *stat);
         if *long == "reflex" {
             st.add("feats", signed(feats));
             st.add("abil_mod", abil);

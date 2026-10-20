@@ -23,6 +23,8 @@ use std::collections::BTreeMap;
 /// The default spell book and the book of innate abilities.
 pub const KNOWN_BOOK: &str = "Known Spells";
 pub const INNATE_BOOK: &str = "Innate";
+/// The prepared list spells go in unless another is named.
+pub const PREPARED_BOOK: &str = "Prepared Spells";
 
 /// Who a spell belongs to.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +54,10 @@ pub struct SpellInfo {
     pub times: i64,
     pub unit: String,
     pub fixed_dc: Option<String>,
+    /// keys of the metamagic feats it was prepared with
+    pub feats: Vec<String>,
+    /// pages it takes in a spellbook
+    pub pages: i64,
 }
 
 /// A spell the character has, from one owner.
@@ -77,6 +83,11 @@ pub struct Spells<'a> {
     pub by_caster: Vec<Vec<CharSpell<'a>>>,
     /// spell list membership: (list kind, list key lower) -> level -> spell keys
     lists: BTreeMap<(char, String), BTreeMap<i64, Vec<&'a Object>>>,
+    /// spells SPELLKNOWN grants: (class list lower, level) -> spells
+    granted_known: BTreeMap<(String, i64), Vec<&'a Object>>,
+    /// books that are items the character has (TYPE Spellbook), one
+    /// per item: `Name`, `Name #2`, ...
+    pub item_books: Vec<(String, &'a Object)>,
 }
 
 fn lower(s: &str) -> String {
@@ -146,7 +157,18 @@ impl<'a> Spells<'a> {
                     Some(k) if k.eq_ignore_ascii_case("DOMAIN") => 'D',
                     _ => continue,
                 };
-                let rest: Vec<&str> = parts.collect();
+                // trailing prerequisites gate the whole grant
+                let is_pre = |p: &&str| {
+                    Prereq::is_pre_tag(p.split(':').next().unwrap_or("")) || p.starts_with("!PRE")
+                };
+                let (pres, rest): (Vec<&str>, Vec<&str>) = parts.partition(is_pre);
+                if !pres
+                    .iter()
+                    .filter_map(|p| Prereq::parse(p).ok())
+                    .all(|p| calc.passes(&p, Some(src)))
+                {
+                    continue;
+                }
                 for pair in rest.chunks(2) {
                     let [lv, names] = pair else { continue };
                     let Some((list, lvl)) = lv.rsplit_once('=') else {
@@ -169,13 +191,17 @@ impl<'a> Spells<'a> {
             books: vec![KNOWN_BOOK.to_string(), INNATE_BOOK.to_string()],
             by_caster: Vec::new(),
             lists,
+            granted_known: BTreeMap::new(),
+            item_books: Vec::new(),
         };
+        // books of spell-like abilities come before the lists the file
+        // names, which are read after what the character has
+        let slas = s.spell_likes(calc);
         for l in calc.ch.pcg.lines_tagged("SPELLBOOK") {
             if let Some(n) = l.head().map(|h| h.value_text()) {
                 s.add_book(&n);
             }
         }
-        let slas = s.spell_likes(calc);
         if !slas.is_empty() {
             s.casters.push(Caster::Race);
             s.by_caster.push(slas);
@@ -186,13 +212,43 @@ impl<'a> Spells<'a> {
                 s.by_caster.push(Vec::new());
             }
         }
-        s.load_saved(calc);
+        // spells known without choosing them are there before the
+        // saved ones are read
         s.auto_known(calc);
         s.granted(calc);
+        s.load_saved(calc);
+        s.item_books(calc);
         for v in &mut s.by_caster {
             v.sort_by(compare);
         }
         s
+    }
+
+    /// Books from spellbook items, after those the file names.
+    fn item_books(&mut self, calc: &Calc<'a>) {
+        for e in calc.ch.equipment() {
+            let key = e.base.clone().unwrap_or_else(|| e.name.clone());
+            let obj = calc
+                .ds
+                .get(FileKind::Equipment, &key)
+                .or_else(|| {
+                    calc.ds
+                        .get(FileKind::Equipment, &calc.migrate("EQUIPMENT", &key))
+                })
+                .or_else(|| calc.ds.get(FileKind::Equipment, &e.name));
+            let Some(obj) = obj.filter(|o| o.is_type("Spellbook")) else {
+                continue;
+            };
+            for i in 0..e.quantity.trunc().max(0.0) as usize {
+                let name = if i == 0 {
+                    e.name.clone()
+                } else {
+                    format!("{} #{}", e.name, i + 1)
+                };
+                self.add_book(&name);
+                self.item_books.push((name, obj));
+            }
+        }
     }
 
     fn add_book(&mut self, name: &str) {
@@ -238,6 +294,9 @@ impl<'a> Spells<'a> {
                 if !ok {
                     continue;
                 }
+                // PCGen adds these books while walking a set hashed on
+                // object identity, an order that shifts with unrelated
+                // details of the character; source order is as good as any
                 self.add_book(book);
                 for sp in spells {
                     let (name, dc) = match sp.split_once(',') {
@@ -257,6 +316,8 @@ impl<'a> Spells<'a> {
                             times,
                             unit: unit.clone(),
                             fixed_dc: dc,
+                            feats: Vec::new(),
+                            pages: 0,
                         }],
                     };
                     // the same spell granted the same way is one entry
@@ -269,7 +330,7 @@ impl<'a> Spells<'a> {
         out
     }
 
-    fn caster_index(&self, cls: &Object) -> Option<usize> {
+    pub fn caster_index(&self, cls: &Object) -> Option<usize> {
         self.casters.iter().position(|c| match c {
             Caster::Class(o) => std::ptr::eq(*o, cls),
             Caster::Race => false,
@@ -355,31 +416,80 @@ impl<'a> Spells<'a> {
                 Owner::Domain(d, _) => self.levels_on('D', &d.key, spell),
                 _ => self.class_levels(calc, cls, spell),
             };
+            // metamagic feats it was prepared with (unknown ones are
+            // dropped), which raise the level it is saved at
+            let feats: Vec<String> = l
+                .get("FEATLIST")
+                .map(|e| {
+                    e.children()
+                        .iter()
+                        .filter_map(|c| {
+                            calc.ds
+                                .get_in(FileKind::Ability, "FEAT", &c.value_text())
+                                .map(|o| o.key.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let added = metamagic_levels(calc, &feats);
+            let pages: i64 = l
+                .text("SPELLNUMPAGES")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             let levels = if levels.is_empty() {
-                vec![saved_level]
+                vec![saved_level - added]
             } else {
                 levels
             };
+            self.add_book(&book);
+            let info = |level: i64| SpellInfo {
+                book: book.clone(),
+                level,
+                times,
+                unit: "Day".into(),
+                fixed_dc: None,
+                feats: Vec::new(),
+                pages: 0,
+            };
             for lvl in levels {
-                if saved_level > 0 && saved_level != lvl {
+                if saved_level > 0 && saved_level != lvl + added {
                     continue;
                 }
                 if book == KNOWN_BOOK && auto && self.auto_knows(calc, cls, spell, lvl) {
                     continue;
                 }
-                self.add_info(
-                    ci,
-                    spell,
-                    owner.clone(),
-                    SpellInfo {
-                        book: book.clone(),
-                        level: lvl,
-                        times,
-                        unit: "Day".into(),
-                        fixed_dc: None,
-                    },
-                );
-                self.add_book(&book);
+                // a spell the class does not have yet starts with a
+                // placement at its own level
+                let has = |s: &Self| {
+                    s.by_caster[ci].iter().any(|c| {
+                        std::ptr::eq(c.spell, spell) && c.owner == owner && c.fixed_cl.is_none()
+                    })
+                };
+                if !has(self) {
+                    self.add_info(ci, spell, owner.clone(), info(lvl));
+                }
+                if !matches!(owner, Owner::Class(_)) && book == KNOWN_BOOK {
+                    continue;
+                }
+                let Some(cs) = self.by_caster[ci].iter_mut().find(|c| {
+                    std::ptr::eq(c.spell, spell) && c.owner == owner && c.fixed_cl.is_none()
+                }) else {
+                    continue;
+                };
+                // the same book and level again (ignoring feats) keeps
+                // the first line's times, unless feats make it another
+                match cs
+                    .infos
+                    .iter_mut()
+                    .find(|i| i.book == book && i.level == saved_level)
+                {
+                    Some(i) if feats.is_empty() => i.pages = pages,
+                    _ => cs.infos.push(SpellInfo {
+                        feats: feats.clone(),
+                        pages,
+                        ..info(saved_level)
+                    }),
+                }
             }
         }
     }
@@ -508,6 +618,8 @@ impl<'a> Spells<'a> {
                                         times: 1,
                                         unit: "Day".into(),
                                         fixed_dc: None,
+                                        feats: Vec::new(),
+                                        pages: 0,
                                     },
                                 );
                             }
@@ -552,6 +664,8 @@ impl<'a> Spells<'a> {
                                     times: 1,
                                     unit: "Day".into(),
                                     fixed_dc: None,
+                                    feats: Vec::new(),
+                                    pages: 0,
                                 },
                             );
                         }
@@ -559,6 +673,14 @@ impl<'a> Spells<'a> {
                 }
             }
         }
+    }
+
+    /// How many distinct spells SPELLKNOWN grants to a class's spell
+    /// list at a level; they count toward the class's spells known.
+    pub fn granted_known_count(&self, list: &str, level: i64) -> i64 {
+        self.granted_known
+            .get(&(lower(list), level))
+            .map_or(0, |v| v.len() as i64)
     }
 
     /// Spells granted to class lists (SPELLKNOWN:CLASS|Class=1|Spell)
@@ -582,7 +704,18 @@ impl<'a> Spells<'a> {
                 {
                     continue;
                 }
-                let rest: Vec<&str> = parts.collect();
+                // trailing prerequisites gate the whole grant
+                let is_pre = |p: &&str| {
+                    Prereq::is_pre_tag(p.split(':').next().unwrap_or("")) || p.starts_with("!PRE")
+                };
+                let (pres, rest): (Vec<&str>, Vec<&str>) = parts.partition(is_pre);
+                if !pres
+                    .iter()
+                    .filter_map(|p| Prereq::parse(p).ok())
+                    .all(|p| calc.passes(&p, Some(src)))
+                {
+                    continue;
+                }
                 for pair in rest.chunks(2) {
                     let [lv, names] = pair else { continue };
                     let Some((list, lvl)) = lv.rsplit_once('=') else {
@@ -601,6 +734,10 @@ impl<'a> Spells<'a> {
                     let ci = self.caster_index(cls).unwrap_or(0);
                     for n in names.split(',') {
                         if let Some(sp) = calc.ds.get(FileKind::Spell, n.trim()) {
+                            let known = self.granted_known.entry((lower(list), lvl)).or_default();
+                            if !known.iter().any(|x| std::ptr::eq(*x, sp)) {
+                                known.push(sp);
+                            }
                             // the spell is on the class's list as well
                             let on = self
                                 .lists
@@ -621,6 +758,8 @@ impl<'a> Spells<'a> {
                                     times: 1,
                                     unit: "Day".into(),
                                     fixed_dc: None,
+                                    feats: Vec::new(),
+                                    pages: 0,
                                 },
                             );
                         }
@@ -669,6 +808,8 @@ impl<'a> Spells<'a> {
                                 times,
                                 unit: "Day".into(),
                                 fixed_dc: None,
+                                feats: Vec::new(),
+                                pages: 0,
                             },
                         );
                     }
@@ -732,7 +873,7 @@ pub fn spell_type(cls: &Object) -> Option<&str> {
 }
 
 /// Is a spell's school one the class may not use?
-fn prohibited(calc: &Calc, cls: &Object, spell: &Object) -> bool {
+pub fn prohibited(calc: &Calc, cls: &Object, spell: &Object) -> bool {
     let mut schools: Vec<String> = cls
         .values("PROHIBITED")
         .flat_map(|v| v.split(','))
@@ -892,8 +1033,22 @@ pub fn cast_per_day(calc: &Calc, cls: &Object, level: i64, limit_by_stat: bool) 
             }
         }
     }
+    // multipliers (at least 1) apply to the table's count only
+    let mut mult = calc
+        .bonus
+        .total(
+            "SPELLCASTMULT",
+            &format!("CLASS.{};LEVEL.{}", cls.key, level),
+        )
+        .trunc();
+    if let Some(t) = spell_type(cls) {
+        mult += calc
+            .bonus
+            .total("SPELLCASTMULT", &format!("TYPE.{};LEVEL.{}", t, level))
+            .trunc();
+    }
     score += bonus_stat;
-    total += n + stat_bonus_spells(calc, score, level) as f64;
+    total += n * mult.max(1.0) + stat_bonus_spells(calc, score, level) as f64;
     total as i64
 }
 
@@ -1054,70 +1209,535 @@ pub fn caster_level(calc: &Calc, sp: &Spells, cs: &CharSpell) -> i64 {
     }
 }
 
+/// Pages a spellbook item has (NUMPAGES).
+pub fn book_pages(item: &Object) -> i64 {
+    item.get("NUMPAGES")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Pages a spell of a level takes in a spellbook item: its PAGEUSAGE
+/// formula, with SPELLLEVEL the spell's level (none without one).
+pub fn page_cost(calc: &Calc, item: &Object, level: i64) -> i64 {
+    item.get("PAGEUSAGE").map_or(0, |f| {
+        calc.eval_with(f, &|n| {
+            n.eq_ignore_ascii_case("SPELLLEVEL").then_some(level as f64)
+        }) as i64
+    })
+}
+
+/// A metamagic feat by key.
+pub fn metamagic_feat<'a>(calc: &Calc<'a>, key: &str) -> Option<&'a Object> {
+    calc.ds.get_in(FileKind::Ability, "FEAT", key)
+}
+
+/// Spell levels metamagic feats add (their ADDSPELLLEVEL).
+pub fn metamagic_levels(calc: &Calc, feats: &[String]) -> i64 {
+    feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .filter_map(|f| f.get("ADDSPELLLEVEL"))
+        .filter_map(|v| v.trim().parse::<i64>().ok())
+        .sum()
+}
+
+/// A feat's own bonuses to a category and target (`BONUS:DC|FEATBONUS|1`).
+fn feat_bonus(calc: &Calc, feat: &Object, category: &str, target: &str) -> f64 {
+    feat.values("BONUS")
+        .filter_map(|v| {
+            let mut p = v.split('|');
+            let (c, t, f) = (p.next()?, p.next()?, p.next()?);
+            (c.eq_ignore_ascii_case(category)
+                && t.split(',').any(|x| x.eq_ignore_ascii_case(target)))
+            .then(|| calc.eval_formula(f))
+        })
+        .sum()
+}
+
+/// PCGen's own formula for a CLOSE, MEDIUM or LONG range the game mode
+/// gives no SPELLRANGE for.
+pub fn default_spell_range(range: &str) -> Option<&'static str> {
+    match range.trim().to_ascii_uppercase().as_str() {
+        "CLOSE" => Some("floor(CASTERLEVEL/2)*5+25"),
+        "MEDIUM" => Some("(CASTERLEVEL*10)+100"),
+        "LONG" => Some("(CASTERLEVEL*40)+400"),
+        _ => None,
+    }
+}
+
+/// A spell range in feet after its metamagic feats: each in turn adds
+/// its BONUS:SPELL|RANGE, then multiplies by its BONUS:SPELL|RANGEMULT
+/// when that is positive.
+pub fn metamagic_range(calc: &Calc, feats: &[String], feet: i64) -> i64 {
+    feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .fold(feet, |r, f| {
+            let r = r.saturating_add(feat_bonus(calc, f, "SPELL", "RANGE") as i64);
+            match feat_bonus(calc, f, "SPELL", "RANGEMULT") as i64 {
+                m if m > 0 => r.saturating_mul(m),
+                _ => r,
+            }
+        })
+}
+
+/// The name a prepared spell shows with its metamagic feats:
+/// ` [Feat, Feat] ` after the spell's name.
+pub fn metamagic_suffix(calc: &Calc, info: &SpellInfo) -> String {
+    if info.feats.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = info
+        .feats
+        .iter()
+        .map(|k| metamagic_feat(calc, k).map_or_else(|| k.clone(), |f| f.name.clone()))
+        .collect();
+    format!(" [{}] ", names.join(", "))
+}
+
 /// Save DC for a spell.
 pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
-    let spell = cs.spell;
     if let Some(f) = &info.fixed_dc {
         if info.book.eq_ignore_ascii_case(INNATE_BOOK) || !matches!(cs.owner, Owner::Class(_)) {
             return calc.eval_formula(f) as i64;
         }
     }
-    let b = &calc.bonus;
     let cls = owner_class(calc, cs);
-    let stat_mod = cls
-        .and_then(|c| c.get("SPELLSTAT"))
-        .map(|st| {
-            let score = calc.stat_score(st)
-                + b.total("STAT", "BASESPELLSTAT")
-                + cls
-                    .map(|c| b.total("STAT", &format!("BASESPELLSTAT;CLASS={}", c.key)))
-                    .unwrap_or(0.0)
-                + b.total("STAT", &format!("CAST.{}", st));
-            calc.stat_mod_for(st, score)
-        })
-        .unwrap_or(0.0);
+    let stat_mod = base_spell_stat(calc, cls);
     let formula = calc
         .gm
         .and_then(|g| g.misc("SPELLBASEDC"))
         .unwrap_or("10+SPELLLEVEL+BASESPELLSTAT")
         .to_string();
-    let level = info.level as f64;
-    let mut dc = calc.eval_with(&formula, &|n| match n.to_ascii_uppercase().as_str() {
-        "SPELLLEVEL" => Some(level),
-        "BASESPELLSTAT" => Some(stat_mod),
-        _ => None,
-    });
-    dc += b.total("DC", "ALLSPELLS");
+    // metamagic does not change the spell's own level, but a feat may
+    // add to the DC
+    let level = (info.level - metamagic_levels(calc, &info.feats)) as f64;
+    let meta_dc: f64 = info
+        .feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .map(|f| feat_bonus(calc, f, "DC", "FEATBONUS"))
+        .sum();
+    let dc = meta_dc
+        + calc.eval_with(&formula, &|n| match n.to_ascii_uppercase().as_str() {
+            "SPELLLEVEL" => Some(level),
+            "BASESPELLSTAT" => Some(stat_mod),
+            _ => None,
+        });
+    (dc + spell_bonuses(calc, cs, "DC")) as i64
+}
+
+/// The modifier of a class's spell stat (SPELLSTAT), with the bonuses
+/// to it for casting; 0 without a class or spell stat.
+fn base_spell_stat(calc: &Calc, cls: Option<&Object>) -> f64 {
+    let b = &calc.bonus;
+    let Some((cls, st)) = cls.and_then(|c| Some((c, c.get("SPELLSTAT")?))) else {
+        return 0.0;
+    };
+    let score = calc.stat_score(st)
+        + b.total("STAT", "BASESPELLSTAT")
+        + b.total("STAT", &format!("BASESPELLSTAT;CLASS={}", cls.key))
+        + b.total("STAT", &format!("CAST.{}", st));
+    calc.stat_mod_for(st, score)
+}
+
+/// Bonuses of a category (DC, CONCENTRATION) that apply to a spell:
+/// all spells, the spell's own stat when the caster uses it, and those
+/// for the spell, its domain, class, spell type, schools, subschools
+/// and descriptors.
+fn spell_bonuses(calc: &Calc, cs: &CharSpell, category: &str) -> f64 {
+    let b = &calc.bonus;
+    let spell = cs.spell;
+    let cls = owner_class(calc, cs);
+    let mut t = b.total(category, "ALLSPELLS");
     if cls.is_none() || cls.is_some_and(|c| c.has("USESPELLSPELLSTAT")) {
         if let Some(st) = spell.get("STAT") {
-            dc += calc.stat_mod(st);
+            t += calc.stat_mod(st);
         }
     }
-    dc += b.total("DC", &format!("SPELL.{}", spell.key));
+    if !spell.key.is_empty() {
+        t += b.total(category, &format!("SPELL.{}", spell.key));
+    }
     if let Owner::Domain(d, _) = &cs.owner {
-        dc += b.total("DC", &format!("DOMAIN.{}", d.key));
+        t += b.total(category, &format!("DOMAIN.{}", d.key));
     }
     if let Some(c) = cls {
-        dc += b.total("DC", &format!("CLASS.{}", c.key));
-        if let Some(t) = spell_type(c) {
-            dc += b.total("DC", &format!("TYPE.{}", t));
+        t += b.total(category, &format!("CLASS.{}", c.key));
+        if let Some(st) = spell_type(c) {
+            t += b.total(category, &format!("TYPE.{}", st));
         }
     }
     for s in spell.values("SCHOOL") {
-        dc += b.total("DC", &format!("SCHOOL.{}", s));
+        t += b.total(category, &format!("SCHOOL.{}", s));
     }
     for s in spell.values("SUBSCHOOL") {
-        dc += b.total("DC", &format!("SUBSCHOOL.{}", s));
+        t += b.total(category, &format!("SUBSCHOOL.{}", s));
     }
     for d in spell.values("DESCRIPTOR").flat_map(|v| v.split(',')) {
-        dc += b.total("DC", &format!("DESCRIPTOR.{}", d.trim()));
+        t += b.total(category, &format!("DESCRIPTOR.{}", d.trim()));
     }
-    dc as i64
+    t
+}
+
+/// Concentration for a spell: the game mode's SPELLBASECONCENTRATION
+/// (with the spell's caster level and the caster's spell stat
+/// modifier), plus metamagic feat and CONCENTRATION bonuses.  None
+/// when the game mode has no concentration.
+pub fn concentration(calc: &Calc, sp: &Spells, cs: &CharSpell, info: &SpellInfo) -> Option<i64> {
+    let formula = calc
+        .gm
+        .and_then(|g| g.misc("SPELLBASECONCENTRATION"))
+        .filter(|f| !f.trim().is_empty())?;
+    let cls = owner_class(calc, cs);
+    let stat_mod = base_spell_stat(calc, cls);
+    // without a class the caster level is that of every casting class
+    // for this spell together
+    let cl = if cls.is_some() {
+        caster_level(calc, sp, cs)
+    } else {
+        calc.classes()
+            .iter()
+            .filter(|(c, _)| spell_type(c).is_some())
+            .map(|(c, _)| {
+                let as_class = CharSpell {
+                    owner: Owner::Class(c),
+                    ..cs.clone()
+                };
+                caster_level(calc, sp, &as_class)
+            })
+            .sum()
+    } as f64;
+    let level = (info.level - metamagic_levels(calc, &info.feats)) as f64;
+    let meta: f64 = info
+        .feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .map(|f| feat_bonus(calc, f, "CONCENTRATION", "FEATBONUS"))
+        .sum();
+    let base = calc.eval_with(formula, &|n| match n.to_ascii_uppercase().as_str() {
+        "SPELLLEVEL" => Some(level),
+        "BASESPELLSTAT" => Some(stat_mod),
+        "CASTERLEVEL" => Some(cl),
+        _ => None,
+    });
+    Some((base.trunc() + meta + spell_bonuses(calc, cs, "CONCENTRATION")) as i64)
+}
+
+/// A class's own concentration, for no spell in particular.
+pub fn class_concentration(calc: &Calc, sp: &Spells, cls: &Object) -> Option<i64> {
+    let blank = Object {
+        kind: FileKind::Spell,
+        head_tag: None,
+        name: String::new(),
+        key: String::new(),
+        category: None,
+        tokens: Vec::new(),
+        sublines: Vec::new(),
+        children: Vec::new(),
+        source: Vec::new(),
+        origin: cls.origin,
+        history: Vec::new(),
+    };
+    let cs = CharSpell {
+        spell: &blank,
+        owner: Owner::Class(cls),
+        fixed_cl: None,
+        infos: Vec::new(),
+    };
+    let info = SpellInfo {
+        book: String::new(),
+        level: 0,
+        times: 0,
+        unit: String::new(),
+        fixed_dc: None,
+        feats: Vec::new(),
+        pages: 0,
+    };
+    concentration(calc, sp, &cs, &info)
+}
+
+/// The highest spell level slots are counted to.
+const MAX_SPELL_LEVEL: usize = 25;
+
+/// Slots of one spell level of a prepared list: casts per day for any
+/// spell and for specialty (or domain) spells only, and the copies of
+/// each kind already prepared there.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SlotLevel {
+    pub non: i64,
+    pub spec: i64,
+    pub mem_non: i64,
+    pub mem_spec: i64,
+}
+
+/// Is there a slot for one more spell at `level`?  Lower levels'
+/// shortfalls are made up from this level's spare slots first; spare
+/// slots of higher levels count only with `use_higher`.  Arcane casters
+/// may fill specialty slots' shortfalls from ordinary slots; divine
+/// casters may not, and their specialty (domain) spells need a
+/// specialty slot.
+pub fn slot_available(
+    levels: &[SlotLevel],
+    level: usize,
+    divine: bool,
+    use_higher: bool,
+    specialty: bool,
+) -> bool {
+    let at = |i: usize| levels.get(i).copied().unwrap_or_default();
+    // make up a shortfall from spare slots
+    let fill = |spare: &mut i64, short: &mut i64| {
+        while *spare > 0 && *short < 0 {
+            *spare -= 1;
+            *short += 1;
+        }
+    };
+    let (mut low_spec, mut low_non) = (0i64, 0i64);
+    for i in 0..level {
+        let l = at(i);
+        let (mut exc_spec, mut exc_non) = (l.spec - l.mem_spec, l.non - l.mem_non);
+        fill(&mut exc_non, &mut low_non);
+        fill(&mut exc_spec, &mut low_spec);
+        if !divine {
+            fill(&mut exc_non, &mut low_spec);
+            fill(&mut exc_non, &mut exc_spec);
+        }
+        low_spec += exc_spec.min(0);
+        low_non += exc_non.min(0);
+    }
+    let (mut good_spec, mut good_non) = (0i64, 0i64);
+    for i in level..=MAX_SPELL_LEVEL.max(level) {
+        if !use_higher && i > level {
+            break;
+        }
+        let l = at(i);
+        let (mut exc_spec, mut exc_non) = (l.spec - l.mem_spec, l.non - l.mem_non);
+        fill(&mut exc_non, &mut low_non);
+        fill(&mut exc_non, &mut good_non);
+        fill(&mut exc_spec, &mut low_spec);
+        fill(&mut exc_spec, &mut good_spec);
+        if !divine {
+            fill(&mut exc_non, &mut low_spec);
+            fill(&mut exc_non, &mut good_spec);
+            fill(&mut exc_non, &mut exc_spec);
+        }
+        let free = if specialty {
+            if divine {
+                exc_spec > 0
+            } else {
+                exc_non + exc_spec > 0
+            }
+        } else {
+            exc_non > 0 && exc_non + exc_spec > 0
+        };
+        if free {
+            return true;
+        }
+        good_spec += exc_spec.min(0);
+        good_non += exc_non.min(0);
+    }
+    false
+}
+
+/// Specialty (or domain) slots a class adds at a level of a prepared
+/// list: those of its specialty, once it has a specialty spell (for a
+/// divine caster, a domain spell above level 0) at or below the level.
+fn specialty_slots(calc: &Calc, sp: &Spells, cls: &Object, level: i64) -> i64 {
+    let domains: Vec<String> = calc
+        .ch
+        .pcg
+        .lines_tagged("DOMAIN")
+        .filter(|l| {
+            l.get("SOURCE")
+                .and_then(|e| e.children().iter().find(|c| c.tag == "NAME"))
+                .is_some_and(|n| n.value_text().eq_ignore_ascii_case(&cls.key))
+        })
+        .filter_map(|l| l.head().map(|h| h.value_text()))
+        .collect();
+    if specialties(calc, cls).is_empty() && calc.ch.domains().is_empty() {
+        return 0;
+    }
+    let divine = spell_type(cls).is_some_and(|t| t.eq_ignore_ascii_case("Divine"));
+    let Some(ci) = sp.caster_index(cls) else {
+        return 0;
+    };
+    for ix in 0..=level {
+        let here: Vec<&CharSpell> = sp.by_caster[ci]
+            .iter()
+            .filter(|c| c.infos.iter().any(|i| i.level == ix))
+            .collect();
+        let found = if ix > 0 && divine && !domains.is_empty() {
+            here.iter().any(|c| {
+                domains
+                    .iter()
+                    .any(|d| sp.levels_on('D', d, c.spell).contains(&ix))
+            })
+        } else {
+            here.iter().any(|c| is_specialty(calc, c))
+        };
+        if found {
+            return specialty_slots_at(calc, sp, cls, &domains, level);
+        }
+    }
+    0
+}
+
+/// Specialty slots of a level: bonuses to them, and (when the casting
+/// stat allows the level) the specialty's own and one for a class
+/// whose domains give it spells it can cast.
+fn specialty_slots_at(
+    calc: &Calc,
+    sp: &Spells,
+    cls: &Object,
+    domains: &[String],
+    level: i64,
+) -> i64 {
+    let mut total = calc.bonus.total(
+        "SPECIALTYSPELLKNOWN",
+        &format!("CLASS.{};LEVEL.{}", cls.key, level),
+    );
+    if let Some(t) = spell_type(cls) {
+        total += calc.bonus.total(
+            "SPECIALTYSPELLKNOWN",
+            &format!("TYPE.{};LEVEL.{}", t, level),
+        );
+    }
+    let total = total as i64;
+    if let Some(st) = cls.get("SPELLSTAT") {
+        let max = calc.var(&format!("MAXLEVELSTAT={}", st)).unwrap_or(0.0);
+        if level as f64 > max {
+            return total;
+        }
+    }
+    let own = |o: &Object| {
+        o.get("KNOWNSPELLSFROMSPECIALTY")
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    let from = calc.subclass_of(cls).map_or_else(|| own(cls), own);
+    // a domain whose spells start below the highest level cast
+    let max_cast = (0..10)
+        .find(|l| cast_per_day(calc, cls, *l, true) == 0)
+        .unwrap_or(10);
+    let domain = own(cls) == 0
+        && max_cast > 1
+        && domains.iter().any(|d| {
+            sp.lists
+                .get(&('D', lower(d)))
+                .is_some_and(|m| m.keys().any(|l| *l < max_cast))
+        });
+    total + from + i64::from(domain)
+}
+
+/// Can a class prepare one more spell at a level of a list?  `Err`
+/// says why not.
+pub fn check_prepared_slot(
+    calc: &Calc,
+    sp: &Spells,
+    cls: &Object,
+    book: &str,
+    level: i64,
+    specialty: bool,
+) -> std::result::Result<(), String> {
+    let Some(ci) = sp.caster_index(cls) else {
+        return Err(format!("{} casts no spells", cls.key));
+    };
+    let levels: Vec<SlotLevel> = (0..=MAX_SPELL_LEVEL as i64)
+        .map(|i| {
+            let non = cast_per_day(calc, cls, i, true);
+            let (mut mem_non, mut mem_spec) = (0, 0);
+            for (cs, info) in sp.spells_in(ci, book, Some(i)) {
+                if is_specialty(calc, cs) {
+                    mem_spec += info.times;
+                } else {
+                    mem_non += info.times;
+                }
+            }
+            SlotLevel {
+                non,
+                spec: specialty_slots(calc, sp, cls, i),
+                mem_non,
+                mem_spec,
+            }
+        })
+        .collect();
+    let divine = spell_type(cls).is_some_and(|t| t.eq_ignore_ascii_case("Divine"));
+    let use_higher = calc
+        .ch
+        .pcg
+        .value("USEHIGHERPREPPED")
+        .is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+    let lvl = level.max(0) as usize;
+    if slot_available(&levels, lvl, divine, use_higher, specialty) {
+        return Ok(());
+    }
+    let cast = levels.get(lvl).map_or(0, |l| l.non + l.spec);
+    if !specialty && slot_available(&levels, lvl, divine, use_higher, true) {
+        Err("the remaining slots must be filled with specialty or domain spells".into())
+    } else if specialty && slot_available(&levels, lvl, divine, use_higher, false) {
+        Err("the remaining slots must be filled with spells not of the specialty or domain".into())
+    } else {
+        Err(format!(
+            "{} can only prepare {} spells for level {}",
+            cls.key, cast, level
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lv(non: i64, spec: i64, mem_non: i64, mem_spec: i64) -> SlotLevel {
+        SlotLevel {
+            non,
+            spec,
+            mem_non,
+            mem_spec,
+        }
+    }
+
+    #[test]
+    fn prepared_slots() {
+        // two slots at level 1, one used
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 1, 0)];
+        assert!(slot_available(&l, 1, false, false, false));
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 2, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+        // a level with no casts has no slot
+        assert!(!slot_available(&l, 2, false, false, false));
+        // a higher level's spare slot counts only when allowed
+        let l = [lv(3, 0, 0, 0), lv(2, 0, 2, 0), lv(1, 0, 0, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+        assert!(slot_available(&l, 1, false, true, false));
+        // a lower level's overflow takes this level's spare slot
+        let l = [lv(1, 0, 2, 0), lv(1, 0, 0, 0)];
+        assert!(!slot_available(&l, 1, false, false, false));
+    }
+
+    #[test]
+    fn specialty_slots_by_caster_type() {
+        // one ordinary and one specialty slot, the ordinary one used
+        let l = [lv(0, 0, 0, 0), lv(1, 1, 1, 0)];
+        // only a specialty spell fits
+        assert!(!slot_available(&l, 1, false, false, false));
+        assert!(slot_available(&l, 1, false, false, true));
+        assert!(slot_available(&l, 1, true, false, true));
+        // the specialty slot used: an arcane caster's extra specialty
+        // spell may take an ordinary slot, a divine caster's may not
+        let l = [lv(0, 0, 0, 0), lv(2, 1, 0, 1)];
+        assert!(slot_available(&l, 1, false, false, true));
+        assert!(!slot_available(&l, 1, true, false, true));
+        assert!(slot_available(&l, 1, true, false, false));
+    }
+
+    #[test]
+    fn default_ranges() {
+        assert_eq!(default_spell_range(" long"), Some("(CASTERLEVEL*40)+400"));
+        assert!(default_spell_range("Close").is_some());
+        assert!(default_spell_range("MEDIUM").is_some());
+        assert_eq!(default_spell_range("Touch"), None);
+        assert_eq!(default_spell_range("Close or Medium"), None);
+    }
 
     #[test]
     fn list_groups() {

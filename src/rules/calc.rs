@@ -18,7 +18,7 @@
 //! depend on each other, so evaluation repeats until nothing changes.
 
 use super::bonus::{BonusTable, Source};
-use super::eval::{eval, eval_str, Env};
+use super::eval::{eval_str, Env};
 use crate::dataset::{Dataset, Object, Tok};
 use crate::gamemode::GameMode;
 use crate::lst::kind::FileKind;
@@ -34,7 +34,7 @@ const MAX_PASSES: usize = 40;
 
 /// Bonus values and variable values after a pass, for detecting
 /// convergence.
-type Snapshot = (Vec<f64>, Vec<(String, f64)>);
+type Snapshot = (Vec<(String, f64)>, Vec<(String, f64)>, Vec<String>);
 
 /// What kind of thing an active source is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -117,8 +117,24 @@ pub struct Sheet {
     /// equipped items: `location: item [eqmods]`
     pub equipped: Vec<String>,
     pub passes: usize,
+    /// whether the passes settled; when false the values are those of
+    /// the last pass allowed, which may still have changed
+    pub converged: bool,
     /// names evaluated as zero because nothing defines them
     pub unknown: BTreeMap<String, usize>,
+}
+
+/// What DEFINESTAT on active objects does to one stat.
+#[derive(Debug, Default, Clone, Copy)]
+struct StatLimit {
+    /// LOCK: the score is this value (the highest of several locks)
+    lock: Option<f64>,
+    /// UNLOCK: locks are ignored
+    unlocked: bool,
+    /// MINVALUE: the highest of the minimums
+    min: Option<f64>,
+    /// MAXVALUE: the lowest of the maximums
+    max: Option<f64>,
 }
 
 pub struct Calc<'a> {
@@ -128,6 +144,14 @@ pub struct Calc<'a> {
     /// (class object, level)
     classes: Vec<(&'a Object, u32)>,
     stat_base: HashMap<String, f64>,
+    /// DEFINESTAT locks and limits, by stat (as of the last pass)
+    stat_limits: HashMap<String, StatLimit>,
+    /// the character's spells by level, as of the last pass (class and
+    /// race spells, each at every level it is placed)
+    spell_entries: Vec<(&'a Object, i64)>,
+    /// spells on the character's domain lists and granted by the race,
+    /// as of the last pass
+    spell_extras: Vec<&'a Object>,
     ranks: HashMap<String, f64>,
     pcg_class_skills: HashSet<String>,
     items: Vec<Item<'a>>,
@@ -139,6 +163,8 @@ pub struct Calc<'a> {
     /// set while proficiencies are worked out, so prerequisites on
     /// proficiency grants do not ask for proficiencies again
     in_profs: std::cell::Cell<bool>,
+    /// set while judging a PREDR (DR tokens may carry PREDR themselves)
+    in_dr: std::cell::Cell<bool>,
     class_skills: HashSet<String>,
     cross_class_skills: HashSet<String>,
     rules: HashMap<String, bool>,
@@ -153,7 +179,7 @@ fn lower(s: &str) -> String {
 }
 
 /// Split "Key (Choice)" into key and choice.
-fn split_choice(s: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_choice(s: &str) -> (&str, Option<&str>) {
     if !s.ends_with(')') {
         return (s, None);
     }
@@ -187,6 +213,9 @@ impl<'a> Calc<'a> {
             ch,
             classes: Vec::new(),
             stat_base: HashMap::new(),
+            stat_limits: HashMap::new(),
+            spell_entries: Vec::new(),
+            spell_extras: Vec::new(),
             ranks: HashMap::new(),
             pcg_class_skills: HashSet::new(),
             items: Vec::new(),
@@ -196,6 +225,7 @@ impl<'a> Calc<'a> {
             defined: HashSet::new(),
             unknown: RefCell::new(BTreeMap::new()),
             in_profs: std::cell::Cell::new(false),
+            in_dr: std::cell::Cell::new(false),
             class_skills: HashSet::new(),
             cross_class_skills: HashSet::new(),
             rules: HashMap::new(),
@@ -293,13 +323,20 @@ impl<'a> Calc<'a> {
                     }
                 }
             }
-            // eqmods built into the item
+            // eqmods built into the item, with the choices the data
+            // makes for them (KEY|choice|choice...)
             for v in obj.values("EQMOD") {
                 for k in v.split('.') {
-                    if let Some(m) = self.find_eqmod(k.split('|').next().unwrap_or(k)) {
+                    let mut parts = k.split('|');
+                    let key = parts.next().unwrap_or(k);
+                    if let Some(m) = self.find_eqmod(key) {
                         if !eqmods.iter().any(|x| std::ptr::eq(*x, m)) {
                             eqmods.push(m);
-                            eqmod_choices.push(Vec::new());
+                            eqmod_choices.push(if m.has("CHOOSE") {
+                                parts.map(str::to_string).collect()
+                            } else {
+                                Vec::new()
+                            });
                         }
                     }
                 }
@@ -335,7 +372,9 @@ impl<'a> Calc<'a> {
     }
 
     /// Weight carried: items placed in the calculation equipment set,
-    /// except those under "Not Carried".
+    /// except those under "Not Carried".  Unless the game mode's
+    /// clothing encumbrance rule is on, one of the first clothing worn
+    /// (equipped, holding nothing) weighs nothing.
     pub fn carried_weight(&self) -> f64 {
         let sets = self.ch.equipped();
         let not_carried: Vec<String> = sets
@@ -343,6 +382,7 @@ impl<'a> Calc<'a> {
             .filter(|e| e.location.eq_ignore_ascii_case("Not Carried"))
             .map(|e| format!("{}.", e.id))
             .collect();
+        let mut free_clothing = !self.rule("CLOTHINGENCUMBRANCE");
         let mut total = 0.0;
         for e in &sets {
             if e.location.eq_ignore_ascii_case("Not Carried")
@@ -351,15 +391,33 @@ impl<'a> Calc<'a> {
                 continue;
             }
             let Some(item) = &e.item else { continue };
-            let wt: f64 = self
+            let line = self
                 .ch
                 .pcg
                 .lines_tagged("EQUIPNAME")
-                .find(|l| l.head().is_some_and(|h| h.value_text() == *item))
+                .find(|l| l.head().is_some_and(|h| h.value_text() == *item));
+            let data = line.and_then(|l| super::equip::EqItem::from_pcg(self, l));
+            // the saved weight, else the item's own (files written by
+            // other tools may leave WT out)
+            let wt: f64 = line
                 .and_then(|l| l.text("WT"))
                 .and_then(|w| w.parse().ok())
+                .or_else(|| data.as_ref().map(|it| it.weight(self)))
                 .unwrap_or(0.0);
-            total += wt * e.quantity.unwrap_or(1.0);
+            let mut qty = e.quantity.unwrap_or(1.0);
+            // worn: at the top of the set, not in a container
+            let worn = e.id.split('.').count() == 3
+                && !e.location.to_ascii_lowercase().starts_with("carried");
+            let holds = sets.iter().any(|x| x.id.starts_with(&format!("{}.", e.id)));
+            if free_clothing
+                && worn
+                && !holds
+                && data.as_ref().is_some_and(|it| it.is_type(self, "CLOTHING"))
+            {
+                free_clothing = false;
+                qty = (qty - 1.0).max(0.0);
+            }
+            total += wt * qty;
         }
         total
     }
@@ -720,9 +778,44 @@ impl<'a> Calc<'a> {
         Some(eval_str(&f, &env))
     }
 
+    /// A level-table value as shown on sheets: from the level's own
+    /// row, else the `LEVEL:LEVEL` row, a field the row leaves out
+    /// being zero; None when the table has neither row.
+    pub fn level_row_value(
+        &self,
+        level: u32,
+        field: impl Fn(&crate::gamemode::LevelRow) -> String,
+    ) -> Option<f64> {
+        let gm = self.gm?;
+        if level < 1 {
+            return None;
+        }
+        let table = self.ch.pcg.value("EXPERIENCETABLE");
+        let mut rows = gm.level_table(table.as_deref());
+        if rows.is_empty() {
+            rows = gm.level_table(None);
+        }
+        let row = rows
+            .iter()
+            .find(|r| r.level.trim().parse::<u32>().ok() == Some(level))
+            .or_else(|| {
+                rows.iter()
+                    .find(|r| r.level.trim().eq_ignore_ascii_case("LEVEL"))
+            })?;
+        let f = field(row);
+        if f.trim().is_empty() {
+            return Some(0.0);
+        }
+        let env = LevelEnv {
+            calc: self,
+            level: level as f64,
+        };
+        Some(eval_str(&f, &env))
+    }
+
     /// The ability category an ability pool draws from (pools are
     /// declared by ABILITYCATEGORY objects; a category is its own pool).
-    fn pool_category(&self, pool: &str) -> String {
+    pub fn pool_category(&self, pool: &str) -> String {
         self.ds
             .get(FileKind::AbilityCategory, pool)
             .and_then(|o| o.get("CATEGORY"))
@@ -809,15 +902,158 @@ impl<'a> Calc<'a> {
     fn class_type(&self, cls: &Object) -> Option<&'a crate::gamemode::GmLine> {
         let g = self.gm?;
         let rows = || g.lines("miscinfo.lst", "CLASSTYPE");
-        if let Some(t) = cls.values("FACT").find_map(|v| {
-            let (k, val) = v.split_once('|')?;
-            k.eq_ignore_ascii_case("ClassType").then_some(val)
-        }) {
-            return rows().find(|l| l.value.eq_ignore_ascii_case(t));
+        // the ClassType fact, when it names a row; else the types
+        if let Some(row) = cls
+            .values("FACT")
+            .filter_map(|v| {
+                let (k, val) = v.split_once('|')?;
+                k.eq_ignore_ascii_case("ClassType").then_some(val)
+            })
+            .last()
+            .and_then(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
+        {
+            return Some(row);
         }
         cls.types()
             .iter()
             .find_map(|t| rows().find(|l| l.value.eq_ignore_ascii_case(t)))
+    }
+
+    /// Favored classes: the race's FAVCLASS, the templates'
+    /// FAVOREDCLASS (with %LIST resolved to the recorded choices) and
+    /// the character file's FAVOREDCLASS line, as keys ("Class" or
+    /// "Class.Subclass").  The flag is set when any class is favored
+    /// (HIGHESTLEVELCLASS).
+    pub fn favored_classes(&self) -> (bool, Vec<String>) {
+        let pcg = &self.ch.pcg;
+        let mut any = false;
+        let mut keys: Vec<String> = Vec::new();
+        for src in &self.sources {
+            let tag = match src.kind {
+                SrcKind::Race => "FAVCLASS",
+                SrcKind::Template => "FAVOREDCLASS",
+                _ => continue,
+            };
+            // choices recorded for %LIST
+            let applied = || -> Vec<String> {
+                let found = match src.kind {
+                    SrcKind::Race => pcg
+                        .lines_tagged("RACE")
+                        .next()
+                        .and_then(|l| l.text("APPLIEDTO")),
+                    _ => pcg.lines_tagged("TEMPLATESAPPLIED").find_map(|l| {
+                        let h = l.head()?;
+                        let name = h.children().iter().find(|c| c.tag == "NAME")?.value_text();
+                        if !name.eq_ignore_ascii_case(&src.obj.key) {
+                            return None;
+                        }
+                        h.children()
+                            .iter()
+                            .find(|c| c.tag == "APPLIEDTO")
+                            .map(|c| c.value_text())
+                    }),
+                };
+                found
+                    .map(|v| v.split(',').map(str::to_string).collect())
+                    .unwrap_or_default()
+            };
+            for v in src.obj.values(tag) {
+                for k in v.split('|') {
+                    if k.eq_ignore_ascii_case("HIGHESTLEVELCLASS") || k.eq_ignore_ascii_case("ANY")
+                    {
+                        any = true;
+                    } else if k == "%LIST" {
+                        keys.extend(applied());
+                    } else {
+                        keys.push(k.to_string());
+                    }
+                }
+            }
+        }
+        // the file's line names a class the character was saved with
+        keys.extend(
+            pcg.lines_tagged("FAVOREDCLASS")
+                .filter_map(|l| l.head().map(|h| h.value_text()))
+                .filter(|v| self.ds.get(FileKind::Class, v).is_some()),
+        );
+        (any, keys)
+    }
+
+    /// Does the class carry the multiclass experience penalty?  Not when
+    /// any of its types names a class type row that turns it off.
+    fn has_xp_penalty(&self, cls: &Object) -> bool {
+        let Some(g) = self.gm else {
+            return true;
+        };
+        !cls.types().iter().any(|t| {
+            g.lines("miscinfo.lst", "CLASSTYPE")
+                .find(|l| l.value.eq_ignore_ascii_case(t))
+                .and_then(|l| l.get("XPPENALTY"))
+                .is_some_and(|v| v.eq_ignore_ascii_case("NO"))
+        })
+    }
+
+    /// The multiclass experience multiplier: a fifth less (down to
+    /// nothing) for each unfavored class more than one level below the
+    /// highest unfavored class.  A chosen subclass stands for its class;
+    /// when any class is favored, the highest is passed over and the
+    /// next one sets the mark.
+    pub fn xp_multiplier(&self) -> f64 {
+        let (any, favored) = self.favored_classes();
+        // favored subclasses are named Class.Subclass; only keys compare
+        let favored: Vec<String> = favored
+            .iter()
+            .map(|k| lower(k.rsplit('.').next().unwrap_or(k)))
+            .collect();
+        let mut unfavored: Vec<(usize, u32)> = Vec::new();
+        let (mut max, mut second): (Option<usize>, Option<usize>) = (None, None);
+        let (mut max_level, mut second_level) = (0, 0);
+        for (i, &(cls, level)) in self.classes.iter().enumerate() {
+            if !self.has_xp_penalty(cls) {
+                continue;
+            }
+            let eval = self.subclass_of(cls).unwrap_or(cls);
+            if favored.contains(&lower(&eval.key)) {
+                continue;
+            }
+            unfavored.push((i, level));
+            if level > max_level {
+                if any {
+                    (second, second_level) = (max, max_level);
+                }
+                (max, max_level) = (Some(i), level);
+            } else if any && level > second_level {
+                (second, second_level) = (Some(i), level);
+            }
+        }
+        let mut skip = vec![max];
+        if any && second_level > 0 {
+            max_level = second_level;
+            skip.push(second);
+        }
+        if max_level == 0 {
+            return 1.0;
+        }
+        let penalties = unfavored
+            .iter()
+            .filter(|(i, _)| !skip.contains(&Some(*i)))
+            .filter(|(_, l)| max_level as i64 - *l as i64 > 1)
+            .count();
+        (1.0 - penalties as f64 * 0.2).max(0.0)
+    }
+
+    /// The character's region: as chosen, else from the last of its
+    /// templates that names one.
+    pub fn region(&self) -> Option<String> {
+        if let Some(r) = self.ch.pcg.value("REGION").filter(|r| !r.is_empty()) {
+            return Some(r);
+        }
+        self.sources
+            .iter()
+            .filter(|s| s.kind == SrcKind::Template)
+            .filter_map(|s| s.obj.get("REGION"))
+            .next_back()
+            .map(str::to_string)
     }
 
     /// Is the class a monster (racial hit dice) class?
@@ -1016,6 +1252,52 @@ impl<'a> Calc<'a> {
 
     /// Damage reduction, e.g. `10/magic; 5/-`: the best value per
     /// bypass type from DR tokens, plus BONUS:DR|type bonuses.
+    /// Damage reduction against one bypass, as DR prerequisites judge
+    /// it: the best DR with that bypass (bypasses joined by "and" each
+    /// get the value; those joined by "or" count whole, unless one of
+    /// them already has as much), plus DR bonuses to it.
+    pub fn dr_value(&self, bypass: &str) -> f64 {
+        let mut best: HashMap<String, f64> = HashMap::new();
+        let mut alternatives: Vec<(String, f64)> = Vec::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "DR") {
+                let mut parts = t.value.split('|');
+                let Some((v, kind)) = parts.next().and_then(|d| d.split_once('/')) else {
+                    continue;
+                };
+                let pres: Vec<Prereq> = parts.filter_map(|p| Prereq::parse(p).ok()).collect();
+                if !pres.iter().all(|p| self.passes(p, Some(s))) {
+                    continue;
+                }
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                let v = eval_str(v, &env);
+                let kind = lower(kind.trim());
+                if kind.contains(" or ") {
+                    alternatives.push((kind, v));
+                    continue;
+                }
+                for k in kind.split(" and ") {
+                    let e = best.entry(k.trim().to_string()).or_insert(0.0);
+                    *e = e.max(v);
+                }
+            }
+        }
+        for (kind, v) in alternatives {
+            let covered = kind
+                .split(" or ")
+                .any(|k| best.get(k.trim()).is_some_and(|b| *b >= v));
+            if !covered {
+                let e = best.entry(kind).or_insert(0.0);
+                *e = e.max(v);
+            }
+        }
+        let key = lower(bypass.trim());
+        best.get(&key).copied().unwrap_or(0.0) + self.bonus.total("DR", &key)
+    }
+
     pub fn damage_reduction(&self) -> String {
         let mut best: BTreeMap<String, (String, f64)> = BTreeMap::new();
         for s in &self.sources {
@@ -1098,6 +1380,11 @@ impl<'a> Calc<'a> {
 
     /// Effective character level: levels plus level adjustments.
     pub fn ecl(&self) -> u32 {
+        (self.total_level() as f64 + self.level_adjustment()).max(0.0) as u32
+    }
+
+    /// Level adjustment from the race and templates.
+    pub fn level_adjustment(&self) -> f64 {
         let mut la = 0.0;
         for s in self
             .sources
@@ -1112,7 +1399,16 @@ impl<'a> Calc<'a> {
                 la += eval_str(&t.value, &env);
             }
         }
-        (self.total_level() as f64 + la).max(0.0) as u32
+        la
+    }
+
+    /// Experience shown for the character: what it has earned, but at
+    /// least what its level adjustment is worth (the experience needed
+    /// for one level more than the adjustment).
+    pub fn experience(&self) -> i64 {
+        let la = self.level_adjustment().max(0.0) as u32;
+        let worth = self.min_xp(la + 1).unwrap_or(0.0) as i64;
+        self.ch.experience().max(worth)
     }
 
     /// Is the stat a non-ability for this character (DEFINESTAT:NONSTAT
@@ -1140,9 +1436,63 @@ impl<'a> Calc<'a> {
         non
     }
 
-    /// The stat's score before any bonuses.
+    /// The stat's score before any bonuses: a locked stat's lock,
+    /// else the score saved with the character, within any limits.
     pub fn stat_base(&self, abb: &str) -> f64 {
-        self.stat_base.get(&upper(abb)).copied().unwrap_or(0.0)
+        let k = upper(abb);
+        match self.stat_lock(&k) {
+            Some(v) => self.stat_clamp(&k, v),
+            None => self.stat_clamp(&k, self.stat_base.get(&k).copied().unwrap_or(0.0)),
+        }
+    }
+
+    /// The value a stat is locked at, unless it has been unlocked.
+    fn stat_lock(&self, k: &str) -> Option<f64> {
+        self.stat_limits
+            .get(k)
+            .filter(|l| !l.unlocked)
+            .and_then(|l| l.lock)
+    }
+
+    /// Keep a stat score within its DEFINESTAT minimum and maximum.
+    fn stat_clamp(&self, k: &str, v: f64) -> f64 {
+        let Some(l) = self.stat_limits.get(k) else {
+            return v;
+        };
+        let v = l.max.map_or(v, |m| v.min(m));
+        l.min.map_or(v, |m| v.max(m))
+    }
+
+    /// DEFINESTAT locks and limits from every active object.
+    fn find_stat_limits(&self) -> HashMap<String, StatLimit> {
+        let mut out: HashMap<String, StatLimit> = HashMap::new();
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "DEFINESTAT") {
+                let mut parts = t.value.splitn(3, '|');
+                let (Some(kind), Some(stat)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
+                let kind = upper(kind);
+                let l = out.entry(upper(stat)).or_default();
+                if kind == "UNLOCK" {
+                    l.unlocked = true;
+                    continue;
+                }
+                let Some(f) = parts.next() else { continue };
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                let v = eval_str(f, &env);
+                match kind.as_str() {
+                    "LOCK" => l.lock = Some(l.lock.map_or(v, |x| x.max(v))),
+                    "MINVALUE" => l.min = Some(l.min.map_or(v, |x| x.max(v))),
+                    "MAXVALUE" => l.max = Some(l.max.map_or(v, |x| x.min(v))),
+                    _ => {}
+                }
+            }
+        }
+        out
     }
 
     /// The stat's modifier for a given score.
@@ -1170,11 +1520,40 @@ impl<'a> Calc<'a> {
         eval_str(formula, &env)
     }
 
-    /// Evaluate a formula with extra terms looked up first (for
-    /// equipment formulas: BASECOST, PLUSTOTAL, ...).
+    /// Evaluate a formula with extra terms looked up first (spell
+    /// formulas: CASTERLEVEL, ...).
     pub fn eval_with(&self, formula: &str, extra: &dyn Fn(&str) -> Option<f64>) -> f64 {
-        let env = ExtraEnv { calc: self, extra };
+        let env = ExtraEnv {
+            calc: self,
+            extra,
+            item: false,
+        };
         eval_str(formula, &env)
+    }
+
+    /// Evaluate an item's formula, with its terms (BASECOST,
+    /// PLUSTOTAL, ...) looked up first.
+    pub fn eval_item(&self, formula: &str, extra: &dyn Fn(&str) -> Option<f64>) -> f64 {
+        let env = ExtraEnv {
+            calc: self,
+            extra,
+            item: true,
+        };
+        eval_str(formula, &env)
+    }
+
+    /// Would PCGen find a value for this name on the character?  Its
+    /// variables, the terms this crate works out, and PCGen's other
+    /// built-in terms and numeric output tokens (which this crate may
+    /// not work out).
+    fn resolves(&self, name: &str, src: Option<&Src<'a>>) -> bool {
+        self.defined.contains(&upper(name))
+            || pcgen_term(name, |s| self.stat_base.contains_key(s))
+            || name
+                .split(['.', ','])
+                .next()
+                .is_some_and(|t| NUMERIC_OUTPUT_TOKENS.contains(&t))
+            || self.builtin(name, src).is_some()
     }
 
     /// Hit points gained per level from stats (BONUS:HP|BONUS on stats).
@@ -1182,12 +1561,85 @@ impl<'a> Calc<'a> {
         self.bonus.total_where("HP", "BONUS", |s| s.kind == "Stat") as i64
     }
 
+    /// How many domains the character may have (BONUS:DOMAIN|NUMBER).
+    pub fn max_domains(&self) -> i64 {
+        self.bonus.total("DOMAIN", "NUMBER") as i64
+    }
+
+    /// How many bonus languages the character may choose from its
+    /// LANGBONUS lists: BONUS:LANG|BONUS from stats (at least 0) plus
+    /// BONUS:LANGUAGES|NUMBER.
+    pub fn bonus_language_count(&self) -> i64 {
+        let stat = self
+            .bonus
+            .total_where("LANG", "BONUS", |s| s.kind == "Stat")
+            .max(0.0);
+        (stat as i64) + self.bonus.total("LANGUAGES", "NUMBER") as i64
+    }
+
+    /// The languages offered as bonus languages: LANGBONUS of the race,
+    /// templates and classes (names, TYPE=t, ALL).
+    pub fn bonus_language_choices(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let langs = self.ds.objects(FileKind::Language);
+        for src in self
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SrcKind::Race | SrcKind::Template | SrcKind::Class))
+        {
+            let mut own: Vec<&str> = Vec::new();
+            for t in src.tokens.iter().filter(|t| t.tag == "LANGBONUS") {
+                for item in t.value.split(',').map(str::trim) {
+                    if item == "ALL" {
+                        own.extend(langs.iter().map(|o| o.key.as_str()));
+                    } else if let Some(ty) = item
+                        .strip_prefix("TYPE=")
+                        .or_else(|| item.strip_prefix("TYPE."))
+                    {
+                        own.extend(
+                            langs
+                                .iter()
+                                .filter(|o| ty.split('.').all(|x| o.is_type(x)))
+                                .map(|o| o.key.as_str()),
+                        );
+                    } else if !item.is_empty() {
+                        own.push(item);
+                    }
+                }
+            }
+            for k in own {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+                    out.push(k.to_string());
+                }
+            }
+        }
+        out
+    }
+
     /// Armor check penalty as shown on the sheet: the equipped
     /// armor's penalties, or the load penalty if worse, plus
     /// MISC|ACCHECK bonuses.
     pub fn check_penalty(&self) -> i64 {
         let mut acp = 0.0;
+        // a worn item other than a weapon gives way to a copy carrying
+        // temporary bonuses, and such copies are not counted
+        let temps = if self.ch.use_temp_mods() {
+            self.ch.temp_bonuses()
+        } else {
+            Vec::new()
+        };
+        let replaced = |i: usize| {
+            !self.item_is_type(i, "WEAPON")
+                && temps.iter().any(|t| {
+                    !t.on_pc()
+                        && t.target.eq_ignore_ascii_case(&self.items[i].name)
+                        && t.loads(self.ch)
+                })
+        };
         for (i, it) in self.items.iter().enumerate() {
+            if replaced(i) {
+                continue;
+            }
             let base: f64 = it
                 .obj
                 .get("ACCHECK")
@@ -1223,6 +1675,115 @@ impl<'a> Calc<'a> {
     }
 
     /// Spell resistance: the best SR of any source, plus MISC|SR.
+    /// Record the character's spells for spell prerequisites: what the
+    /// classes and race have at each level, plus the spells on its
+    /// domains' lists and those its race grants.
+    fn snapshot_spells(&mut self) {
+        use super::spells::Spells;
+        let sp = Spells::new(self);
+        let mut entries: Vec<(&'a Object, i64)> = Vec::new();
+        for list in &sp.by_caster {
+            for cs in list {
+                let mut levels: Vec<i64> = cs.infos.iter().map(|i| i.level).collect();
+                levels.sort();
+                levels.dedup();
+                entries.extend(levels.into_iter().map(|l| (cs.spell, l)));
+            }
+        }
+        let mut extras: Vec<&'a Object> = Vec::new();
+        for d in self.ch.domains() {
+            for l in 0..=20 {
+                extras.extend(sp.on_list('D', &d, l));
+            }
+        }
+        let auto = self
+            .ch
+            .pcg
+            .value("AUTOSPELLS")
+            .is_none_or(|v| !v.eq_ignore_ascii_case("N"));
+        if auto {
+            for src in self.sources.iter().filter(|s| s.kind == SrcKind::Race) {
+                for t in src.tokens.iter().filter(|t| t.tag == "SPELLS") {
+                    for part in t.value.split('|').skip(1) {
+                        if part.contains('=')
+                            || Prereq::is_pre_tag(part.split(':').next().unwrap_or(""))
+                            || part.starts_with("!PRE")
+                        {
+                            continue;
+                        }
+                        let name = part.split(',').next().unwrap_or(part).trim();
+                        if let Some(o) = self.ds.get(FileKind::Spell, name) {
+                            extras.push(o);
+                        }
+                    }
+                }
+            }
+        }
+        self.spell_entries = entries;
+        self.spell_extras = extras;
+    }
+
+    /// Spell entries (as of the last pass) of at least a level whose
+    /// values of a tag include a name (case-insensitive or exact).
+    fn spells_with(&self, tag: &str, name: &str, min_level: i64, exact: bool) -> usize {
+        self.spell_entries
+            .iter()
+            .filter(|(sp, l)| {
+                *l >= min_level
+                    && sp.values(tag).flat_map(|v| v.split('|')).any(|v| {
+                        let v = v.trim();
+                        if exact {
+                            v == name
+                        } else {
+                            v.eq_ignore_ascii_case(name)
+                        }
+                    })
+            })
+            .count()
+    }
+
+    /// Natural reach: the race's (5 if it gives none), replaced by the
+    /// last template giving one, plus COMBAT|REACH bonuses.
+    pub fn natural_reach(&self) -> f64 {
+        let mut r = 5.0;
+        for src in self
+            .sources
+            .iter()
+            .filter(|x| matches!(x.kind, SrcKind::Race | SrcKind::Template))
+        {
+            if let Some(v) = src.obj.get("REACH") {
+                r = v.trim().parse().unwrap_or(r);
+            }
+        }
+        r + self.bonus.total("COMBAT", "REACH")
+    }
+
+    /// Spell resistance not counting what equipment gives (as SR
+    /// prerequisites judge it).
+    pub fn innate_spell_resistance(&self) -> f64 {
+        let mut best = 0.0f64;
+        for s in self
+            .sources
+            .iter()
+            .filter(|s| !matches!(s.kind, SrcKind::Equipment | SrcKind::EquipMod))
+        {
+            for t in s.tokens.iter().filter(|t| t.tag == "SR") {
+                let env = Ctx {
+                    calc: self,
+                    src: Some(s),
+                };
+                best = best.max(eval_str(&t.value, &env));
+            }
+        }
+        best.trunc()
+            + self
+                .bonus
+                .total_where("MISC", "SR", |src| {
+                    !matches!(src.kind.as_str(), "Equipment" | "EquipMod")
+                })
+                .trunc()
+    }
+
     pub fn spell_resistance(&self) -> i64 {
         let mut best = 0.0f64;
         for s in &self.sources {
@@ -1239,7 +1800,12 @@ impl<'a> Calc<'a> {
 
     pub fn stat_score(&self, abb: &str) -> f64 {
         let a = upper(abb);
-        self.stat_base.get(&a).copied().unwrap_or(0.0) + self.bonus.total("STAT", &a)
+        // a locked stat takes only LOCKEDSTAT bonuses
+        let v = match self.stat_lock(&a) {
+            Some(v) => v + self.bonus.total("LOCKEDSTAT", &a),
+            None => self.stat_base(&a) + self.bonus.total("STAT", &a),
+        };
+        self.stat_clamp(&a, v)
     }
 
     pub fn stat_mod(&self, abb: &str) -> f64 {
@@ -1391,6 +1957,9 @@ impl<'a> Calc<'a> {
     /// equipment, and/or without temporary ones.
     pub fn stat_score_without(&self, abb: &str, equipment: bool, temporary: bool) -> f64 {
         let k = upper(abb);
+        if let Some(v) = self.stat_lock(&k) {
+            return v;
+        }
         self.stat_base(&k)
             + self.bonus.total_where("STAT", &k, |src| {
                 let eq = matches!(src.kind.as_str(), "Equipment" | "EquipMod")
@@ -1403,7 +1972,9 @@ impl<'a> Calc<'a> {
                                 &src.key,
                             )
                             .is_some_and(|o| o.is_type("Equipment"));
-                !(equipment && eq) && !(temporary && src.temp)
+                // size categories' own bonuses are not among the
+                // bonuses PCGen sums for these partial scores
+                src.kind != "Size" && !(equipment && eq) && !(temporary && src.temp)
             })
     }
 
@@ -1468,6 +2039,9 @@ impl<'a> Calc<'a> {
             .unwrap_or(0.0);
         let mut sp = class_sp + self.bonus.total("SKILLPOINTS", "NUMBER");
         let race_sp = sp - class_sp;
+        if self.is_monster_class(cls) {
+            sp = self.monster_skill_points(cls, char_level, sp);
+        }
         let skill_min = if sp > 0.0 { 1.0 } else { 0.0 };
         let mod_to_skills = !cls
             .get("MODTOSKILLS")
@@ -1484,6 +2058,13 @@ impl<'a> Calc<'a> {
             }
         }
         sp = sp.max(skill_min);
+        sp += self
+            .sources
+            .iter()
+            .filter(|s| s.kind == SrcKind::Template)
+            .filter_map(|s| s.obj.get("BONUSSKILLPOINTS"))
+            .filter_map(|v| v.trim().parse::<i64>().ok())
+            .sum::<i64>() as f64;
         let min = self.bonus.total("MINCLASSSKILLPOINTS", "NUMBER");
         let other = sp - class_sp - race_sp;
         if min > 0.0 && class_sp + other < min {
@@ -1507,6 +2088,102 @@ impl<'a> Calc<'a> {
         sp * mult
     }
 
+    /// A monster class's points for a level, before the stat's and the
+    /// race's: a locked number (MONSKILLPTS|LOCKNUMBER) for every level;
+    /// else on the first character level MONSKILLPTS|NUMBER, which the
+    /// class's MONSKILL adds to while the character has at most one
+    /// level; and none for the levels after the first up to
+    /// MONNONSKILLHD.
+    fn monster_skill_points(&self, cls: &'a Object, char_level: u32, sp: f64) -> f64 {
+        // a class token that stands for a bonus with the given head
+        let class_bonus = |o: &'a Object, tag: &str, head: &str| -> f64 {
+            let src = self.sources.iter().find(|x| std::ptr::eq(x.obj, o));
+            let env = Ctx { calc: self, src };
+            o.values(tag)
+                .filter_map(|v| Bonus::parse(&format!("{}|{}", head, v)).ok())
+                .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
+                .map(|b| eval_str(&b.formula, &env))
+                .sum()
+        };
+        let lock = self.bonus.total("MONSKILLPTS", "LOCKNUMBER").trunc();
+        if lock > 0.0 {
+            return self.monster_non_skill(cls, char_level, lock, &class_bonus);
+        }
+        let mut sp = sp;
+        if char_level == 1 {
+            // MONSKILL holds only while the character has one level
+            let mut n = self.bonus.total("MONSKILLPTS", "NUMBER");
+            if self.total_level().max(char_level) <= 1 {
+                n += class_bonus(cls, "MONSKILL", "MONSKILLPTS|NUMBER");
+            }
+            if n.trunc() != 0.0 {
+                sp = n.trunc();
+            }
+        }
+        self.monster_non_skill(cls, char_level, sp, &class_bonus)
+    }
+
+    /// No points for a level after the first that is within the
+    /// non-skill hit dice: MONNONSKILLHD bonuses plus the tokens of the
+    /// classes held and the one leveled.
+    fn monster_non_skill(
+        &self,
+        cls: &'a Object,
+        char_level: u32,
+        sp: f64,
+        class_bonus: &dyn Fn(&'a Object, &str, &str) -> f64,
+    ) -> f64 {
+        if char_level == 1 {
+            return sp;
+        }
+        let mut hd = self.bonus.total("MONNONSKILLHD", "NUMBER");
+        let held = self.classes.iter().map(|(o, _)| *o);
+        let others = held.filter(|o| !std::ptr::eq(*o, cls));
+        for o in std::iter::once(cls).chain(others) {
+            hd += class_bonus(o, "MONNONSKILLHD", "MONNONSKILLHD|NUMBER");
+        }
+        if char_level as f64 <= hd.trunc() {
+            0.0
+        } else {
+            sp
+        }
+    }
+
+    /// Bonus skill points (SKILLPOOL) a level of a class adds on top of
+    /// the class's points: what the class's own SKILLPOOL|NUMBER adds at
+    /// this class level, SKILLPOOL|CLASS.x on the class's first level,
+    /// SKILLPOOL|CLASS.x;LEVEL.n and SKILLPOOL|LEVEL.n for the character
+    /// level.
+    pub fn bonus_skill_points(&self, cls: &'a Object, class_level: u32, char_level: u32) -> f64 {
+        let src = self.sources.iter().find(|x| std::ptr::eq(x.obj, cls));
+        let env = Ctx { calc: self, src };
+        let own = |level: u32| -> f64 {
+            if level == 0 {
+                return 0.0;
+            }
+            self.class_tokens(cls, level)
+                .into_iter()
+                .filter(|t| t.tag == "BONUS")
+                .filter_map(|t| Bonus::parse(&t.value).ok())
+                .filter(|b| {
+                    b.category.eq_ignore_ascii_case("SKILLPOOL")
+                        && b.targets.iter().any(|t| t.eq_ignore_ascii_case("NUMBER"))
+                })
+                .filter(|b| b.prereqs().all(|p| self.passes(p, src)))
+                .map(|b| eval_str(&b.formula, &env))
+                .map(f64::trunc)
+                .sum()
+        };
+        let total = |target: &str| self.bonus.total("SKILLPOOL", target);
+        let mut points = own(class_level) - own(class_level - 1);
+        if class_level == 1 {
+            points += total(&format!("CLASS.{}", cls.key));
+        }
+        points += total(&format!("CLASS.{};LEVEL.{}", cls.key, class_level));
+        points += total(&format!("LEVEL.{}", char_level));
+        points
+    }
+
     /// The character's deity: the one named in the character file, else
     /// the data's default deity (DEFAULTVARIABLEVALUE:DEITY|key).
     pub fn deity(&self) -> Option<&'a Object> {
@@ -1515,9 +2192,14 @@ impl<'a> Calc<'a> {
                 return Some(o);
             }
         }
-        let def = crate::rules::vars::system::data_defaults(self.ds, self.gm);
-        let key = def.get("DEITY")?;
-        self.ds.get(FileKind::Deity, key)
+        self.ds.get(FileKind::Deity, &self.default_deity_key()?)
+    }
+
+    /// The deity the data names as the default (DEFAULTVARIABLEVALUE).
+    pub fn default_deity_key(&self) -> Option<String> {
+        crate::rules::vars::system::data_defaults(self.ds, self.gm)
+            .remove("DEITY")
+            .filter(|k| !k.trim().is_empty())
     }
 
     /// Is the skill a class skill for the given class?  Class skills
@@ -1567,19 +2249,26 @@ impl<'a> Calc<'a> {
         }) {
             return true;
         }
-        // class skills chosen when a level was taken
-        self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL").any(|l| {
-            let of_class = l
-                .head()
-                .map(|h| h.value_text())
-                .and_then(|h| h.rsplit_once('=').map(|(c, _)| c.to_string()))
-                .is_some_and(|c| c.eq_ignore_ascii_case(class));
+        self.chosen_class_skill(&sk.key, class)
+    }
+
+    /// Was the skill chosen as a class skill of the class (by an
+    /// ADD:CLASSSKILLS of the class or one of its levels)?
+    fn chosen_class_skill(&self, skill: &str, class: &str) -> bool {
+        let levels = self.ch.pcg.lines_tagged("CLASSABILITIESLEVEL");
+        levels.chain(self.ch.pcg.lines_tagged("CLASS")).any(|l| {
+            let head = l.head().map(|h| h.value_text()).unwrap_or_default();
+            let of_class = match (l.tag(), head.rsplit_once('=')) {
+                (Some("CLASS"), _) => head.eq_ignore_ascii_case(class),
+                (_, Some((c, _))) => c.eq_ignore_ascii_case(class),
+                _ => false,
+            };
             of_class
                 && l.elems.iter().flatten().any(|e| {
                     e.tag == "ADD"
                         && e.children().iter().any(|c| c.tag == "CLASSSKILLS")
                         && e.children().iter().any(|c| {
-                            c.tag == "CHOICE" && c.value_text().eq_ignore_ascii_case(&sk.key)
+                            c.tag == "CHOICE" && c.value_text().eq_ignore_ascii_case(skill)
                         })
                 })
         })
@@ -1593,6 +2282,13 @@ impl<'a> Calc<'a> {
     pub fn is_class_skill(&self, skill: &str) -> bool {
         let s = lower(skill);
         if self.class_skills.contains(&s) || self.pcg_class_skills.contains(&s) {
+            return true;
+        }
+        if self
+            .classes
+            .iter()
+            .any(|(cl, _)| self.chosen_class_skill(skill, &cl.key))
+        {
             return true;
         }
         // the skill may name the classes it is a class skill for
@@ -1696,8 +2392,44 @@ impl<'a> Calc<'a> {
     /// Index of the character's size category.
     pub fn size_index(&self) -> i64 {
         let n = self.size_list().len();
-        let idx = self.base_size_index() + self.bonus.total("SIZEMOD", "NUMBER") as i64;
+        let idx = self.base_size_index()
+            + self.bonus.total("SIZEMOD", "NUMBER") as i64
+            + self.size_advancement();
         idx.clamp(0, n.saturating_sub(1) as i64)
+    }
+
+    /// Size steps the race's HITDICEADVANCEMENT gives for the levels in
+    /// monster classes: one per threshold exceeded, in order, except
+    /// the last threshold (the most hit dice allowed; `*` for none).
+    fn size_advancement(&self) -> i64 {
+        let Some(race) = self.race() else { return 0 };
+        let Some(v) = race.get("HITDICEADVANCEMENT") else {
+            return 0;
+        };
+        let thresholds: Vec<i64> = v
+            .split(',')
+            .filter_map(|t| match t.trim() {
+                "*" => Some(i64::MAX),
+                t => t.parse().ok(),
+            })
+            .collect();
+        let limit = thresholds.last().copied().unwrap_or(0);
+        let hd: i64 = self
+            .classes
+            .iter()
+            .filter(|(o, _)| self.is_monster_class(o))
+            .map(|(_, l)| *l as i64)
+            .sum();
+        let mut steps = 0;
+        for t in thresholds {
+            if hd <= t {
+                break;
+            }
+            if t < limit {
+                steps += 1;
+            }
+        }
+        steps
     }
 
     pub fn size_key(&self) -> String {
@@ -1713,7 +2445,7 @@ impl<'a> Calc<'a> {
     }
 
     /// Abilities active now: (category, key, choices)
-    fn has_ability(&self, category: Option<&str>, key: &str) -> bool {
+    pub fn has_ability(&self, category: Option<&str>, key: &str) -> bool {
         let k = lower(key);
         self.sources.iter().any(|s| {
             s.kind == SrcKind::Ability
@@ -1869,6 +2601,7 @@ impl<'a> Calc<'a> {
                 return Some(match upper(what).as_str() {
                     "RANK" => self.skill_ranks(sk),
                     "TOTAL" => self.skill_total(sk) as f64,
+                    "MISC" => self.skill_misc(sk) as f64,
                     _ => 0.0,
                 });
             }
@@ -1938,7 +2671,15 @@ impl<'a> Calc<'a> {
             }
         };
         match lower(name).as_str() {
-            "var" => self.var_value(&s(0)?, src),
+            // PCGen works out a name with no value as a formula, which
+            // always gives a number
+            "var" => {
+                let name = s(0)?;
+                Some(
+                    self.var_value(&name, src)
+                        .unwrap_or_else(|| eval_str(&name, &Ctx { calc: self, src })),
+                )
+            }
             "classlevel" => {
                 let a = s(0).unwrap_or_default();
                 if a.is_empty() {
@@ -2016,7 +2757,14 @@ impl<'a> Calc<'a> {
 
     pub fn passes(&self, p: &Prereq, src: Option<&Src<'a>>) -> bool {
         let r = self.passes_inner(p, src);
-        r != p.negated
+        match upper(&p.kind).as_str() {
+            // a wield category is only known on an item: on a character
+            // the test fails, negated or not
+            "WIELD" => false,
+            // PCGen inverts a several-item test twice, so `!` is lost
+            "CLASSLEVELMAX" if p.args().len() > 2 => r,
+            _ => r != p.negated,
+        }
     }
 
     fn count_items(&self, args: &[String], f: impl Fn(&str) -> bool) -> bool {
@@ -2129,14 +2877,17 @@ impl<'a> Calc<'a> {
                 })
             }
             "CLASS" => self.count_items(args, |a| {
-                let (c, lv) = a.split_once('=').unwrap_or((a, "1"));
-                let need = num(lv);
-                if let Some(t) = c.strip_prefix("TYPE.").or_else(|| c.strip_prefix("TYPE=")) {
+                // TYPE=t or TYPE.t, optionally with =level
+                if let Some(rest) = a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE=")) {
+                    let (t, lv) = rest.split_once('=').unwrap_or((rest, "1"));
+                    let need = num(lv);
                     return self
                         .classes
                         .iter()
                         .any(|(o, l)| o.is_type(t) && *l as f64 >= need);
                 }
+                let (c, lv) = a.split_once('=').unwrap_or((a, "1"));
+                let need = num(lv);
                 if c.eq_ignore_ascii_case("ANY") {
                     return self.classes.iter().any(|(_, l)| *l as f64 >= need);
                 }
@@ -2156,9 +2907,9 @@ impl<'a> Calc<'a> {
                 })
             }
             "SKILL" => self.count_items(args, |a| {
-                let (s, v) = a.split_once('=').unwrap_or((a, "1"));
-                // TYPE.x: any skill of that type with the ranks
-                if let Some(t) = s.strip_prefix("TYPE.").or_else(|| s.strip_prefix("TYPE=")) {
+                // TYPE.x or TYPE=x: any skill of that type with the ranks
+                if let Some(rest) = a.strip_prefix("TYPE.").or_else(|| a.strip_prefix("TYPE=")) {
+                    let (t, v) = rest.split_once('=').unwrap_or((rest, "1"));
                     return self
                         .ds
                         .objects(FileKind::Skill)
@@ -2166,6 +2917,7 @@ impl<'a> Calc<'a> {
                         .filter(|o| t.split('.').all(|x| o.is_type(x)))
                         .any(|o| self.skill_ranks(&o.key) >= num(v));
                 }
+                let (s, v) = a.split_once('=').unwrap_or((a, "1"));
                 self.skill_ranks(s) >= num(v)
             }),
             "CSKILL" => self.count_items(args, |a| self.is_class_skill(a)),
@@ -2314,9 +3066,12 @@ impl<'a> Calc<'a> {
             }
             "MOVE" => {
                 let mv = self.movement();
+                // a character with no movement at all meets every
+                // speed requirement
+                let none = self.movement_named().is_empty();
                 self.count_items(args, |a| {
                     let (t, v) = a.split_once('=').unwrap_or((a, "1"));
-                    mv.get(&lower(t)).is_some_and(|sp| *sp >= num(v))
+                    none || mv.get(&lower(t)).is_some_and(|sp| *sp >= num(v))
                 })
             }
             "AGESET" => {
@@ -2352,7 +3107,7 @@ impl<'a> Calc<'a> {
                     >= num(v)
             }),
             "REGION" => {
-                let r = self.ch.pcg.value("REGION").unwrap_or_default();
+                let r = self.region().unwrap_or_default();
                 args.iter().any(|a| a.trim().eq_ignore_ascii_case(&r))
             }
             "RACETYPE" => {
@@ -2372,14 +3127,237 @@ impl<'a> Calc<'a> {
                 sum += self.skill_ranks(lastskill);
                 sum >= num(total)
             }
-            "LEGSEQ" | "LEGSGT" | "LEGSGTEQ" | "LEGSLT" | "LEGSLTEQ" | "LEGSNEQ" => {
+            // a bare limb, reach or SR kind means at least
+            "LEGS" | "LEGSEQ" | "LEGSGT" | "LEGSGTEQ" | "LEGSLT" | "LEGSLTEQ" | "LEGSNEQ" => {
                 let legs = self.limbs("LEGS", 2.0);
-                args.first().is_none_or(|a| cmp(&kind[4..], legs, num(a)))
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[4..]), legs, num(a)))
             }
-            "HANDSEQ" | "HANDSGT" | "HANDSGTEQ" | "HANDSLT" | "HANDSLTEQ" | "HANDSNEQ" => {
+            "HANDS" | "HANDSEQ" | "HANDSGT" | "HANDSGTEQ" | "HANDSLT" | "HANDSLTEQ"
+            | "HANDSNEQ" => {
                 let hands = self.limbs("HANDS", 2.0);
-                args.first().is_none_or(|a| cmp(&kind[5..], hands, num(a)))
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[5..]), hands, num(a)))
             }
+            "REACH" | "REACHEQ" | "REACHGT" | "REACHGTEQ" | "REACHLT" | "REACHLTEQ"
+            | "REACHNEQ" => {
+                let reach = self.natural_reach();
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[5..]), reach, num(a)))
+            }
+            "SR" | "SREQ" | "SRGT" | "SRGTEQ" | "SRLT" | "SRLTEQ" | "SRNEQ" => {
+                let sr = self.innate_spell_resistance();
+                args.first()
+                    .is_none_or(|a| cmp(op_of(&kind[2..]), sr, num(a)))
+            }
+            "HP" => args
+                .first()
+                .is_none_or(|a| self.hit_points() as f64 >= num(a)),
+            // classes by spell type, or by whether they memorize spells
+            // (they do unless they say otherwise); any argument will do
+            "SPELLCAST" => args.iter().any(|a| {
+                let a = a.trim();
+                if let Some(t) = a.strip_prefix("TYPE=") {
+                    self.classes.iter().any(|(o, _)| {
+                        super::spells::spell_type(o)
+                            .unwrap_or("None")
+                            .eq_ignore_ascii_case(t)
+                    })
+                } else if let Some(m) = a.strip_prefix("MEMORIZE=") {
+                    let want = !m.to_ascii_uppercase().starts_with('N');
+                    self.classes.iter().any(|(o, _)| {
+                        !o.get("MEMORIZE")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('N'))
+                            == want
+                    })
+                } else {
+                    false
+                }
+            }),
+            // damage reduction against bypasses: how many items reach
+            // their value (0 always does)
+            "DR" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<(String, f64)> = args
+                    .iter()
+                    .skip(1)
+                    .map(|a| {
+                        let a = a.trim();
+                        match a.rfind(['=', '.']) {
+                            Some(i) => (a[..i].to_string(), num(&a[i + 1..])),
+                            None => (a.to_string(), 0.0),
+                        }
+                    })
+                    .collect();
+                if items.iter().all(|(_, v)| *v <= 0.0) {
+                    return true;
+                }
+                if self.in_dr.get() {
+                    return true;
+                }
+                self.in_dr.set(true);
+                let held = items
+                    .iter()
+                    .filter(|(k, v)| *v <= 0.0 || self.dr_value(k) >= *v)
+                    .count() as f64;
+                self.in_dr.set(false);
+                held >= n.max(1.0)
+            }
+            // the character's spells (entries at each level, those on
+            // its domains' lists and those its race grants), by name
+            "SPELL" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let count: usize = args
+                    .iter()
+                    .skip(1)
+                    .map(|a| {
+                        let a = a.trim();
+                        self.spell_entries
+                            .iter()
+                            .filter(|(sp, _)| sp.key.eq_ignore_ascii_case(a))
+                            .count()
+                            + self
+                                .spell_extras
+                                .iter()
+                                .filter(|sp| sp.key.eq_ignore_ascii_case(a))
+                                .count()
+                    })
+                    .sum();
+                count as f64 >= n.max(1.0)
+            }
+            // spell entries of a school, subschool or descriptor from a
+            // minimum level; the count is how many entries are needed
+            "SPELLSCHOOL" | "SPELLSCHOOLSUB" | "SPELLDESCRIPTOR" => {
+                let (tag, exact) = match kind.as_str() {
+                    "SPELLSCHOOL" => ("SCHOOL", false),
+                    "SPELLSCHOOLSUB" => ("SUBSCHOOL", true),
+                    _ => ("DESCRIPTOR", true),
+                };
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let count: usize = args
+                    .iter()
+                    .skip(1)
+                    .filter_map(|a| a.trim().split_once('='))
+                    .map(|(name, lv)| self.spells_with(tag, name.trim(), num(lv) as i64, exact))
+                    .sum();
+                count as f64 >= n.max(1.0)
+            }
+            // spells of a type at exactly a level: what classes of the
+            // type know there, else what they can cast; summed over the
+            // items, the count being how many are needed
+            "SPELLTYPE" => {
+                use super::spells::{cast_per_day, known_at, spell_type, Spells};
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<&String> = args.iter().skip(1).collect();
+                let mut sum = 0.0;
+                for item in &items {
+                    let Some((t, lv)) = item.trim().split_once('=') else {
+                        continue;
+                    };
+                    let level = num(lv) as i64;
+                    let (mut known, mut cast) = (0.0, 0.0);
+                    for (cls, _) in &self.classes {
+                        let Some(st) = spell_type(cls) else { continue };
+                        if !(t.eq_ignore_ascii_case("ANY") || st.eq_ignore_ascii_case(t)) {
+                            continue;
+                        }
+                        // casting without memorizing or a known table
+                        // has no limit
+                        let memorizes = !cls
+                            .get("MEMORIZE")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('N'));
+                        let known_table = cls
+                            .sublines
+                            .iter()
+                            .any(|sl| sl.tokens.iter().any(|t| t.tag == "KNOWN"));
+                        if !memorizes
+                            && !known_table
+                            && (0..=9).any(|l| cast_per_day(self, cls, l, true) > 0)
+                        {
+                            known = f64::INFINITY;
+                            break;
+                        }
+                        let can = cast_per_day(self, cls, level, true);
+                        cast += can as f64;
+                        known += known_at(self, cls, level, 0) as f64;
+                        if can > 0 {
+                            known += Spells::specialty_known(self, cls, level) as f64;
+                        }
+                    }
+                    let v = if known != 0.0 { known } else { cast };
+                    if v >= 1.0 {
+                        sum += v;
+                    }
+                }
+                if items.len() == 1 && n <= 1.0 {
+                    sum >= 1.0
+                } else {
+                    sum >= n
+                }
+            }
+            // exactly one class keeps (or does not keep) a spellbook
+            "SPELLBOOK" => {
+                let want = args
+                    .first()
+                    .is_some_and(|a| a.trim().to_ascii_uppercase().starts_with('Y'));
+                self.classes
+                    .iter()
+                    .filter(|(o, _)| {
+                        o.get("SPELLBOOK")
+                            .is_some_and(|v| v.to_ascii_uppercase().starts_with('Y'))
+                            == want
+                    })
+                    .count()
+                    == 1
+            }
+            // each class at most a level (a bare class: at most the count)
+            "CLASSLEVELMAX" => {
+                let n = args.first().map(|a| num(a)).unwrap_or(1.0);
+                let items: Vec<&String> = args.iter().skip(1).collect();
+                let at_most = |a: &str| {
+                    let (c, max) = match a.split_once('=') {
+                        Some((c, m)) if !c.eq_ignore_ascii_case("TYPE") => (c, num(m)),
+                        _ => (a, n),
+                    };
+                    let level = if let Some(t) =
+                        c.strip_prefix("TYPE=").or_else(|| c.strip_prefix("TYPE."))
+                    {
+                        self.classes
+                            .iter()
+                            .filter(|(o, _)| o.is_type(t))
+                            .map(|(_, l)| *l)
+                            .max()
+                            .unwrap_or(0)
+                    } else if c.eq_ignore_ascii_case("ANY") {
+                        self.classes.iter().map(|(_, l)| *l).max().unwrap_or(0)
+                    } else {
+                        self.class_level(c)
+                    };
+                    level as f64 <= max
+                };
+                let passed = items.iter().filter(|a| at_most(a.trim())).count() as f64;
+                if items.len() == 1 {
+                    passed >= 1.0
+                } else {
+                    passed >= n
+                }
+            }
+            // kits the character was given; `Name%` matches a prefix
+            "KIT" => self.count_items(args, |a| {
+                self.ch
+                    .pcg
+                    .lines_tagged("KIT")
+                    .filter_map(|l| l.head().map(|h| h.value_text()))
+                    .any(|k| match a.strip_suffix('%') {
+                        Some(pre) => k.to_lowercase().starts_with(&pre.to_lowercase()),
+                        None => k.eq_ignore_ascii_case(a),
+                    })
+            }),
+            "CAMPAIGN" => self
+                .ds
+                .campaigns
+                .eval(&format!("PRECAMPAIGN:{}", args.join(",")))
+                .unwrap_or(true),
             "VISION" => self.count_items(args, |a| {
                 let (t, _) = a.split_once('=').unwrap_or((a, ""));
                 self.sources.iter().any(|s| {
@@ -2453,14 +3431,10 @@ impl<'a> Calc<'a> {
                     .and_then(|d| d.get("ALIGN").map(str::to_string));
                 al.is_some_and(|a| args.iter().any(|x| x.trim().eq_ignore_ascii_case(&a)))
             }
-            "CHARACTERTYPE" => self.count_items(args, |a| {
-                let t = self
-                    .ch
-                    .pcg
-                    .value("CHARACTERTYPE")
-                    .unwrap_or_else(|| "PC".into());
-                a.eq_ignore_ascii_case(&t)
-            }),
+            "CHARACTERTYPE" => {
+                let t = self.character_type();
+                self.count_items(args, |a| a.eq_ignore_ascii_case(&t))
+            }
             "WEAPONPROF" | "PROFWITHARMOR" | "PROFWITHSHIELD" => {
                 if self.in_profs.get() {
                     return true;
@@ -2644,6 +3618,128 @@ impl<'a> Calc<'a> {
         out
     }
 
+    /// How many followers of a companion list (TYPE=list) the character
+    /// may have; None for any number.  The highest FOLLOWERS:list|n of
+    /// the active objects plus BONUS:FOLLOWERS|list; without FOLLOWERS,
+    /// the list's companion modifiers decide: one naming a variable
+    /// above zero allows any number, one naming a class the character
+    /// has allows its count, and otherwise none are allowed.
+    pub fn max_followers(&self, list: &str) -> Option<i64> {
+        let mut best: Option<i64> = None;
+        for s in &self.sources {
+            for t in s.tokens.iter().filter(|t| t.tag == "FOLLOWERS") {
+                let Some((l, f)) = t.value.split_once('|') else {
+                    continue;
+                };
+                if l.trim().eq_ignore_ascii_case(list) {
+                    let env = Ctx {
+                        calc: self,
+                        src: Some(s),
+                    };
+                    let v = eval_str(f, &env) as i64;
+                    best = Some(best.map_or(v, |b| b.max(v)));
+                }
+            }
+        }
+        if let Some(b) = best {
+            return Some(b + self.bonus.total("FOLLOWERS", list) as i64);
+        }
+        for m in self.ds.objects(FileKind::CompanionMod) {
+            if m.head_tag.as_deref() != Some("FOLLOWER") || !m.is_type(list) {
+                continue;
+            }
+            let Some((names, n)) = m.name.split_once('=') else {
+                continue;
+            };
+            let (classes, vars): (Vec<&str>, Vec<&str>) = names
+                .split(',')
+                .map(str::trim)
+                .partition(|x| self.ds.get(FileKind::Class, x).is_some());
+            if vars.iter().any(|v| self.var(v).unwrap_or(0.0) > 0.0) {
+                return None;
+            }
+            if classes.iter().any(|c| self.class_level(c) > 0) {
+                return Some(n.trim().parse().unwrap_or(0));
+            }
+        }
+        Some(0)
+    }
+
+    /// Languages granted by AUTO:LANG on active objects whose trailing
+    /// prerequisites pass: names, TYPE=t (every language of the type)
+    /// and %LIST (the object's choices).  A token starting with .CLEAR
+    /// drops what the object's earlier tokens (as from a .MOD) gave.
+    pub fn auto_languages(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let is_pre = |i: &str| {
+            Prereq::is_pre_tag(i.split(':').next().unwrap_or("")) || i.starts_with("!PRE")
+        };
+        for src in &self.sources {
+            // what this object grants, in order
+            let mut own: Vec<String> = Vec::new();
+            for t in src.tokens.iter().filter(|t| t.tag == "AUTO") {
+                let Some(rest) = t.value.strip_prefix("LANG|") else {
+                    continue;
+                };
+                let mut items: Vec<&str> = rest.split('|').collect();
+                if items.first() == Some(&".CLEAR") {
+                    own.clear();
+                    items.remove(0);
+                }
+                let ok = items
+                    .iter()
+                    .filter(|i| is_pre(i))
+                    .filter_map(|i| Prereq::parse(i).ok())
+                    .all(|p| self.passes(&p, Some(src)));
+                if !ok {
+                    continue;
+                }
+                for item in items.iter().filter(|i| !is_pre(i)) {
+                    if let Some(ty) = item
+                        .strip_prefix("TYPE=")
+                        .or_else(|| item.strip_prefix("TYPE."))
+                    {
+                        for o in self.ds.objects(FileKind::Language) {
+                            if ty.split('.').all(|x| o.is_type(x)) {
+                                own.push(o.key.clone());
+                            }
+                        }
+                    } else if *item == "%LIST" {
+                        own.extend(src.choices.iter().cloned());
+                    } else {
+                        own.push(item.to_string());
+                    }
+                }
+            }
+            for k in own {
+                if !k.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
+                    out.push(k);
+                }
+            }
+        }
+        out
+    }
+
+    /// The character's type: the saved one if the game mode lists it,
+    /// else the first type the game mode lists ("Default" if none).
+    pub fn character_type(&self) -> String {
+        let listed: Vec<String> = self
+            .gm
+            .and_then(|g| g.misc("CHARACTERTYPE"))
+            .map(|v| {
+                v.split('|')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let default = listed.first().cloned().unwrap_or_else(|| "Default".into());
+        match self.ch.pcg.value("CHARACTERTYPE") {
+            Some(t) if listed.iter().any(|x| x.eq_ignore_ascii_case(&t)) => t,
+            _ => default,
+        }
+    }
+
     /// The subclass chosen for a class, if any.
     pub fn subclass_of(&self, cls: &'a Object) -> Option<&'a Object> {
         let name = self
@@ -2708,7 +3804,7 @@ impl<'a> Calc<'a> {
             srcs.push(s);
         }
         // bonuses a follower's race grants its master
-        for f in self.ch.pcg.lines_tagged("FOLLOWER") {
+        for f in self.ch.loaded_followers() {
             let Some(race) = f.text("RACE") else { continue };
             for o in ds.objects(FileKind::CompanionMod) {
                 if o.head_tag.as_deref() == Some("MASTERBONUSRACE")
@@ -3019,6 +4115,18 @@ impl<'a> Calc<'a> {
     fn pass(&mut self) {
         self.unknown.borrow_mut().clear();
         self.gather();
+        // the character has every variable its objects define before any
+        // is worked out, so a formula naming one resolves it
+        self.defined = self
+            .sources
+            .iter()
+            .flat_map(|s| &s.tokens)
+            .filter(|t| t.tag == "DEFINE")
+            .map(|t| t.value.split_once('|').map_or(t.value.as_str(), |x| x.0))
+            .filter(|name| !(name.contains('.') && name.starts_with("LOCK")))
+            .map(upper)
+            .collect();
+        self.stat_limits = self.find_stat_limits();
         let mut table = BonusTable::new(
             &self
                 .gm
@@ -3026,7 +4134,6 @@ impl<'a> Calc<'a> {
                 .unwrap_or_default(),
         );
         let mut vars: HashMap<String, f64> = HashMap::new();
-        let mut defined = HashSet::new();
         for (si, s) in self.sources.iter().enumerate() {
             let env = Ctx {
                 calc: self,
@@ -3042,7 +4149,6 @@ impl<'a> Calc<'a> {
                         }
                         let u = upper(name);
                         let v = eval_str(f, &env);
-                        defined.insert(u.clone());
                         let e = vars.entry(u).or_insert(f64::NEG_INFINITY);
                         *e = e.max(v);
                     }
@@ -3053,10 +4159,7 @@ impl<'a> Calc<'a> {
                         if !b.prereqs().all(|p| self.passes(p, Some(s))) {
                             continue;
                         }
-                        let v = match b.expr() {
-                            Ok(e) => eval(&e, &env),
-                            Err(_) => continue,
-                        };
+                        let v = eval_str(&b.formula, &env);
                         let btype = b.opts.iter().find_map(|o| match o {
                             BonusOpt::Type(t) => Some(t.as_str()),
                             _ => None,
@@ -3124,12 +4227,16 @@ impl<'a> Calc<'a> {
             }
             let _ = si;
         }
-        // temporary bonuses the user switched on, aimed at the character
-        for line in self.ch.pcg.lines_tagged("TEMPBONUS") {
-            if line.text("TBTARGET").as_deref() != Some("PC") {
-                continue;
-            }
-            let name = line.head().map(|h| h.value_text()).unwrap_or_default();
+        // temporary bonuses applied and switched on, unless temporary
+        // modifiers are off; those aimed at an item count for the
+        // character too
+        let temps = if self.ch.use_temp_mods() {
+            self.ch.temp_bonuses()
+        } else {
+            Vec::new()
+        };
+        for tb in temps.iter().filter(|t| t.active && t.loads(self.ch)) {
+            let name = format!("{}={}", tb.kind, tb.key);
             let origin = Source {
                 origin: format!("TempBonus {}", name),
                 kind: "TempBonus".into(),
@@ -3141,15 +4248,14 @@ impl<'a> Calc<'a> {
                 calc: self,
                 src: None,
             };
-            for e in line.elems.iter().flatten().filter(|e| e.tag == "TBBONUS") {
-                let Ok(b) = Bonus::parse(&e.value_text()) else {
+            for text in &tb.bonuses {
+                let Ok(b) = Bonus::parse(text) else {
                     continue;
                 };
                 if !b.prereqs().all(|p| self.passes(p, None)) {
                     continue;
                 }
-                let Ok(x) = b.expr() else { continue };
-                let v = eval(&x, &env);
+                let v = eval_str(&b.formula, &env);
                 let btype = b.opts.iter().find_map(|o| match o {
                     BonusOpt::Type(t) => Some(t.as_str()),
                     _ => None,
@@ -3209,8 +4315,7 @@ impl<'a> Calc<'a> {
             if !b.prereqs().all(|p| self.passes(p, None)) {
                 continue;
             }
-            let Ok(e) = b.expr() else { continue };
-            let val = eval(&e, &env);
+            let val = eval_str(&b.formula, &env);
             let btype = b.opts.iter().find_map(|o| match o {
                 BonusOpt::Type(t) => Some(t.as_str()),
                 _ => None,
@@ -3221,14 +4326,19 @@ impl<'a> Calc<'a> {
         }
         self.bonus = table;
         self.vars = vars;
-        self.defined = defined;
     }
 
     /// Armor check penalty of equipped armor and shields (zero or less).
     pub fn armor_check(&self) -> i64 {
+        self.armor_check_where(|_| true)
+    }
+
+    /// Armor check penalty of the equipped armor and shields that pass
+    /// `keep`.
+    fn armor_check_where(&self, keep: impl Fn(&Item) -> bool) -> i64 {
         let mut total = 0.0;
         for (i, it) in self.items.iter().enumerate() {
-            if !(it.obj.is_type("Armor") || it.obj.is_type("Shield")) {
+            if !(it.obj.is_type("Armor") || it.obj.is_type("Shield")) || !keep(it) {
                 continue;
             }
             let base: f64 = it
@@ -3263,15 +4373,111 @@ impl<'a> Calc<'a> {
         } else if sk.get("EXCLUSIVE") != Some("YES") {
             b += self.bonus.total("CCSKILL", &sk.key);
         }
-        let ac = self.armor_check() as f64;
-        b += match sk.get("ACHECK").map(upper).as_deref() {
-            Some("YES") => ac,
-            Some("DOUBLE") => 2.0 * ac,
-            // one point per five pounds carried
-            Some("WEIGHT") => -(self.carried_weight() / 5.0).floor(),
-            _ => 0.0,
-        };
+        b += self.skill_check_penalty(sk.get("ACHECK"));
         (self.skill_ranks(&sk.key) + b).floor() as i64
+    }
+
+    /// Armor check penalty on a skill with the given ACHECK: the worse
+    /// of the load's penalty and the armor's (adjusted by MISC|ACCHECK
+    /// bonuses), doubled for DOUBLE.  For WEIGHT the weight carried
+    /// stands in for the armor (a point per five pounds); NONPROF
+    /// counts only armor the character is not proficient with and
+    /// ignores load.  Without the game mode's weight penalty rule only
+    /// the bonuses count.
+    pub fn skill_check_penalty(&self, acheck: Option<&str>) -> f64 {
+        let kind = acheck.map(upper).unwrap_or_default();
+        if !matches!(kind.as_str(), "YES" | "DOUBLE" | "WEIGHT" | "NONPROF") {
+            return 0.0;
+        }
+        let (mut load, mut armor) = (0.0, 0.0);
+        if self.rule("SYS_WTPSK") {
+            if kind != "NONPROF" {
+                load = self.load_check_penalty();
+            }
+            armor = match kind.as_str() {
+                "WEIGHT" => -(self.carried_weight() / 5.0).trunc(),
+                "NONPROF" => self.armor_check_where(|it| {
+                    let shield = it.obj.is_type("Shield") && !it.obj.is_type("Armor");
+                    let prof = it
+                        .obj
+                        .get("PROFICIENCY")
+                        .and_then(|v| v.split_once('|'))
+                        .map(|(_, n)| n.to_string())
+                        .unwrap_or_else(|| it.obj.name.clone());
+                    let types: Vec<String> = it.obj.types().iter().map(|t| t.to_string()).collect();
+                    !crate::rules::profs::armor_proficient(self, shield, &prof, &types)
+                }) as f64,
+                _ => self.armor_check() as f64,
+            };
+        }
+        let mult = if kind == "DOUBLE" { 2.0 } else { 1.0 };
+        mult * f64::min(load, armor + self.bonus.total("MISC", "ACCHECK").trunc())
+    }
+
+    /// Check penalty of the character's load, from the game mode's
+    /// ENCUMBRANCE rows, when load penalties apply to skills.
+    fn load_check_penalty(&self) -> f64 {
+        let Some(g) = self.gm else { return 0.0 };
+        if !self.rule("SYS_LDPACSK") {
+            return 0.0;
+        }
+        let name = match self.encumbrance() {
+            0 => "Light",
+            1 => "Medium",
+            _ => "Heavy",
+        };
+        g.lines("load.lst", "ENCUMBRANCE")
+            .find(|l| {
+                l.value
+                    .split('|')
+                    .next()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })
+            .and_then(|l| {
+                l.value
+                    .split('|')
+                    .nth(3)
+                    .and_then(|v| v.trim().parse().ok())
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// What a skill's total holds beyond its ranks and key stat
+    /// modifier: bonuses, armor check penalty and the like.
+    pub fn skill_misc(&self, skill: &str) -> i64 {
+        let stat = self
+            .ds
+            .get(FileKind::Skill, skill)
+            .and_then(|sk| sk.get("KEYSTAT"))
+            .map(|k| self.stat_mod(k) as i64)
+            .unwrap_or(0);
+        self.skill_total(skill) - self.skill_ranks(skill) as i64 - stat
+    }
+
+    /// The situations a skill declares (SITUATION) that have a
+    /// `SITUATION|skill=situation` bonus other than zero, in name
+    /// order, with that bonus.
+    pub fn skill_situations(&self, sk: &Object) -> Vec<(String, i64)> {
+        let mut declared: Vec<&str> = Vec::new();
+        for v in sk.values("SITUATION") {
+            for (i, s) in v.split('|').enumerate() {
+                if s == ".CLEARALL" {
+                    if i == 0 {
+                        declared.clear();
+                    }
+                } else if !s.is_empty() && !declared.contains(&s) {
+                    declared.push(s);
+                }
+            }
+        }
+        declared.sort_unstable();
+        declared
+            .into_iter()
+            .filter_map(|s| {
+                let b = self.bonus.total("SITUATION", &format!("{}={}", sk.key, s));
+                (b.abs() > 0.01).then(|| (s.to_string(), b as i64))
+            })
+            .collect()
     }
 
     /// Armor class of a game-mode AC type (Total, Flatfooted, ...).
@@ -3316,7 +4522,7 @@ impl<'a> Calc<'a> {
         total as i64
     }
 
-    fn hit_points(&self) -> i64 {
+    pub fn hit_points(&self) -> i64 {
         // CON-style bonus: BONUS:HP|BONUS from stats only
         let mut con = 0.0;
         for s in self.sources.iter().filter(|s| s.kind == SrcKind::Stat) {
@@ -3333,9 +4539,7 @@ impl<'a> Calc<'a> {
                         && b.targets.iter().any(|x| x.eq_ignore_ascii_case("BONUS"))
                         && b.prereqs().all(|p| self.passes(p, Some(s)))
                     {
-                        if let Ok(e) = b.expr() {
-                            con += eval(&e, &env).trunc();
-                        }
+                        con += eval_str(&b.formula, &env).trunc();
                     }
                 }
             }
@@ -3384,15 +4588,31 @@ impl<'a> Calc<'a> {
     /// Run the calculation.
     pub fn run(&mut self) -> Sheet {
         let mut passes = 0;
+        let mut converged = false;
         let mut last: Option<Snapshot> = None;
         while passes < MAX_PASSES {
             passes += 1;
             self.pass();
+            self.snapshot_spells();
             let mut vs: Vec<(String, f64)> =
                 self.vars.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            // spells feed prerequisites of the next pass
+            vs.extend(
+                self.spell_entries
+                    .iter()
+                    .map(|(sp, l)| (format!("spell {} {}", sp.key, l), 1.0)),
+            );
+            vs.push(("spell extras".into(), self.spell_extras.len() as f64));
             vs.sort_by(|a, b| a.0.cmp(&b.0));
-            let snap = (self.bonus.snapshot(), vs);
+            // which objects are active, as well as what they add up to
+            let active: Vec<String> = self
+                .sources
+                .iter()
+                .map(|s| format!("{:?} {} {:?} {}", s.kind, s.obj.key, s.choices, s.times))
+                .collect();
+            let snap = (self.bonus.snapshot(), vs, active);
             if last.as_ref() == Some(&snap) {
+                converged = true;
                 break;
             }
             last = Some(snap);
@@ -3401,6 +4621,7 @@ impl<'a> Calc<'a> {
         let mut sheet = Sheet {
             level: self.total_level(),
             passes,
+            converged,
             ..Default::default()
         };
         for abb in self.stat_base.keys() {
@@ -3570,6 +4791,8 @@ fn si_item(s: &Src<'_>) -> usize {
 struct ExtraEnv<'c, 'a> {
     calc: &'c Calc<'a>,
     extra: &'c dyn Fn(&str) -> Option<f64>,
+    /// an item's formula, where PCGen's item terms resolve
+    item: bool,
 }
 
 impl Env for ExtraEnv<'_, '_> {
@@ -3582,6 +4805,152 @@ impl Env for ExtraEnv<'_, '_> {
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         self.calc.call(name, args, None)
     }
+
+    fn resolves(&self, name: &str) -> bool {
+        (self.item && ITEM_TERMS.contains(&name))
+            || self.var(name).is_some()
+            || self.calc.resolves(name, None)
+    }
+}
+
+/// PCGen's built-in terms for an item's formulas.
+const ITEM_TERMS: &[&str] = &[
+    "ALTPLUSTOTAL",
+    "BASECOST",
+    "CRITMULT",
+    "DMGDICE",
+    "DMGDIE",
+    "EQACCHECK",
+    "EQHANDS",
+    "EQSPELLFAIL",
+    "EQUIP.SIZE",
+    "EQUIP.SIZE.INT",
+    "HEADPLUSTOTAL",
+    "PLUSTOTAL",
+    "RACEREACH",
+    "RANGE",
+    "REACH",
+    "REACHMULT",
+    "SIZE",
+    "WT",
+];
+
+/// PCGen's built-in terms naming one fixed value.
+const WHOLE_TERMS: &[&str] = &[
+    "ACCHECK",
+    "ACHECK",
+    "ARMORACCHECK",
+    "ARMORACHECK",
+    "ATWILL",
+    "BAB",
+    "BASECR",
+    "BASEHD",
+    "BASESPELLSTAT",
+    "BONUSLANG",
+    "CASTERLEVEL",
+    "CASTERLEVEL.TOTAL",
+    "ENCUMBERANCE",
+    "FAVCLASSLEVEL",
+    "HANDS",
+    "HD",
+    "HP",
+    "LEGS",
+    "MAXCASTABLE",
+    "MAXLEVEL",
+    "MOVEBASE",
+    "PROFACCHECK",
+    "RACESIZE",
+    "RACIALHDSIZE",
+    "SCORE",
+    "SHIELDACCHECK",
+    "SHIELDACHECK",
+    "SIZE",
+    "SIZEMOD",
+    "SPELLBASESTAT",
+    "SPELLBASESTATSCORE",
+    "SPELLLEVEL",
+    "TL",
+];
+
+/// Starts of PCGen's built-in terms that take the rest of the name as
+/// an argument (a class, a skill, an item type, ...).
+const TERM_PREFIXES: &[&str] = &[
+    "BL",
+    "CL",
+    "COUNT[",
+    "EQTYPE",
+    "HASDEITY:",
+    "HASFEAT:",
+    "MODEQUIP",
+    "MOVE[",
+    "PC.HEIGHT",
+    "PC.SIZE",
+    "PC.WEIGHT",
+    "SKILLRANK.",
+    "SKILLRANK=",
+    "SKILLTOTAL.",
+    "SKILLTOTAL=",
+    "VARDEFINED:",
+    "WEIGHT.",
+];
+
+/// PCGen output tokens with a numeric value, which PCGen also reads as
+/// variables (the name up to its first `.` or `,`).
+const NUMERIC_OUTPUT_TOKENS: &[&str] = &[
+    "AC",
+    "ACCHECK",
+    "ALTHP",
+    "ATTACK",
+    "CASTERLEVEL",
+    "CHECK",
+    "CR",
+    "ECL",
+    "EXP",
+    "FEATPOINTS",
+    "GOLD",
+    "HP",
+    "INITIATIVEBONUS",
+    "INITIATIVEMISC",
+    "INITIATIVEMOD",
+    "MAXCCSKILLLEVEL",
+    "MAXDEX",
+    "MAXSKILLLEVEL",
+    "MAXSPELLLEVEL",
+    "SIZEMOD",
+    "SKILL",
+    "SKILLPOINTS",
+    "SPELLFAILURE",
+    "SR",
+    "STAT",
+    "TOTALLEVELS",
+    "VAR",
+];
+
+/// Is `name` one of PCGen's built-in terms?  Names are matched as
+/// written (PCGen's terms are upper case); `is_stat` tells a stat's
+/// abbreviation.  Like PCGen, the first term the name starts with
+/// decides: one naming a fixed value must be the whole name.
+fn pcgen_term(name: &str, is_stat: impl Fn(&str) -> bool) -> bool {
+    if WHOLE_TERMS.contains(&name) {
+        return true;
+    }
+    // a longer name starting with a fixed-value term is no term
+    if WHOLE_TERMS
+        .iter()
+        .any(|t| name.starts_with(t) && !TERM_PREFIXES.iter().any(|p| name.starts_with(p)))
+    {
+        return false;
+    }
+    if TERM_PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return true;
+    }
+    // a stat: STR, STR.BASE, STRSCORE, STRSCORE.BASE
+    (1..=name.len())
+        .filter(|&i| name.is_char_boundary(i))
+        .any(|i| {
+            let (abb, rest) = name.split_at(i);
+            is_stat(abb) && (rest.is_empty() || rest == ".BASE" || rest.starts_with("SCORE"))
+        })
 }
 
 /// Evaluation context: the calculator plus the source being evaluated.
@@ -3603,6 +4972,10 @@ impl Env for Ctx<'_, '_> {
 
     fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
         self.calc.call(name, args, self.src)
+    }
+
+    fn resolves(&self, name: &str) -> bool {
+        name == "%LIST" || name == "%CHOICE" || self.calc.resolves(name, self.src)
     }
 
     fn unknown(&self, name: &str) {
@@ -3629,6 +5002,14 @@ impl Env for LevelEnv<'_, '_> {
             self.calc.var_value(name, None)
         }
     }
+
+    fn call(&self, name: &str, args: &[Expr]) -> Option<f64> {
+        self.calc.call(name, args, None)
+    }
+
+    fn resolves(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("LEVEL") || self.calc.resolves(name, None)
+    }
 }
 
 /// Context for a stat's STATMOD formula, where SCORE is that stat.
@@ -3645,6 +5026,10 @@ impl Env for ScoreEnv<'_, '_> {
             self.calc.var_value(name, None)
         }
     }
+
+    fn resolves(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case("SCORE") || self.calc.resolves(name, None)
+    }
 }
 
 /// The level a level line names ("3" or "3:REPEATLEVEL:..."), 0 if none.
@@ -3653,6 +5038,16 @@ fn level_number(v: &str) -> u32 {
         .next()
         .and_then(|x| x.trim().parse().ok())
         .unwrap_or(0)
+}
+
+/// A comparison operator from a prerequisite kind's suffix (none
+/// meaning at least).
+fn op_of(suffix: &str) -> &str {
+    if suffix.is_empty() {
+        "GTEQ"
+    } else {
+        suffix
+    }
 }
 
 #[cfg(test)]

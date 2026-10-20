@@ -12,6 +12,7 @@ use super::skills::name_order;
 use super::units::{float_text, pattern, trim_zeros, Units};
 use super::{Element, SheetCtx};
 use crate::lst::kind::FileKind;
+use crate::pcg::character::{is_set_root, DEFAULT_SET_NAME};
 use crate::rules::equip::{natural_weapons, EqItem};
 use crate::token::pre::Prereq;
 
@@ -33,6 +34,9 @@ pub fn weight_allowance(s: &SheetCtx) -> Element {
     e
 }
 
+/// Where a copy of an unworn item carrying temporary bonuses is.
+pub(super) const TEMP_BONUS_PLACE: &str = "Temp Bonus";
+
 /// An item placed in the character's equipment set.
 pub(super) struct Placed<'a> {
     pub item: EqItem<'a>,
@@ -48,6 +52,12 @@ pub(super) struct Placed<'a> {
 /// Master items (one per saved item) and the items placed in the
 /// calculation equipment set, in set order.
 pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
+    placed_in(s, &s.ch.calc_equip_set(), s.ch.use_temp_mods())
+}
+
+/// Master items and the items placed in an equipment set, with copies
+/// of those carrying temporary bonuses if `temp`.
+fn placed_in<'a>(s: &SheetCtx<'a>, set: &str, temp: bool) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>) {
     let c = &s.calc;
     let pcg = &s.ch.pcg;
     let natural = natural_weapons(c);
@@ -81,8 +91,7 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
             }
             acc
         });
-    let calc_set = pcg.value("CALCEQUIPSET").unwrap_or_else(|| "0.1".into());
-    let prefix = format!("{}.", calc_set);
+    let prefix = format!("{}.", set);
     let mut sets: Vec<(String, String, Option<String>, f64)> = pcg
         .lines_tagged("EQUIPSET")
         .filter_map(|l| {
@@ -158,29 +167,14 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
         });
     }
     // copies of items carrying temporary bonuses
-    if pcg
-        .value("USETEMPMODS")
-        .is_none_or(|v| v.eq_ignore_ascii_case("Y"))
-    {
-        for l in pcg.lines_tagged("TEMPBONUS") {
-            let Some(target) = l.text("TBTARGET") else {
-                continue;
-            };
-            if target.eq_ignore_ascii_case("PC") {
+    // (kept when switched off: only the character loses their bonuses)
+    if temp {
+        for tb in s.ch.temp_bonuses() {
+            if tb.on_pc() || !tb.loads(s.ch) {
                 continue;
             }
-            let source = l.head().map(|h| h.value_text()).unwrap_or_default();
-            let source = source
-                .split_once('=')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or(source);
-            let bonuses: Vec<String> = l
-                .elems
-                .iter()
-                .flatten()
-                .filter(|e| e.tag == "TBBONUS")
-                .map(|e| e.value_text())
-                .collect();
+            let (source, bonuses, target) = (tb.key, tb.bonuses, tb.target);
+            // the first item of that name, which may be an earlier copy
             let Some(i) = out
                 .iter()
                 .position(|p| p.item.long_name().eq_ignore_ascii_case(&target))
@@ -188,16 +182,36 @@ pub(super) fn placed<'a>(s: &SheetCtx<'a>) -> (Vec<EqItem<'a>>, Vec<Placed<'a>>)
                 continue;
             };
             let p = &out[i];
-            let copy = Placed {
-                item: p.item.temporary_copy(&source, bonuses),
-                id: format!("{}.temp", p.id),
-                root: p.root.clone(),
-                parent: p.parent,
-                equipped: p.equipped,
-                carried: p.carried,
-                qty: p.qty,
-            };
-            out.push(copy);
+            let id = format!("{}.temp", p.id);
+            if !p.equipped {
+                // listed apart, outside any container, worth nothing
+                out.push(Placed {
+                    item: p.item.temporary_copy(&source, bonuses),
+                    id,
+                    root: TEMP_BONUS_PLACE.into(),
+                    parent: None,
+                    equipped: false,
+                    carried: p.carried,
+                    qty: p.qty,
+                });
+            } else if p.item.is_type(c, "WEAPON") {
+                // a weapon is listed twice, the copy worth nothing
+                out.push(Placed {
+                    item: p.item.temporary_copy(&source, bonuses),
+                    id,
+                    root: p.root.clone(),
+                    parent: p.parent,
+                    equipped: true,
+                    carried: p.carried,
+                    qty: p.qty,
+                });
+            } else {
+                // anything else worn is replaced by its copy
+                let mut item = p.item.clone();
+                item.temporary = Some((source, bonuses));
+                out[i].item = item;
+                out[i].id = id;
+            }
         }
     }
     (master, out)
@@ -458,22 +472,42 @@ pub fn equipment(s: &SheetCtx) -> Element {
             .with(Element::leaf("load", load))
             .with(Element::leaf("capacity", pattern(max, "#.##"))),
     );
+    // every set in turn, each with its own items and temporary-bonus
+    // setting (bonuses stay those of the set used)
     let mut sets = Element::new("equipmentsets");
-    let calc_set =
-        s.ch.pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
-    let set_name =
+    let roots: Vec<(String, String, bool)> =
         s.ch.pcg
             .lines_tagged("EQUIPSET")
-            .find(|l| l.text("ID").as_deref() == Some(calc_set.as_str()))
-            .and_then(|l| l.head().map(|h| h.value_text()))
-            .unwrap_or_default();
-    let mut set = Element::new("equipmentset").attr("name", set_name);
-    for (i, qty) in merged(&items) {
-        set.push(item_element(s, &items, i, false, qty));
+            .filter_map(|l| {
+                let id = l.text("ID")?;
+                is_set_root(&id).then(|| {
+                    (
+                        id,
+                        l.head().map(|h| h.value_text()).unwrap_or_default(),
+                        // a set lists copies carrying temporary bonuses
+                        // only when marked to use them
+                        l.text("USETEMPMODS")
+                            .is_some_and(|v| v.trim_end().ends_with('Y')),
+                    )
+                })
+            })
+            .collect();
+    if roots.is_empty() {
+        // a character without equipment sets gets a default one
+        let mut set = Element::new("equipmentset").attr("name", DEFAULT_SET_NAME);
+        for (i, qty) in merged(&items) {
+            set.push(item_element(s, &items, i, false, qty));
+        }
+        sets.push(set);
     }
-    sets.push(set);
+    for (id, name, temp) in roots {
+        let (_, items) = placed_in(s, &id, temp);
+        let mut set = Element::new("equipmentset").attr("name", name);
+        for (i, qty) in merged(&items) {
+            set.push(item_element(s, &items, i, false, qty));
+        }
+        sets.push(set);
+    }
     out.push(sets);
     out
 }
@@ -507,7 +541,12 @@ pub fn protection(s: &SheetCtx) -> Element {
             let mut e = Element::new(tag);
             e.add(
                 "name",
-                format!("{}{}", if p.equipped { "*" } else { "" }, it.output_name()),
+                format!(
+                    "{}{}{}",
+                    if p.equipped { "*" } else { "" },
+                    it.output_name(),
+                    it.applied_name()
+                ),
             );
             let ac = it.bonus(c, "COMBAT", "AC", true) as i64;
             e.add("acbonus", signed(ac));

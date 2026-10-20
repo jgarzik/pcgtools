@@ -10,12 +10,13 @@
 // SPDX-License-Identifier: MIT
 
 use super::units::Units;
-use super::{describe, output_name, source_text, Element, SheetCtx};
+use super::{describe, output_name, signed, source_text, Element, SheetCtx};
 use crate::dataset::Object;
 use crate::rules::calc::Calc;
 use crate::rules::spells::{
-    cast_per_day, caster_level, is_specialty, known_at, owner_class, save_dc, spell_type, Caster,
-    CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
+    cast_per_day, caster_level, class_concentration, concentration, default_spell_range,
+    is_specialty, known_at, metamagic_range, metamagic_suffix, owner_class, save_dc, spell_type,
+    Caster, CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
 };
 
 /// Evaluate parenthesized parts of spell text: `(CASTERLEVEL)` becomes
@@ -126,7 +127,8 @@ impl Ctx<'_, '_> {
                 }
             }
         }
-        for d in self.s.ch.domains() {
+        // only domains a class granted add their spell levels
+        for d in self.s.ch.class_domains() {
             for l in self.sp.levels_on('D', &d, spell) {
                 out.push(format!("{}{}", d, l));
             }
@@ -140,7 +142,7 @@ impl Ctx<'_, '_> {
         let c = self.calc();
         let sp = cs.spell;
         let cl = caster_level(c, &self.sp, cs);
-        let name = output_name(sp);
+        let name = output_name(sp) + &metamagic_suffix(c, info);
         let mut e = Element::new("spell");
         e.add("name", &name);
         e.add("outputname", &name);
@@ -153,17 +155,20 @@ impl Ctx<'_, '_> {
             },
         );
         let range = joined(sp, "RANGE");
-        let range_formula = c.gm.and_then(|g| {
-            g.lines("miscinfo.lst", "SPELLRANGE").find_map(|l| {
-                let (k, f) = l.value.split_once('|')?;
-                k.eq_ignore_ascii_case(range.trim()).then(|| f.to_string())
+        let range_formula =
+            c.gm.and_then(|g| {
+                g.lines("miscinfo.lst", "SPELLRANGE").find_map(|l| {
+                    let (k, f) = l.value.split_once('|')?;
+                    k.eq_ignore_ascii_case(range.trim()).then(|| f.to_string())
+                })
             })
-        });
+            .or_else(|| default_spell_range(&range).map(str::to_string));
         let range_text = match range_formula {
             Some(f) => {
                 let feet = c.eval_with(&f, &|n| {
                     n.eq_ignore_ascii_case("CASTERLEVEL").then_some(cl as f64)
                 }) as i64;
+                let feet = metamagic_range(c, &info.feats, feet);
                 format!("{} ({})", range, self.units.distance(feet as f64))
             }
             None => spell_text(&range, &|f| self.eval_spell(f, cl)),
@@ -172,6 +177,14 @@ impl Ctx<'_, '_> {
         e.add("components", joined(sp, "COMPS"));
         e.add("castingtime", joined(sp, "CASTTIME"));
         e.add("casterlevel", cl);
+        if self.s.full {
+            e.add(
+                "concentration",
+                concentration(c, &self.sp, cs, info)
+                    .map(signed)
+                    .unwrap_or_default(),
+            );
+        }
         let save = joined(sp, "SAVEINFO");
         let dc = if save.is_empty() || save == "None" || save == "No" {
             String::new()
@@ -327,6 +340,14 @@ pub fn build(s: &SheetCtx) -> Element {
             .attr("number", ci)
             .attr("spelllistclass", cx.class_name(ci))
             .attr("spellcastertype", spell_type(cls).unwrap_or(""));
+        if s.full {
+            ce = ce.attr(
+                "concentration",
+                class_concentration(c, &cx.sp, cls)
+                    .map(signed)
+                    .unwrap_or_default(),
+            );
+        }
         let domains_here = s.ch.pcg.lines_tagged("DOMAIN").any(|l| {
             l.get("SOURCE")
                 .and_then(|e| e.children().iter().find(|x| x.tag == "NAME"))
@@ -343,7 +364,7 @@ pub fn build(s: &SheetCtx) -> Element {
                 );
                 continue;
             }
-            let granted = 0;
+            let granted = cx.sp.granted_known_count(&cls.key, lvl);
             let kn = known_at(c, cls, lvl, granted);
             let cast = cast_per_day(c, cls, lvl, false);
             let mut bonus = String::new();
@@ -402,6 +423,12 @@ pub fn build(s: &SheetCtx) -> Element {
         mem.push(cim);
     }
     for (b, name) in books.iter().enumerate().skip(2) {
+        // with a casting race, PCGen's sheet leaves out the book whose
+        // number is the position of a caster with known spells (it
+        // means to ask whether the race has spells in the book)
+        if race && b < cx.sp.casters.len() && !cx.sp.spells_in(b, KNOWN_BOOK, None).is_empty() {
+            continue;
+        }
         let mut bk = Element::new("spellbook")
             .attr("number", b)
             .attr("name", name);

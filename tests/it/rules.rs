@@ -47,6 +47,32 @@ fn fixture_character_sheet() {
 }
 
 #[test]
+fn formula_naming_an_undefined_variable_reads_left_to_right() {
+    let path = common::fixture("mini/characters/tess.pcg");
+    let mut s = pcgtools::repl::Session::open(&path, dirs()).unwrap();
+    assert_eq!(s.sheet().skills["Tinkering"], 6);
+    // TL+2*3 with TL 2: operator precedence holds
+    s.exec("feat add \"Even Knack\" --force").unwrap();
+    assert_eq!(s.sheet().skills["Tinkering"], 14);
+    // NoSuchVar+TL+2*3: PCGen's fallback works ((0+2)+2)*3
+    s.exec("feat add \"Odd Knack\" --force").unwrap();
+    let sheet = s.sheet();
+    assert_eq!(sheet.skills["Tinkering"], 26);
+    assert_eq!(sheet.unknown.get("NoSuchVar"), Some(&1));
+}
+
+#[test]
+fn check_penalty_bonus_offsets_armor_on_skills() {
+    let path = common::fixture("mini/characters/tess.pcg");
+    let mut s = pcgtools::repl::Session::open(&path, dirs()).unwrap();
+    // MGT 2, shield -1
+    assert_eq!(s.sheet().skills["Climbing"], 1);
+    s.exec("feat add \"Armor Ease\"").unwrap();
+    // the +1 to the check penalty cancels the shield's
+    assert_eq!(s.sheet().skills["Climbing"], 2);
+}
+
+#[test]
 fn edits_change_the_sheet() {
     let mut ch = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
     ch.set_stat("GRC", 16);
@@ -59,4 +85,368 @@ fn edits_change_the_sheet() {
     assert_eq!(s.hp, 14 + 5 + 2);
     assert_eq!(s.ac["Total"], 13);
     assert_eq!(s.skills["Climbing"], 2);
+}
+
+#[test]
+fn character_type_defaults_to_game_modes_first() {
+    use pcgtools::token::pre::Prereq;
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // no CHARACTERTYPE line: the first type the game mode lists
+    let mut ch = Character::read(&common::fixture("mini/characters/vera.pcg")).unwrap();
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Hero"));
+    assert!(!check(&ch, "PRECHARACTERTYPE:1,PC"));
+    ch.set_field("CHARACTERTYPE", "Villain");
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Villain"));
+    // a type the game mode does not list falls back to the default
+    ch.set_field("CHARACTERTYPE", "Bystander");
+    assert!(check(&ch, "PRECHARACTERTYPE:1,Hero"));
+}
+
+#[test]
+fn class_and_skill_type_prerequisites() {
+    use pcgtools::token::pre::Prereq;
+    let dirs = dirs();
+    let s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs.clone());
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs.clone());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // no classes at all: none of any type
+    assert!(!check(&s.ch, "PRECLASS:1,TYPE=Base"));
+    assert!(check(&s.ch, "!PRECLASS:1,TYPE=Base"));
+    assert!(check(
+        &s.ch,
+        "PREMULT:1,[PRECLASS:1,Tinker=1],[!PRECLASS:1,TYPE=Base]"
+    ));
+    // a Tinker has a class of its type
+    let tess = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
+    assert!(check(&tess, "PRECLASS:1,TYPE=Base"));
+    assert!(!check(&tess, "!PRECLASS:1,TYPE=Base"));
+    assert!(check(&tess, "PRECLASS:1,TYPE=Base=2"));
+    assert!(!check(&tess, "PRECLASS:1,TYPE=Base=3"));
+    // skills by type, with and without ranks (Tess has 2 in Tinkering)
+    assert!(check(&tess, "PRESKILL:1,TYPE=Craft=2"));
+    assert!(check(&tess, "PRESKILL:1,TYPE.Craft=2"));
+    assert!(!check(&tess, "PRESKILL:1,TYPE=Craft=3"));
+    assert!(!check(&s.ch, "PRESKILL:1,TYPE=Craft"));
+}
+
+#[test]
+fn move_prerequisites_without_any_movement() {
+    use pcgtools::token::pre::Prereq;
+    let dirs = dirs();
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs.clone());
+    let check = |ch: &Character, pre: &str| {
+        let ctx = Context::for_character(ch, dirs.clone());
+        let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), ch);
+        calc.run();
+        calc.passes(&Prereq::parse(pre).unwrap(), None)
+    };
+    // with no movement at all, every speed requirement is met
+    assert!(check(&s.ch, "PREMOVE:1,Climb=1"));
+    assert!(!check(&s.ch, "!PREMOVE:1,Climb=1"));
+    // once the race gives a speed, only the speeds it has count
+    s.exec("race Gearling").unwrap();
+    assert!(!check(&s.ch, "PREMOVE:1,Climb=1"));
+    assert!(check(&s.ch, "PREMOVE:1,Walk=20"));
+    assert!(!check(&s.ch, "PREMOVE:1,Walk=30"));
+}
+
+#[test]
+fn carried_weight_without_saved_weights() {
+    // the editor saves items without a WT; their data weight counts
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("equip add \"Tin Shield\"").unwrap();
+    s.exec("equip wear \"Tin Shield\"").unwrap();
+    s.exec("equip add \"Wooden Spoon\" 3").unwrap();
+    s.exec("equip wear \"Wooden Spoon\" Carried").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let spoon: f64 = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Wooden Spoon")
+        .and_then(|o| o.get("WT"))
+        .and_then(|w| w.parse().ok())
+        .unwrap();
+    // wearing places one of the three spoons
+    assert_eq!(calc.carried_weight(), 5.0 + spoon);
+}
+
+#[test]
+fn spellcast_bonus_targets_written_with_equals() {
+    // data writes CLASS=x;LEVEL=n and TYPE=t;LEVEL=n for what PCGen
+    // reads as CLASS.x;LEVEL.n
+    let per_day = |class: &str, levels: usize, feat: bool| {
+        let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        for _ in 0..levels {
+            s.exec(&format!("class add {}", class)).unwrap();
+        }
+        if feat {
+            s.exec("feat add \"Spell Spring\" --force").unwrap();
+        }
+        let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        calc.run();
+        let cls = s
+            .ctx
+            .dataset
+            .get(pcgtools::lst::kind::FileKind::Class, class)
+            .unwrap();
+        (0..3)
+            .map(|l| pcgtools::rules::spells::cast_per_day(&calc, cls, l, false))
+            .collect::<Vec<_>>()
+    };
+    // a class without a table at a level gets only its class's bonus
+    assert_eq!(per_day("Tinker", 1, false)[1], 0);
+    assert_eq!(per_day("Tinker", 1, true)[1], 2);
+    // with a table: the spell type's bonus adds, and a multiplier
+    // multiplies the table's count only
+    assert_eq!(per_day("Chanter", 2, false), [2, 2, 1]);
+    assert_eq!(per_day("Chanter", 2, true), [2, 3, 2]);
+}
+
+/// Whether a new character, after editor commands, meets a
+/// prerequisite.
+fn meets(cmds: &[&str], pre: &str) -> bool {
+    use pcgtools::token::pre::Prereq;
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    for c in cmds {
+        s.exec(c).unwrap();
+    }
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    calc.passes(&Prereq::parse(pre).unwrap(), None)
+}
+
+#[test]
+fn spellcaster_kind_prerequisites() {
+    let tinker = ["class add Tinker"];
+    let chanter = ["class add Chanter"];
+    // PRESPELLCAST: spell type, or whether a class memorizes
+    // (default yes); several arguments are alternatives
+    assert!(meets(&tinker, "PRESPELLCAST:TYPE=Arcane"));
+    assert!(!meets(&tinker, "PRESPELLCAST:TYPE=Divine"));
+    assert!(meets(&tinker, "PRESPELLCAST:TYPE=Divine,MEMORIZE=Y"));
+    assert!(meets(&chanter, "PRESPELLCAST:MEMORIZE=N"));
+    assert!(!meets(&chanter, "PRESPELLCAST:MEMORIZE=Y"));
+    assert!(!meets(&[], "PRESPELLCAST:TYPE=Arcane"));
+    // PRESPELLBOOK: exactly one class keeps (or does not keep) a book
+    assert!(meets(&tinker, "PRESPELLBOOK:YES"));
+    assert!(!meets(&chanter, "PRESPELLBOOK:YES"));
+    assert!(meets(&chanter, "PRESPELLBOOK:NO"));
+    assert!(meets(
+        &["class add Tinker", "class add Chanter"],
+        "PRESPELLBOOK:NO"
+    ));
+}
+
+#[test]
+fn body_and_defense_prerequisites() {
+    let tall = ["set align LG", "race Tallfolk"];
+    // bare HANDS/LEGS compare at least
+    assert!(meets(&tall, "PREHANDS:4"));
+    assert!(!meets(&[], "PREHANDS:4"));
+    assert!(meets(&[], "PRELEGS:2"));
+    // reach: the race's (5 if it gives none), and its comparisons
+    assert!(meets(&tall, "PREREACH:10"));
+    assert!(meets(&tall, "PREREACHEQ:10"));
+    assert!(!meets(&["race Gearling"], "PREREACHGTEQ:10"));
+    assert!(meets(&["race Gearling"], "PREREACHEQ:5"));
+    // spell resistance
+    assert!(meets(&tall, "PRESRGTEQ:5"));
+    assert!(!meets(&tall, "PRESRGT:5"));
+    assert!(meets(&[], "PRESRLT:1"));
+    // hit points
+    assert!(meets(&["class add Tinker 6"], "PREHP:6"));
+    assert!(!meets(&["class add Tinker 6"], "PREHP:7"));
+}
+
+#[test]
+fn class_level_max_prerequisites() {
+    let two = ["class add Tinker", "class add Tinker"];
+    assert!(meets(&two, "PRECLASSLEVELMAX:1,Tinker=2"));
+    assert!(!meets(&two, "PRECLASSLEVELMAX:1,Tinker=1"));
+    // a class the character lacks is at level 0
+    assert!(meets(&two, "PRECLASSLEVELMAX:1,Chanter=1"));
+    assert!(meets(&two, "!PRECLASSLEVELMAX:1,Tinker=1"));
+    // with several items the negation has no effect (as in PCGen)
+    assert!(meets(&two, "!PRECLASSLEVELMAX:1,Tinker=1,Chanter=1"));
+}
+
+#[test]
+fn context_prerequisites() {
+    // a wield category can only be judged on an item; on a character
+    // it fails, negated or not
+    assert!(!meets(&[], "PREWIELD:1,Light"));
+    assert!(!meets(&[], "!PREWIELD:1,Light"));
+    // campaigns in use
+    assert!(meets(&[], "PRECAMPAIGN:1,TB"));
+    assert!(!meets(&[], "PRECAMPAIGN:1,OLD"));
+    assert!(meets(&[], "PRECAMPAIGN:1,BOOKTYPE=Core Rules"));
+    assert!(meets(&[], "!PRECAMPAIGN:1,OLD"));
+    // kits applied (recorded in the file); a trailing % is a prefix
+    assert!(!meets(&[], "PREKIT:1,Cook Kit"));
+    assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook Kit"));
+    assert!(meets(&["kit apply \"Cook Kit\""], "PREKIT:1,Cook%"));
+}
+
+#[test]
+fn spell_type_prerequisites() {
+    let tinker = ["class add Tinker"];
+    let tinker_slot = ["class add Tinker", "feat add \"Spell Spring\" --force"];
+    // a level of a spell type the character can cast (or knows)
+    assert!(!meets(&tinker, "PRESPELLTYPE:1,Arcane=1"));
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:1,Arcane=1"));
+    // the level is exact
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:1,Arcane=2"));
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:1,ANY=1"));
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:1,Divine=1"));
+    // the count is how many spells of that level: two slots
+    assert!(meets(&tinker_slot, "PRESPELLTYPE:2,Arcane=1"));
+    assert!(!meets(&tinker_slot, "PRESPELLTYPE:3,Arcane=1"));
+    // a class that neither memorizes nor has a known table, but can
+    // cast, counts as unlimited
+    assert!(meets(&["class add Chanter"], "PRESPELLTYPE:1,Divine=1"));
+    assert!(meets(&["class add Chanter"], "PRESPELLTYPE:5,Divine=4"));
+    assert!(!meets(&[], "PRESPELLTYPE:1,ANY=0"));
+}
+
+#[test]
+fn spell_level_grants_check_their_prerequisites() {
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("class add Tinker").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let sp = pcgtools::rules::spells::Spells::new(&calc);
+    let glow = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Spell, "Glow")
+        .unwrap();
+    // its own level, and only the grant whose prerequisite holds
+    let mut levels = sp.levels_on('C', "Tinker", glow);
+    levels.sort();
+    assert_eq!(levels, vec![1, 3]);
+}
+
+#[test]
+fn spell_list_prerequisites() {
+    // the Chanter is granted Spark and Glow as known level 0 spells
+    let chanter = ["class add Chanter"];
+    assert!(meets(&chanter, "PRESPELL:1,Spark"));
+    assert!(!meets(&[], "PRESPELL:1,Spark"));
+    // several names add up their entries
+    assert!(meets(&chanter, "PRESPELL:2,Spark,Glow"));
+    assert!(!meets(&chanter, "PRESPELL:3,Spark,Glow"));
+    // spells on a domain's list count, known or not
+    assert!(meets(
+        &["class add Tinker", "domain add Cogs"],
+        "PRESPELL:1,Spark"
+    ));
+    // by school, from a minimum level; the count is of spells
+    assert!(meets(&chanter, "PRESPELLSCHOOL:1,Evocation=0"));
+    assert!(meets(&chanter, "PRESPELLSCHOOL:2,Evocation=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOL:3,Evocation=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOL:1,Evocation=1"));
+    // subschool and descriptor names are compared exactly
+    assert!(meets(&chanter, "PRESPELLSCHOOLSUB:1,Lightning=0"));
+    assert!(!meets(&chanter, "PRESPELLSCHOOLSUB:1,lightning=0"));
+    assert!(meets(&chanter, "PRESPELLDESCRIPTOR:1,Fire=0"));
+    assert!(!meets(&chanter, "PRESPELLDESCRIPTOR:2,Fire=0"));
+    assert!(!meets(&chanter, "!PRESPELLDESCRIPTOR:1,Fire=0"));
+}
+
+#[test]
+fn damage_reduction_prerequisites() {
+    let tall = ["set align LG", "race Tallfolk"];
+    assert!(meets(&tall, "PREDR:1,Silver=5"));
+    assert!(!meets(&tall, "PREDR:1,Silver=6"));
+    // bypasses joined by "and" each get the value
+    assert!(meets(&tall, "PREDR:1,Cold Iron=2"));
+    assert!(meets(&tall, "PREDR:1,Cold Iron.2"));
+    // those joined by "or" stay whole
+    assert!(meets(&tall, "PREDR:1,Magic or Good=3"));
+    assert!(!meets(&tall, "PREDR:1,Magic=1"));
+    // the count is how many items must hold
+    assert!(meets(&tall, "PREDR:2,Silver=5,Cold Iron=1"));
+    assert!(!meets(&tall, "PREDR:2,Silver=5,-=1"));
+    // a value of 0 always holds
+    assert!(meets(&[], "PREDR:1,Piercing=0"));
+    assert!(!meets(&[], "!PREDR:1,Piercing=0"));
+    assert!(!meets(&[], "PREDR:1,-=1"));
+}
+
+#[test]
+fn monster_hit_dice_advance_size() {
+    let size_after = |levels: usize| {
+        let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        s.exec("race Cogbeast").unwrap();
+        for _ in 0..levels {
+            s.exec("class add Beastling --force").unwrap();
+        }
+        let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+        calc.run();
+        calc.size_key()
+    };
+    // a step past each threshold the hit dice exceed (2, then 4)
+    assert_eq!(size_after(2), "M");
+    assert_eq!(size_after(3), "L");
+    assert_eq!(size_after(4), "L");
+    assert_eq!(size_after(5), "H");
+}
+
+#[test]
+fn wield_categories_of_items_with_wield_ignore_size() {
+    // a small character with a medium item that says how it is wielded:
+    // size differences are only for items without WIELD
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("race Gearling").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    assert_eq!(calc.size_key(), "S");
+    let cog = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Throwing Cog")
+        .unwrap();
+    let item = pcgtools::rules::equip::EqItem::from_data(&calc, cog);
+    assert_eq!(item.size, "M");
+    assert_eq!(item.wield_category(&calc), "Light");
+}
+
+#[test]
+fn last_matching_wield_switch_wins() {
+    // two switches for Light items hold for a Cogbeast; the later wins
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("race Cogbeast").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    calc.run();
+    let cog = s
+        .ctx
+        .dataset
+        .get(pcgtools::lst::kind::FileKind::Equipment, "Throwing Cog")
+        .unwrap();
+    let item = pcgtools::rules::equip::EqItem::from_data(&calc, cog);
+    assert_eq!(item.wield_category(&calc), "OneHanded");
+}
+
+#[test]
+fn calculation_reports_whether_it_settled() {
+    let tess = Character::read(&common::fixture("mini/characters/tess.pcg")).unwrap();
+    let ctx = Context::for_character(&tess, dirs());
+    let mut calc = Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &tess);
+    assert!(calc.run().converged);
+    // a bonus that switches itself off and on never settles
+    let mut s = pcgtools::repl::Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    s.exec("feat add Flicker --force").unwrap();
+    let mut calc = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    let sheet = calc.run();
+    assert!(!sheet.converged, "settled after {} passes", sheet.passes);
 }

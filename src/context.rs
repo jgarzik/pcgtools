@@ -38,15 +38,10 @@ impl Context {
         let mut diags = Diagnostics::default();
         let gamemode = match (dirs.gamemodes(), c.gamemode()) {
             (Some(gmdir), Some(name)) => {
-                let mut modes = GameModes::scan(&gmdir);
-                diags.extend(std::mem::take(&mut modes.diags));
-                let idx = modes
-                    .modes
-                    .iter()
-                    .position(|m| m.key.eq_ignore_ascii_case(&name))
-                    .or_else(|| modes.modes.iter().position(|m| m.matches(&name)));
-                match idx {
-                    Some(i) => Some(modes.modes.swap_remove(i)),
+                let (found, d) = GameModes::load_named(&gmdir, &name);
+                diags.extend(d);
+                match found {
+                    Some(gm) => Some(gm),
                     None => {
                         diags.push(Diagnostic::warning(format!("unknown game mode '{}'", name)));
                         None
@@ -187,6 +182,15 @@ impl Context {
                 d.push(Diagnostic::warning(format!(
                     "equipment '{}' not found in data",
                     key
+                )));
+            }
+        }
+        // PCGen drops a follower whose file it cannot find
+        for (name, _, _, file) in c.followers() {
+            if !c.follower_file_found(&file) {
+                d.push(Diagnostic::warning(format!(
+                    "follower '{}': file '{}' not found; it is not loaded",
+                    name, file
                 )));
             }
         }

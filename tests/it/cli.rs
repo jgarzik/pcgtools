@@ -53,8 +53,8 @@ fn load_json_counts() {
     assert!(o.status.success(), "{}", stderr(&o));
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["campaigns"], 2);
-    assert_eq!(v["objects"]["SPELL"], 2);
-    assert_eq!(v["objects"]["CLASS"], 1);
+    assert_eq!(v["objects"]["SPELL"], 4);
+    assert_eq!(v["objects"]["CLASS"], 11);
     assert_eq!(v["tables"], 1);
     assert_eq!(v["errors"], 0);
 }
@@ -430,4 +430,90 @@ fn char_one_shot_writes_output() {
         "Quick Step",
     ]);
     assert_eq!(stdout(&o).trim(), "qualifies for QuickStep");
+}
+
+#[test]
+fn stats_warn_when_values_do_not_settle() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let out = scratch("flicker.pcg");
+    let script = format!("feat add Flicker --force\nsave \"{}\"\n", out.display());
+    let o = pcgtools_stdin(
+        &[
+            "--data-dir",
+            &data_dir(),
+            "--system-dir",
+            &sys,
+            "repl",
+            "--new",
+            "--gamemode",
+            "Testmode",
+            "--campaign",
+            "TB",
+        ],
+        &script,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let path = out.to_string_lossy().into_owned();
+    let o = pcgtools(&[
+        "--data-dir",
+        &data_dir(),
+        "--system-dir",
+        &sys,
+        "pcg",
+        "stats",
+        &path,
+    ]);
+    assert!(stderr(&o).contains("did not settle"), "{}", stderr(&o));
+}
+
+#[test]
+fn full_sheet_adds_situations_and_concentration() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let data = data_dir();
+    let out = scratch("full.pcg");
+    let script = format!(
+        "class add Sage\nfeat add \"Rope Climber\"\nspell add Sage Ember\nsave \"{}\"\n",
+        out.display()
+    );
+    let o = pcgtools_stdin(
+        &[
+            "--data-dir",
+            &data,
+            "--system-dir",
+            &sys,
+            "repl",
+            "--new",
+            "--gamemode",
+            "Testmode",
+            "--campaign",
+            "TB",
+        ],
+        &script,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let path = out.to_string_lossy().into_owned();
+    let sheet = |full: bool| {
+        let mut args = vec!["--data-dir", &data, "--system-dir", &sys, "pcg", "sheet"];
+        if full {
+            args.push("--full");
+        }
+        args.push(&path);
+        stdout(&pcgtools(&args))
+    };
+    let base = sheet(false);
+    assert!(base.contains("<name>Climbing</name>"), "{}", base);
+    assert!(!base.contains("Climbing (Ropes)"), "{}", base);
+    assert!(!base.contains("<concentration>"), "{}", base);
+    let full = sheet(true);
+    assert!(full.contains("<name>Climbing (Ropes)</name>"), "{}", full);
+    // caster level 1, MGT +0
+    assert!(
+        full.contains("<concentration>+1</concentration>"),
+        "{}",
+        full
+    );
 }

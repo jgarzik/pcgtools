@@ -144,6 +144,9 @@ pub struct LoadPlan {
     pub forward_refs: Vec<(String, String)>,
     /// each campaign's SOURCEDATE
     pub source_dates: BTreeMap<PathBuf, String>,
+    /// the campaigns in use, for PRECAMPAIGN on data objects
+    #[serde(skip)]
+    pub campaigns_in_use: PreCampaignContext,
     pub diags: Diagnostics,
 }
 
@@ -172,6 +175,7 @@ impl LoadPlan {
             .collect();
 
         let ctx = PreCampaignContext::new(reg, &plan.selected, &closures);
+        plan.campaigns_in_use = ctx.clone();
 
         let mut seen_campaigns = HashSet::new();
         let mut seen_entries = HashSet::new();
@@ -253,7 +257,8 @@ impl LoadPlan {
 }
 
 /// Evaluates PRECAMPAIGN against a campaign selection.
-struct PreCampaignContext {
+#[derive(Debug, Clone, Default)]
+pub struct PreCampaignContext {
     /// (key, booktypes) of selected campaigns only
     selected: Vec<(String, Vec<String>)>,
     /// (key, booktypes) of selected campaigns and their includes
@@ -274,7 +279,7 @@ impl PreCampaignContext {
 
     /// Evaluate a `[!]PRECAMPAIGN:n,item,...` prerequisite.  Returns
     /// None for other prerequisite kinds.
-    fn eval(&self, pre: &str) -> Option<bool> {
+    pub fn eval(&self, pre: &str) -> Option<bool> {
         let (neg, body) = match pre.strip_prefix('!') {
             Some(b) => (true, b),
             None => (false, pre),

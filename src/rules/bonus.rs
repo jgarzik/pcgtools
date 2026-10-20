@@ -126,7 +126,7 @@ impl BonusTable {
             value.trunc()
         };
         self.log.push(Contribution {
-            key: format!("{}.{}", cat, target.to_ascii_uppercase()),
+            key: BonusTable::key_of(&cat, target),
             btype: btype.unwrap_or("").to_string(),
             value,
             source: source.clone(),
@@ -134,11 +134,27 @@ impl BonusTable {
     }
 
     fn key_of(category: &str, target: &str) -> String {
-        format!(
-            "{}.{}",
-            category.to_ascii_uppercase(),
-            target.to_ascii_uppercase()
-        )
+        let cat = category.to_ascii_uppercase();
+        let mut target = target.to_ascii_uppercase();
+        // skill bonuses by type or key stat may be written `TYPE=x`
+        // or `TYPE.x`; both name the same target
+        if cat == "SKILL" && (target.starts_with("TYPE=") || target.starts_with("STAT=")) {
+            target = target.replace('=', ".");
+        }
+        // structured targets (CLASS=x;LEVEL=n, TYPE=t;LEVEL=n) of the
+        // spell and skill pool categories, and UDAM's CLASS=x, may use
+        // '=' or '.' alike
+        if matches!(
+            cat.as_str(),
+            "SPELLCAST" | "SPELLCASTMULT" | "SPELLKNOWN" | "SPELLKNOWNMULT" | "SKILLPOOL" | "UDAM"
+        ) {
+            target = target.replace('=', ".");
+        }
+        // concentration by spell type: `TYPE=x` is `TYPE.x`
+        if cat == "CONCENTRATION" && target.starts_with("TYPE=") {
+            target = target.replace('=', ".");
+        }
+        format!("{}.{}", cat, target)
     }
 
     /// Contributions to `category.target`: (type, value, origin).
@@ -247,7 +263,7 @@ impl BonusTable {
         } else {
             value.trunc()
         };
-        let key = format!("{}.{}", cat, target.to_ascii_uppercase());
+        let key = BonusTable::key_of(&cat, target);
         let t = btype.unwrap_or("").to_ascii_uppercase();
         let (t, mode) = if let Some(x) = t.strip_suffix(".STACK") {
             (x.to_string(), Mode::Stack)
@@ -293,15 +309,39 @@ impl BonusTable {
             category.to_ascii_uppercase(),
             target.to_ascii_uppercase()
         );
-        let types: Vec<String> = self
-            .entries
-            .keys()
-            .filter(|(k, _, _)| *k == key)
-            .map(|(_, t, _)| t.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        types.iter().map(|t| self.type_total(&key, t)).sum()
+        // the entries of a key are adjacent, ordered by type then mode
+        let start = (key, String::new(), Mode::Plain);
+        let mut sum = 0.0;
+        // (type, plain, replace, stack) of the type being summed
+        let mut cur: Option<(&str, Option<f64>, Option<f64>, f64)> = None;
+        let combine = |(_, plain, replace, stack): (&str, Option<f64>, Option<f64>, f64)| {
+            let base = match (plain, replace) {
+                (None, None) => 0.0,
+                (Some(p), None) => p,
+                (None, Some(r)) => r,
+                (Some(p), Some(r)) => p.max(r),
+            };
+            base + stack
+        };
+        for ((k, t, mode), acc) in self.entries.range(&start..) {
+            if *k != start.0 {
+                break;
+            }
+            if cur.is_some_and(|c| c.0 != t.as_str()) {
+                sum += combine(cur.take().unwrap());
+            }
+            let c = cur.get_or_insert((t.as_str(), None, None, 0.0));
+            let v = acc.value();
+            match mode {
+                Mode::Plain => c.1 = v,
+                Mode::Replace => c.2 = v,
+                Mode::Stack => c.3 = v.unwrap_or(0.0),
+            }
+        }
+        if let Some(c) = cur {
+            sum += combine(c);
+        }
+        sum
     }
 
     /// Bonuses of one type to `category.target` (`TYPE` matched
@@ -327,9 +367,15 @@ impl BonusTable {
         v
     }
 
-    /// Number of filed entries (for change detection).
-    pub fn snapshot(&self) -> Vec<f64> {
-        self.entries.values().filter_map(Acc::value).collect()
+    /// Every total with the name it is filed under (for change
+    /// detection between passes).
+    pub fn snapshot(&self) -> Vec<(String, f64)> {
+        self.entries
+            .iter()
+            .filter_map(|((key, btype, mode), a)| {
+                Some((format!("{} {} {:?}", key, btype, mode), a.value()?))
+            })
+            .collect()
     }
 }
 
@@ -373,6 +419,18 @@ mod tests {
         b.add("SKILL", "Ride", Some("Armor"), -2.0);
         b.add("SKILL", "Ride", Some("Armor"), -3.0);
         assert_eq!(b.total("SKILL", "Ride"), -5.0);
+    }
+
+    #[test]
+    fn skill_type_and_stat_targets_either_spelling() {
+        let mut b = t();
+        b.add("SKILL", "TYPE=Craft (Stone)", Some("Racial"), 2.0);
+        b.add("SKILL", "STAT=INT", None, 1.0);
+        assert_eq!(b.total("SKILL", "TYPE.Craft (Stone)"), 2.0);
+        assert_eq!(b.total("SKILL", "STAT.INT"), 1.0);
+        // other categories keep the target as written
+        b.add("COMBAT", "TYPE=X", None, 1.0);
+        assert_eq!(b.total("COMBAT", "TYPE.X"), 0.0);
     }
 
     #[test]
@@ -454,5 +512,24 @@ mod tests {
         assert_eq!(b.total("COMBAT", "ACCHECK"), -2.0);
         assert_eq!(b.total("COMBAT", "TOHIT"), 0.0);
         assert_eq!(b.targets("COMBAT"), vec!["AC", "ACCHECK"]);
+    }
+
+    #[test]
+    fn concentration_by_type_either_spelling() {
+        let mut b = t();
+        b.add("CONCENTRATION", "TYPE=Arcane", None, 1.0);
+        b.add("CONCENTRATION", "TYPE.Arcane", None, 2.0);
+        b.add("CONCENTRATION", "SPELL.Fly=Me", None, 4.0);
+        assert_eq!(b.total("CONCENTRATION", "TYPE.ARCANE"), 3.0);
+        // only a leading TYPE= names a type
+        assert_eq!(b.total("CONCENTRATION", "SPELL.Fly=Me"), 4.0);
+    }
+
+    #[test]
+    fn situations_keep_their_equals_sign() {
+        let mut b = t();
+        b.add("SITUATION", "Climb=On Ropes", None, 2.0);
+        assert_eq!(b.total("SITUATION", "climb=on ropes"), 2.0);
+        assert_eq!(b.total("SITUATION", "Climb.On Ropes"), 0.0);
     }
 }

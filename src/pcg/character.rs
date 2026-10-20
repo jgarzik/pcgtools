@@ -16,7 +16,7 @@
 use super::{Elem, PcgFile, PcgLine};
 use crate::error::Result;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The order PCGen writes sections in; new lines are inserted after
 /// the last existing line of the same or an earlier tag.
@@ -26,6 +26,8 @@ const ORDER: &[&str] = &[
     "VERSION",
     "ROLLMETHOD",
     "PURCHASEPOINTS",
+    "CHARACTERTYPE",
+    "PREVIEWSHEET",
     "POOLPOINTS",
     "POOLPOINTSAVAIL",
     "GAMEMODE",
@@ -81,6 +83,8 @@ const ORDER: &[&str] = &[
     "EQUIPNAME",
     "EQUIPSET",
     "CALCEQUIPSET",
+    "TEMPBONUS",
+    "EQSETBONUS",
     "DEITY",
     "DOMAIN",
     "SPELLBOOK",
@@ -92,6 +96,7 @@ const ORDER: &[&str] = &[
     "CHARACTERASSET",
     "CHARACTERMAGIC",
     "CHARACTERDMNOTES",
+    "KIT",
     "NOTE",
     "AGESET",
 ];
@@ -157,10 +162,97 @@ pub struct EquipSetEntry {
     pub quantity: Option<f64>,
 }
 
+/// A temporary bonus applied, as a TEMPBONUS line records it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TempBonus {
+    /// kind of object applying it: FEAT, SPELL, EQUIPMENT, ...
+    pub kind: String,
+    /// that object's key
+    pub key: String,
+    /// "PC", or the name of the item it is applied to
+    pub target: String,
+    /// false when switched off
+    pub active: bool,
+    /// the bonuses, as BONUS token values
+    pub bonuses: Vec<String>,
+}
+
+impl TempBonus {
+    /// Whether it is aimed at the character rather than an item.
+    pub fn on_pc(&self) -> bool {
+        self.target == "PC"
+    }
+
+    /// Whether PCGen keeps it when loading the character: the kind of
+    /// source is one it reads back (class sources lose their bonuses),
+    /// and an item aimed at is owned.
+    pub fn loads(&self, ch: &Character) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "FEAT" | "EQUIPMENT" | "TEMPLATE" | "SKILL" | "SPELL" | "NAME"
+        ) && (self.on_pc()
+            || ch
+                .equipment()
+                .iter()
+                .any(|e| e.name.eq_ignore_ascii_case(&self.target)))
+    }
+}
+
+/// Copies of a spell placed in a book or list, as a SPELLNAME line
+/// records them.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct SpellCopy {
+    pub spell: String,
+    pub class: String,
+    pub book: String,
+    /// the level of the slot it takes (raised by metamagic)
+    pub level: i64,
+    /// metamagic feat keys, in the order applied
+    pub feats: Vec<String>,
+    /// the domain whose list it is cast from, if not the class's
+    pub domain: Option<String>,
+    /// pages one copy takes in a spellbook
+    pub pages: i64,
+}
+
+/// The equipment set PCGen gives a character that has none.
+pub const DEFAULT_SET_ID: &str = "0.1";
+pub const DEFAULT_SET_NAME: &str = "Default Set";
+
+/// Whether an EQUIPSET id is a set (`0.N`) rather than an item in one.
+pub fn is_set_root(id: &str) -> bool {
+    id.strip_prefix("0.").is_some_and(|r| !r.contains('.'))
+}
+
+/// Feat keys of a SPELLNAME line's FEATLIST.
+fn line_feats(l: &PcgLine) -> Vec<String> {
+    l.get("FEATLIST")
+        .map(|e| e.children().iter().map(Elem::value_text).collect())
+        .unwrap_or_default()
+}
+
+/// The domain a SPELLNAME line's SOURCE names, if it is one.
+fn line_domain(l: &PcgLine) -> Option<String> {
+    let src = l.get("SOURCE")?;
+    let kid = |t: &str| {
+        src.children()
+            .iter()
+            .find(|c| c.tag == t)
+            .map(Elem::value_text)
+    };
+    kid("TYPE")
+        .is_some_and(|t| t.eq_ignore_ascii_case("DOMAIN"))
+        .then(|| kid("NAME"))
+        .flatten()
+}
+
 /// A character, backed by its PCG file.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Character {
     pub pcg: PcgFile,
+    /// where the file was read from or last written to
+    #[serde(skip)]
+    pub path: Option<PathBuf>,
 }
 
 /// A number as saved: no trailing `.0` for whole values.
@@ -172,19 +264,40 @@ fn trim_float(v: f64) -> String {
     }
 }
 
+/// An amount of money as saved: a plain decimal without trailing zeros
+/// (rounded to a ten-thousandth).
+pub fn money_text(v: f64) -> String {
+    let r = (v * 10000.0).round() / 10000.0;
+    let s = format!("{:.4}", r);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".into()
+    } else {
+        s.to_string()
+    }
+}
+
 fn num<T: std::str::FromStr>(e: Option<String>) -> Option<T> {
     e.and_then(|s| s.trim().parse().ok())
+}
+
+/// `ADD:[SET:what|CHOICE:...]`: choices made for an ADD token.
+fn add_elem(set: &str, what: &str, choices: &[String]) -> Elem {
+    let mut kids = vec![Elem::text(set, what)];
+    kids.extend(choices.iter().map(|c| Elem::text("CHOICE", c)));
+    Elem::list("ADD", kids)
 }
 
 impl Character {
     pub fn read(path: &Path) -> Result<Character> {
         Ok(Character {
             pcg: PcgFile::read(path)?,
+            path: Some(path.to_path_buf()),
         })
     }
 
     pub fn from_pcg(pcg: PcgFile) -> Character {
-        Character { pcg }
+        Character { pcg, path: None }
     }
 
     /// A new, empty character.
@@ -203,13 +316,28 @@ impl Character {
             ));
         }
         l.push(PcgLine::new(vec![Elem::raw("VERSION", "6.09.00")]));
+        // what PCGen writes for a character it has just made: no
+        // point buy, no stat increases pending, no budget set
+        l.push(PcgLine::new(vec![Elem::raw("PURCHASEPOINTS", "N")]));
+        l.push(PcgLine::new(vec![Elem::raw("POOLPOINTS", "0")]));
+        l.push(PcgLine::new(vec![Elem::raw("POOLPOINTSAVAIL", "-1")]));
         l.push(PcgLine::new(vec![Elem::text("GAMEMODE", gamemode)]));
+        for (tag, v) in [
+            ("IGNORECOST", "N"),
+            ("ALLOWDEBT", "N"),
+            ("AUTORESIZEGEAR", "Y"),
+        ] {
+            l.push(PcgLine::new(vec![Elem::raw(tag, v)]));
+        }
         l.push(PcgLine::blank());
         l.push(PcgLine::comment("Character Bio"));
         l.push(PcgLine::new(vec![Elem::text("CHARACTERNAME", name)]));
         l.push(PcgLine::blank());
         l.push(PcgLine::comment("Character Attributes"));
-        Character { pcg }
+        l.push(PcgLine::blank());
+        l.push(PcgLine::comment("Character Equipment"));
+        l.push(PcgLine::new(vec![Elem::raw("MONEY", "0")]));
+        Character { pcg, path: None }
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
@@ -432,6 +560,117 @@ impl Character {
             .collect()
     }
 
+    /// Whether temporary bonuses count (USETEMPMODS; on by default).
+    pub fn use_temp_mods(&self) -> bool {
+        self.flag("USETEMPMODS", true)
+    }
+
+    /// Temporary bonuses applied, in file order.  A line naming no
+    /// source or no target is passed over, as PCGen does.
+    pub fn temp_bonuses(&self) -> Vec<TempBonus> {
+        self.pcg
+            .lines_tagged("TEMPBONUS")
+            .filter_map(|l| {
+                let head = l.head()?.value_text();
+                let mut parts = head.split('=').filter(|p| !p.is_empty());
+                let (kind, key) = (parts.next()?, parts.next()?);
+                Some(TempBonus {
+                    kind: kind.to_string(),
+                    key: key.to_string(),
+                    target: l.text("TBTARGET")?,
+                    active: l.text("TBACTIVE").is_none_or(|v| v.ends_with('Y')),
+                    bonuses: l
+                        .elems
+                        .iter()
+                        .flatten()
+                        .filter(|e| e.tag == "TBBONUS")
+                        .map(Elem::value_text)
+                        .filter(|b| !b.is_empty())
+                        .collect(),
+                })
+            })
+            .collect()
+    }
+
+    /// Replace the temporary bonuses, written as PCGen writes them:
+    /// every bonus sorted by category, targets and text (a bonus whose
+    /// text another already has is dropped), and one line per source
+    /// and target, written where its first bonus comes, holding all of
+    /// its bonuses.
+    pub fn set_temp_bonuses(&mut self, list: &[TempBonus]) {
+        let mut all: Vec<(String, String, &str, usize)> = Vec::new();
+        for (i, tb) in list.iter().enumerate() {
+            for b in &tb.bonuses {
+                let mut parts = b.split('|');
+                let name = parts.next().unwrap_or("").to_string();
+                let info = parts.next().unwrap_or("").to_uppercase();
+                if !all
+                    .iter()
+                    .any(|(n, f, t, _)| *n == name && *f == info && t == b)
+                {
+                    all.push((name, info, b.as_str(), i));
+                }
+            }
+        }
+        all.sort_by(|a, b| (&a.0, &a.1, a.2).cmp(&(&b.0, &b.1, b.2)));
+        let same = |a: &TempBonus, b: &TempBonus| {
+            a.kind == b.kind && a.key == b.key && a.target == b.target
+        };
+        let mut lines: Vec<PcgLine> = Vec::new();
+        let mut done: Vec<usize> = Vec::new();
+        for (_, _, _, i) in &all {
+            let tb = &list[*i];
+            if done.iter().any(|d| same(&list[*d], tb)) {
+                continue;
+            }
+            done.push(*i);
+            let mut elems = vec![
+                Elem::raw(
+                    "TEMPBONUS",
+                    &format!("{}={}", tb.kind, super::encode(&tb.key, false)),
+                ),
+                Elem::text("TBTARGET", &tb.target),
+            ];
+            if !tb.active {
+                elems.push(Elem::raw("TBACTIVE", "N"));
+            }
+            for (_, _, b, j) in &all {
+                if same(&list[*j], tb) {
+                    elems.push(Elem::text("TBBONUS", b));
+                }
+            }
+            lines.push(PcgLine::new(elems));
+        }
+        self.pcg.remove_all("TEMPBONUS");
+        for l in lines {
+            self.insert_ordered("TEMPBONUS", l);
+        }
+    }
+
+    /// Turn temporary modifiers on or off: for the character, and for
+    /// the equipment set used and what is placed in it.
+    pub fn set_temp_mods(&mut self, on: bool) {
+        self.set_flag("USETEMPMODS", on);
+        let calc = self
+            .pcg
+            .value("CALCEQUIPSET")
+            .unwrap_or_else(|| "0.1".into());
+        let inside = format!("{}.", calc);
+        for i in self.pcg.indices("EQUIPSET") {
+            let l = &self.pcg.lines[i];
+            let Some(id) = l.text("ID") else { continue };
+            if id != calc && !id.starts_with(&inside) {
+                continue;
+            }
+            let mut elems = l.elems.clone().unwrap_or_default();
+            elems.retain(|e| e.tag != "USETEMPMODS");
+            if on {
+                elems.push(Elem::raw("USETEMPMODS", "Y"));
+            }
+            self.pcg.lines[i].set_elems(elems);
+        }
+    }
+
     pub fn equipsets(&self) -> Vec<EquipSetEntry> {
         self.pcg
             .lines_tagged("EQUIPSET")
@@ -446,18 +685,44 @@ impl Character {
             .collect()
     }
 
-    /// The equipment set used for calculations (CALCEQUIPSET), as
-    /// (location, item, quantity) for items placed in it.
-    pub fn equipped(&self) -> Vec<EquipSetEntry> {
-        let calc = self
-            .pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
-        let prefix = format!("{}.", calc);
+    /// Equipment sets (the top-level EQUIPSET lines, `0.N`) as (id,
+    /// name), in file order.
+    pub fn equip_set_roots(&self) -> Vec<(String, String)> {
+        self.equipsets()
+            .into_iter()
+            .filter(|e| is_set_root(&e.id))
+            .map(|e| (e.id, e.location))
+            .collect()
+    }
+
+    /// The id of the equipment set used for calculations: the one
+    /// CALCEQUIPSET names if there is such a set, else (as PCGen does)
+    /// the first set in the file.
+    pub fn calc_equip_set(&self) -> String {
+        let stored = self.pcg.value("CALCEQUIPSET");
+        let sets = self.equipsets();
+        if sets.iter().any(|e| Some(&e.id) == stored.as_ref()) {
+            return stored.unwrap_or_default();
+        }
+        sets.into_iter()
+            .find(|e| is_set_root(&e.id))
+            .map(|e| e.id)
+            .or(stored)
+            .unwrap_or_else(|| DEFAULT_SET_ID.into())
+    }
+
+    /// Items placed in an equipment set (and what they hold).
+    pub fn set_items(&self, set: &str) -> Vec<EquipSetEntry> {
+        let prefix = format!("{}.", set);
         self.equipsets()
             .into_iter()
             .filter(|e| e.item.is_some() && e.id.starts_with(&prefix))
             .collect()
+    }
+
+    /// Items placed in the equipment set used for calculations.
+    pub fn equipped(&self) -> Vec<EquipSetEntry> {
+        self.set_items(&self.calc_equip_set())
     }
 
     // ---- editing ----
@@ -521,6 +786,115 @@ impl Character {
                 self.insert_ordered("STAT", line);
             }
         }
+    }
+
+    /// Record how the stats were generated (ROLLMETHOD:code with its
+    /// EXPRESSION) and, for point buy, the method (PURCHASEPOINTS).
+    pub fn set_roll_method(&mut self, code: u32, expression: &str) {
+        self.put(
+            "ROLLMETHOD",
+            vec![
+                Elem::raw("ROLLMETHOD", &code.to_string()),
+                Elem::raw("EXPRESSION", expression),
+            ],
+        );
+        let purchase = if code == 2 {
+            vec![
+                Elem::raw("PURCHASEPOINTS", "Y"),
+                Elem::raw("TYPE", expression),
+            ]
+        } else {
+            vec![Elem::raw("PURCHASEPOINTS", "N")]
+        };
+        self.put("PURCHASEPOINTS", purchase);
+    }
+
+    /// How the stats were generated: (ROLLMETHOD code, EXPRESSION).
+    pub fn roll_method(&self) -> Option<(u32, String)> {
+        let l = self.pcg.lines_tagged("ROLLMETHOD").next()?;
+        Some((
+            num(l.head().map(Elem::value_text))?,
+            l.text("EXPRESSION").unwrap_or_default(),
+        ))
+    }
+
+    /// POOLPOINTS: points spent buying stats, or stat increases not
+    /// yet taken.
+    pub fn pool_points(&self) -> i64 {
+        num(self.pcg.value("POOLPOINTS")).unwrap_or(0)
+    }
+
+    pub fn set_pool_points(&mut self, n: i64) {
+        self.put("POOLPOINTS", vec![Elem::raw("POOLPOINTS", &n.to_string())]);
+    }
+
+    /// POOLPOINTSAVAIL: the point-buy budget, -1 when none is set.
+    pub fn pool_budget(&self) -> i64 {
+        num(self.pcg.value("POOLPOINTSAVAIL")).unwrap_or(-1)
+    }
+
+    pub fn set_pool_budget(&mut self, n: i64) {
+        self.put(
+            "POOLPOINTSAVAIL",
+            vec![Elem::raw("POOLPOINTSAVAIL", &n.to_string())],
+        );
+    }
+
+    /// The character's funds (MONEY).
+    pub fn gold(&self) -> f64 {
+        num(self.pcg.value("MONEY")).unwrap_or(0.0)
+    }
+
+    /// Set the character's funds.
+    pub fn set_gold(&mut self, gold: f64) {
+        self.put("MONEY", vec![Elem::raw("MONEY", &money_text(gold))]);
+    }
+
+    /// A Y/N setting line (ALLOWDEBT, IGNORECOST, AUTORESIZEGEAR): on
+    /// when it ends in Y, else `default` when there is none.
+    pub fn flag(&self, tag: &str, default: bool) -> bool {
+        match self.pcg.value(tag) {
+            Some(v) => v.trim_end().ends_with('Y'),
+            None => default,
+        }
+    }
+
+    pub fn set_flag(&mut self, tag: &str, on: bool) {
+        self.put(tag, vec![Elem::raw(tag, if on { "Y" } else { "N" })]);
+    }
+
+    /// Record a change to a stat's base score with the latest level
+    /// gained (`PRESTAT:ABB=delta`, before its skill points).  False
+    /// if the character has no levels.
+    pub fn add_stat_change(&mut self, abb: &str, delta: i64) -> bool {
+        let Some(&i) = self.pcg.indices("CLASSABILITIESLEVEL").last() else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let at = elems
+            .iter()
+            .position(|e| matches!(e.tag.as_str(), "SKILLSGAINED" | "SKILLSREMAINING"))
+            .unwrap_or(elems.len());
+        elems.insert(at, Elem::text("PRESTAT", &format!("{}={}", abb, delta)));
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
+    /// Stat changes recorded with the latest level gained.
+    pub fn last_level_stat_changes(&self) -> Vec<(String, i64)> {
+        let Some(l) = self.pcg.lines_tagged("CLASSABILITIESLEVEL").last() else {
+            return Vec::new();
+        };
+        l.elems
+            .iter()
+            .flatten()
+            .filter(|e| e.tag == "PRESTAT" || e.tag == "POSTSTAT")
+            .filter_map(|e| {
+                let v = e.value_text();
+                let (a, d) = v.split_once('=')?;
+                Some((a.to_string(), d.trim().parse().ok()?))
+            })
+            .collect()
     }
 
     pub fn set_race(&mut self, race: &str) {
@@ -667,11 +1041,150 @@ impl Character {
         }
     }
 
+    /// Record a choice made with a skill's ranks (a language, say).
+    pub fn add_skill_choice(&mut self, skill: &str, choice: &str) {
+        let Some(i) = self.pcg.indices("SKILL").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(skill))
+        }) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems.push(Elem::text("ASSOCIATEDDATA", choice));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Record choices made for an ADD token of a class level:
+    /// `ADD:[SET:what|CHOICE:...]`, placed before the level's stat
+    /// changes and skill points.
+    pub fn add_level_choice(
+        &mut self,
+        class: &str,
+        level: u32,
+        set: &str,
+        what: &str,
+        choices: &[String],
+    ) {
+        let Some(i) = self.level_line(class, level) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let at = elems
+            .iter()
+            .position(|e| {
+                matches!(
+                    e.tag.as_str(),
+                    "PRESTAT" | "POSTSTAT" | "SKILLSGAINED" | "SKILLSREMAINING"
+                )
+            })
+            .unwrap_or(elems.len());
+        elems.insert(at, add_elem(set, what, choices));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Record choices made for an ADD token of a class's own line.
+    pub fn add_class_choice(&mut self, class: &str, set: &str, what: &str, choices: &[String]) {
+        let Some(i) = self.pcg.indices("CLASS").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(class))
+        }) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems.push(add_elem(set, what, choices));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Save a bonus with a class level (`SAVES:[SAVE:BONUS|...]`, after
+    /// its hit points).
+    pub fn add_level_save(&mut self, class: &str, level: u32, bonus: &str) {
+        let Some(i) = self.level_line(class, level) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        let save = Elem::text("SAVE", bonus);
+        match elems.iter_mut().find(|e| e.tag == "SAVES") {
+            Some(e) => {
+                let mut kids = e.children().to_vec();
+                kids.push(save);
+                *e = Elem::list("SAVES", kids);
+            }
+            None => {
+                let at = elems
+                    .iter()
+                    .position(|e| e.tag == "HITPOINTS")
+                    .map_or(elems.len(), |p| p + 1);
+                elems.insert(at, Elem::list("SAVES", vec![save]));
+            }
+        }
+        self.pcg.lines[i].set_elems(elems);
+    }
+
+    /// Points added to an ability pool by hand (USERPOOL).
+    pub fn user_pool(&self, category: &str) -> f64 {
+        self.pcg
+            .lines_tagged("USERPOOL")
+            .filter(|l| {
+                l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(category))
+            })
+            .filter_map(|l| num::<f64>(l.text("POOLPOINTS")))
+            .sum()
+    }
+
+    /// Add points to an ability pool by hand.
+    pub fn adjust_user_pool(&mut self, category: &str, delta: f64) {
+        let total = self.user_pool(category) + delta;
+        let value = format!("{:?}", total);
+        let idx = self.pcg.indices("USERPOOL").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(category))
+        });
+        match idx {
+            Some(i) => self.set_elem(i, "POOLPOINTS", &value),
+            None => {
+                self.insert_ordered(
+                    "USERPOOL",
+                    PcgLine::new(vec![
+                        Elem::text("USERPOOL", category),
+                        Elem::raw("POOLPOINTS", &value),
+                    ]),
+                );
+            }
+        }
+    }
+
+    /// The level line of a class level.
+    fn level_line(&self, class: &str, level: u32) -> Option<usize> {
+        self.class_level_lines(class).into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .map(|h| h.value_text())
+                .and_then(|h| h.rsplit_once('=').map(|(_, n)| n.trim().to_string()))
+                .is_some_and(|n| n == level.to_string())
+        })
+    }
+
     /// Add a chosen ability.
     pub fn add_ability(&mut self, pool: &str, category: &str, key: &str, applied_to: &[String]) {
+        self.add_ability_as(pool, category, key, "NORMAL", applied_to);
+    }
+
+    /// Add an ability the character has by a nature (NORMAL, VIRTUAL).
+    pub fn add_ability_as(
+        &mut self,
+        pool: &str,
+        category: &str,
+        key: &str,
+        nature: &str,
+        applied_to: &[String],
+    ) {
         let mut elems = vec![
             Elem::text("ABILITY", pool),
-            Elem::raw("TYPE", "NORMAL"),
+            Elem::raw("TYPE", nature),
             Elem::text("CATEGORY", category),
             Elem::text("KEY", key),
         ];
@@ -730,6 +1243,59 @@ impl Character {
         self.insert_ordered("DOMAIN", PcgLine::new(vec![Elem::text("DOMAIN", name)]));
     }
 
+    /// Record a kit as applied.
+    pub fn add_kit(&mut self, key: &str) {
+        self.insert_ordered("KIT", PcgLine::new(vec![Elem::text("KIT", key)]));
+    }
+
+    /// Add a domain granted by a class at one of its levels.
+    pub fn add_class_domain(&mut self, name: &str, class: &str, level: u32) {
+        self.insert_ordered(
+            "DOMAIN",
+            PcgLine::new(vec![
+                Elem::text("DOMAIN", name),
+                Elem::list(
+                    "SOURCE",
+                    vec![
+                        Elem::raw("TYPE", "PCClass"),
+                        Elem::text("NAME", class),
+                        Elem::raw("LEVEL", &level.to_string()),
+                    ],
+                ),
+            ]),
+        );
+    }
+
+    /// Domains a given class granted.
+    pub fn class_domains_of(&self, class: &str) -> Vec<String> {
+        self.pcg
+            .lines_tagged("DOMAIN")
+            .filter(|l| {
+                l.get("SOURCE").is_some_and(|src| {
+                    src.children()
+                        .iter()
+                        .any(|c| c.tag == "NAME" && c.value_text().eq_ignore_ascii_case(class))
+                })
+            })
+            .filter_map(|l| l.head().map(Elem::value_text))
+            .collect()
+    }
+
+    /// Domains a class granted (their SOURCE names a class).
+    pub fn class_domains(&self) -> Vec<String> {
+        self.pcg
+            .lines_tagged("DOMAIN")
+            .filter(|l| {
+                l.get("SOURCE").is_some_and(|src| {
+                    src.children()
+                        .iter()
+                        .any(|c| c.tag == "TYPE" && c.value_text().eq_ignore_ascii_case("PCClass"))
+                })
+            })
+            .filter_map(|l| l.head().map(Elem::value_text))
+            .collect()
+    }
+
     /// Add equipment (or increase its quantity).
     pub fn add_equipment(&mut self, name: &str, qty: f64) {
         let idx = self.pcg.indices("EQUIPNAME").into_iter().find(|&i| {
@@ -767,28 +1333,204 @@ impl Character {
         let before = self.pcg.lines.len();
         self.pcg.lines.retain(|l| {
             !(l.tag() == Some("EQUIPNAME") && l.head().is_some_and(|h| h.value_text() == name))
-                && !(l.tag() == Some("EQUIPSET") && l.text("VALUE").as_deref() == Some(name))
         });
+        self.remove_set_lines(|_, value| value == Some(name));
         before != self.pcg.lines.len()
+    }
+
+    /// Remove the EQUIPSET lines `pick` chooses by (id, item), with
+    /// everything under them.
+    fn remove_set_lines(&mut self, pick: impl Fn(&str, Option<&str>) -> bool) -> bool {
+        let gone: Vec<String> = self
+            .equipsets()
+            .into_iter()
+            .filter(|e| pick(&e.id, e.item.as_deref()))
+            .map(|e| e.id)
+            .collect();
+        if gone.is_empty() {
+            return false;
+        }
+        self.pcg.lines.retain(|l| {
+            if l.tag() != Some("EQUIPSET") {
+                return true;
+            }
+            let id = l.text("ID").unwrap_or_default();
+            !gone.iter().any(|g| {
+                id == *g
+                    || id
+                        .strip_prefix(g.as_str())
+                        .is_some_and(|r| r.starts_with('.'))
+            })
+        });
+        true
+    }
+
+    /// Keep the EQUIPSET lines in the order PCGen writes them (by id,
+    /// as text) and CALCEQUIPSET naming a set that exists.
+    fn sync_equip_sets(&mut self) {
+        let idx = self.pcg.indices("EQUIPSET");
+        let mut lines: Vec<PcgLine> = idx.iter().map(|&i| self.pcg.lines[i].clone()).collect();
+        lines.sort_by_key(|l| l.text("ID").unwrap_or_default().to_lowercase());
+        for (i, l) in idx.into_iter().zip(lines) {
+            self.pcg.lines[i] = l;
+        }
+        if !self.equip_set_roots().is_empty() {
+            let calc = self.calc_equip_set();
+            self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", &calc)]);
+        }
+    }
+
+    /// A free top-level set id, after the highest in use.
+    fn next_set_id(&self) -> String {
+        let n = self
+            .equip_set_roots()
+            .iter()
+            .filter_map(|(id, _)| id.strip_prefix("0.")?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        format!("0.{}", n.saturating_add(1))
+    }
+
+    /// The set used for calculations, first making PCGen's default
+    /// set if there is none.
+    pub fn ensure_equip_set(&mut self) -> String {
+        if self.equip_set_roots().is_empty() {
+            self.insert_ordered(
+                "EQUIPSET",
+                PcgLine::new(vec![
+                    Elem::text("EQUIPSET", DEFAULT_SET_NAME),
+                    Elem::raw("ID", DEFAULT_SET_ID),
+                    Elem::raw("USETEMPMODS", "Y"),
+                ]),
+            );
+            self.put(
+                "CALCEQUIPSET",
+                vec![Elem::raw("CALCEQUIPSET", DEFAULT_SET_ID)],
+            );
+            self.sync_equip_sets();
+        }
+        self.calc_equip_set()
+    }
+
+    /// Add an empty equipment set; returns its id.
+    pub fn add_equip_set(&mut self, name: &str) -> String {
+        self.ensure_equip_set();
+        let id = self.next_set_id();
+        self.insert_ordered(
+            "EQUIPSET",
+            PcgLine::new(vec![
+                Elem::text("EQUIPSET", name),
+                Elem::raw("ID", &id),
+                Elem::raw("USETEMPMODS", "Y"),
+            ]),
+        );
+        self.sync_equip_sets();
+        id
+    }
+
+    /// Add a set holding what set `from` holds, in the same places;
+    /// returns its id.
+    pub fn copy_equip_set(&mut self, from: &str, name: &str) -> String {
+        let id = self.next_set_id();
+        let prefix = format!("{}.", from);
+        let copies: Vec<PcgLine> = self
+            .pcg
+            .lines_tagged("EQUIPSET")
+            .filter_map(|l| {
+                let old = l.text("ID")?;
+                let new = if old == from {
+                    id.clone()
+                } else {
+                    format!("{}.{}", id, old.strip_prefix(&prefix)?)
+                };
+                let mut elems = l.elems.clone().unwrap_or_default();
+                for e in &mut elems {
+                    if e.tag == "ID" {
+                        *e = Elem::raw("ID", &new);
+                    }
+                }
+                if old == from {
+                    elems[0] = Elem::text("EQUIPSET", name);
+                }
+                Some(PcgLine::new(elems))
+            })
+            .collect();
+        for l in copies {
+            self.insert_ordered("EQUIPSET", l);
+        }
+        self.sync_equip_sets();
+        id
+    }
+
+    /// Rename an equipment set.
+    pub fn rename_equip_set(&mut self, set: &str, name: &str) -> bool {
+        let Some(i) = self
+            .pcg
+            .indices("EQUIPSET")
+            .into_iter()
+            .find(|&i| self.pcg.lines[i].text("ID").as_deref() == Some(set))
+        else {
+            return false;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems[0] = Elem::text("EQUIPSET", name);
+        self.pcg.lines[i].set_elems(elems);
+        true
+    }
+
+    /// Remove an equipment set and everything in it.  If it was the
+    /// set used for calculations, the first remaining set is.
+    pub fn remove_equip_set(&mut self, set: &str) -> bool {
+        let done = self.remove_set_lines(|id, _| id == set);
+        self.sync_equip_sets();
+        done
+    }
+
+    /// Use an equipment set for calculations.  As in PCGen, the set's
+    /// own temporary-bonus setting becomes the character's.
+    pub fn use_equip_set(&mut self, set: &str) {
+        let temp = self
+            .pcg
+            .lines_tagged("EQUIPSET")
+            .find(|l| l.text("ID").as_deref() == Some(set))
+            .and_then(|l| l.text("USETEMPMODS"))
+            .is_some_and(|v| v.eq_ignore_ascii_case("Y"));
+        self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", set)]);
+        self.put(
+            "USETEMPMODS",
+            vec![Elem::raw("USETEMPMODS", if temp { "Y" } else { "N" })],
+        );
+    }
+
+    /// Give up some of an item: all of it (with its places in
+    /// equipment sets) when no more than `qty` is had.  Returns how
+    /// many were given up.
+    pub fn reduce_equipment(&mut self, name: &str, qty: f64) -> f64 {
+        let Some(i) = self.pcg.indices("EQUIPNAME").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text() == name)
+        }) else {
+            return 0.0;
+        };
+        let have = num::<f64>(self.pcg.lines[i].text("QUANTITY")).unwrap_or(1.0);
+        if qty >= have {
+            self.remove_equipment(name);
+            return have;
+        }
+        self.set_elem(i, "QUANTITY", &format!("{:.1}", have - qty));
+        qty
     }
 
     /// Place an item at a location in the calculation equipment set.
     pub fn equip(&mut self, name: &str, location: &str, qty: f64) {
-        let calc = self
-            .pcg
-            .value("CALCEQUIPSET")
-            .unwrap_or_else(|| "0.1".into());
-        if self.equipsets().iter().all(|e| e.id != calc) {
-            self.insert_ordered(
-                "EQUIPSET",
-                PcgLine::new(vec![
-                    Elem::text("EQUIPSET", "Default Set"),
-                    Elem::raw("ID", &calc),
-                ]),
-            );
-            self.put("CALCEQUIPSET", vec![Elem::raw("CALCEQUIPSET", &calc)]);
-        }
-        let prefix = format!("{}.", calc);
+        let set = self.ensure_equip_set();
+        self.equip_in(&set, name, location, qty);
+    }
+
+    /// Place an item at a location in an equipment set.
+    pub fn equip_in(&mut self, set: &str, name: &str, location: &str, qty: f64) {
+        let prefix = format!("{}.", set);
         let next = self
             .equipsets()
             .iter()
@@ -801,16 +1543,19 @@ impl Character {
             })
             .max()
             .unwrap_or(0)
-            + 1;
+            .saturating_add(1);
         self.insert_ordered(
             "EQUIPSET",
             PcgLine::new(vec![
                 Elem::text("EQUIPSET", location),
-                Elem::raw("ID", &format!("{}{}", prefix, next)),
+                // numbered as PCGen numbers them: 01, 02, ...
+                Elem::raw("ID", &format!("{}{:02}", prefix, next)),
                 Elem::text("VALUE", name),
                 Elem::raw("QUANTITY", &format!("{:.1}", qty)),
+                Elem::raw("USETEMPMODS", "Y"),
             ]),
         );
+        self.sync_equip_sets();
     }
 
     /// Skill points left unspent from a class's levels.
@@ -906,47 +1651,211 @@ impl Character {
             .collect()
     }
 
-    /// Add a spell to a class's book at a level.
-    pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
-        if !self
-            .pcg
+    /// Spell books and lists recorded with SPELLBOOK lines: (name,
+    /// type).  Types: 1 known spells, 2 prepared list, 3 spellbook
+    /// (an item), 4 innate.
+    pub fn spell_books(&self) -> Vec<(String, i64)> {
+        self.pcg
             .lines_tagged("SPELLBOOK")
-            .any(|l| l.head().is_some_and(|h| h.value_text() == book))
-            && book != "Known Spells"
-        {
-            self.insert_ordered(
-                "SPELLBOOK",
-                PcgLine::new(vec![Elem::text("SPELLBOOK", book), Elem::raw("TYPE", "1")]),
-            );
-        }
+            .filter_map(|l| Some((l.head()?.value_text(), num(l.text("TYPE")).unwrap_or(2))))
+            .collect()
+    }
+
+    /// Pages the spells written in a book take (their SPELLNUMPAGES).
+    pub fn spell_book_pages(&self, book: &str) -> i64 {
+        self.pcg
+            .lines_tagged("SPELLNAME")
+            .filter(|l| l.text("BOOK").as_deref() == Some(book))
+            .filter_map(|l| num::<i64>(l.text("SPELLNUMPAGES")))
+            .sum()
+    }
+
+    /// Record a spell book or list of a type (see [`Self::spell_books`]).
+    pub fn add_spell_book(&mut self, name: &str, kind: i64) {
         self.insert_ordered(
-            "SPELLNAME",
+            "SPELLBOOK",
             PcgLine::new(vec![
-                Elem::text("SPELLNAME", spell),
-                Elem::raw("TIMES", &times.to_string()),
-                Elem::text("CLASS", class),
-                Elem::text("BOOK", book),
-                Elem::raw("SPELLLEVEL", &level.to_string()),
-                Elem::list(
-                    "SOURCE",
-                    vec![Elem::raw("TYPE", "CLASS"), Elem::text("NAME", class)],
-                ),
+                Elem::text("SPELLBOOK", name),
+                Elem::raw("TYPE", &kind.to_string()),
             ]),
         );
     }
 
-    /// Remove a spell from a class's book.  Returns whether one was.
-    pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
+    /// Remove a spell book or list and every spell in it.  Returns
+    /// whether there was one.
+    pub fn remove_spell_book(&mut self, name: &str) -> bool {
         let before = self.pcg.lines.len();
-        self.pcg.lines.retain(|l| {
-            !(l.tag() == Some("SPELLNAME")
-                && l.head()
-                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(spell))
-                && l.text("CLASS")
-                    .is_some_and(|c| c.eq_ignore_ascii_case(class))
-                && book.is_none_or(|b| l.text("BOOK").is_some_and(|x| x.eq_ignore_ascii_case(b))))
+        self.pcg.lines.retain(|l| match l.tag() {
+            Some("SPELLBOOK") => l.head().is_none_or(|h| h.value_text() != name),
+            Some("SPELLNAME") => l.text("BOOK").as_deref() != Some(name),
+            _ => true,
         });
         before != self.pcg.lines.len()
+    }
+
+    /// Add a spell to a class's book at a level.  A book not yet
+    /// recorded is made a prepared list.  Another copy of a spell
+    /// already in a list adds to the times on its line.
+    pub fn add_spell(&mut self, spell: &str, class: &str, book: &str, level: i64, times: i64) {
+        let copy = SpellCopy {
+            spell: spell.into(),
+            class: class.into(),
+            book: book.into(),
+            level,
+            ..Default::default()
+        };
+        self.add_spell_copy(&copy, times);
+    }
+
+    /// Add copies of a spell to a book or list (made a prepared list if
+    /// not yet recorded).  Copies already in a list (at the same level,
+    /// with the same feats) add to the times on their line, and their
+    /// pages to its pages.  Returns the times now on the line.
+    pub fn add_spell_copy(&mut self, c: &SpellCopy, times: i64) -> i64 {
+        if c.book != "Known Spells" && self.spell_books().iter().all(|(b, _)| *b != c.book) {
+            self.add_spell_book(&c.book, 2);
+        }
+        if c.book != "Known Spells" {
+            let found = self
+                .spell_lines(&c.spell, &c.class, Some(&c.book), Some(c.level))
+                .into_iter()
+                .find(|&i| {
+                    let l = &self.pcg.lines[i];
+                    line_feats(l) == c.feats && line_domain(l) == c.domain
+                });
+            if let Some(i) = found {
+                let l = &self.pcg.lines[i];
+                let had = num::<i64>(l.text("TIMES")).unwrap_or(1);
+                let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
+                self.set_elem(i, "TIMES", &(had + times).to_string());
+                if c.pages != 0 {
+                    self.set_elem(i, "SPELLNUMPAGES", &(pages + c.pages * times).to_string());
+                }
+                return had + times;
+            }
+        }
+        let mut elems = vec![
+            Elem::text("SPELLNAME", &c.spell),
+            Elem::raw("TIMES", &times.to_string()),
+            Elem::text("CLASS", &c.class),
+            Elem::text("BOOK", &c.book),
+            Elem::raw("SPELLLEVEL", &c.level.to_string()),
+        ];
+        if c.pages > 0 {
+            elems.push(Elem::raw("SPELLNUMPAGES", &(c.pages * times).to_string()));
+        }
+        if !c.feats.is_empty() {
+            elems.push(Elem::list(
+                "FEATLIST",
+                c.feats.iter().map(|f| Elem::text("FEAT", f)).collect(),
+            ));
+        }
+        elems.push(Elem::list(
+            "SOURCE",
+            match &c.domain {
+                Some(d) => vec![Elem::raw("TYPE", "DOMAIN"), Elem::text("NAME", d)],
+                None => vec![Elem::raw("TYPE", "CLASS"), Elem::text("NAME", &c.class)],
+            },
+        ));
+        self.insert_ordered("SPELLNAME", PcgLine::new(elems));
+        times
+    }
+
+    /// SPELLNAME lines of a class's spell, optionally only in a book
+    /// and at a level.
+    fn spell_lines(
+        &self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+        level: Option<i64>,
+    ) -> Vec<usize> {
+        self.pcg
+            .indices("SPELLNAME")
+            .into_iter()
+            .filter(|&i| {
+                let l = &self.pcg.lines[i];
+                l.head()
+                    .is_some_and(|h| h.value_text().eq_ignore_ascii_case(spell))
+                    && l.text("CLASS")
+                        .is_some_and(|c| c.eq_ignore_ascii_case(class))
+                    && book.is_none_or(|b| {
+                        l.text("BOOK")
+                            .unwrap_or_else(|| "Known Spells".into())
+                            .eq_ignore_ascii_case(b)
+                    })
+                    && level.is_none_or(|v| num::<i64>(l.text("SPELLLEVEL")).unwrap_or(0) == v)
+            })
+            .collect()
+    }
+
+    /// Copies of a class's spell saved in books and lists.
+    pub fn spell_copies(
+        &self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+    ) -> Vec<(SpellCopy, i64)> {
+        self.spell_lines(spell, class, book, None)
+            .into_iter()
+            .map(|i| {
+                let l = &self.pcg.lines[i];
+                let times = num::<i64>(l.text("TIMES")).unwrap_or(1);
+                let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
+                (
+                    SpellCopy {
+                        spell: l.head().map(Elem::value_text).unwrap_or_default(),
+                        class: l.text("CLASS").unwrap_or_default(),
+                        book: l.text("BOOK").unwrap_or_else(|| "Known Spells".into()),
+                        level: num(l.text("SPELLLEVEL")).unwrap_or(0),
+                        feats: line_feats(l),
+                        domain: line_domain(l),
+                        pages: if times > 0 { pages / times } else { pages },
+                    },
+                    times,
+                )
+            })
+            .collect()
+    }
+
+    /// Remove one copy of a spell from a class's book: the times on
+    /// its latest line go down by one, and the line goes at none.
+    /// Returns whether there was one.
+    pub fn remove_spell(&mut self, spell: &str, class: &str, book: Option<&str>) -> bool {
+        self.remove_spell_copy(spell, class, book, None)
+    }
+
+    /// Remove one copy of a spell, optionally only one prepared with
+    /// the given feats (none for a plain copy): the times on its latest
+    /// line go down by one (and its pages by one copy's), and the line
+    /// goes at none.  Returns whether there was one.
+    pub fn remove_spell_copy(
+        &mut self,
+        spell: &str,
+        class: &str,
+        book: Option<&str>,
+        feats: Option<&[String]>,
+    ) -> bool {
+        let Some(i) = self
+            .spell_lines(spell, class, book, None)
+            .into_iter()
+            .rev()
+            .find(|&i| feats.is_none_or(|f| line_feats(&self.pcg.lines[i]) == f))
+        else {
+            return false;
+        };
+        let l = &self.pcg.lines[i];
+        let had = num::<i64>(l.text("TIMES")).unwrap_or(1);
+        let pages = num::<i64>(l.text("SPELLNUMPAGES")).unwrap_or(0);
+        if had > 1 {
+            self.set_elem(i, "TIMES", &(had - 1).to_string());
+            if pages > 0 {
+                self.set_elem(i, "SPELLNUMPAGES", &(pages - pages / had).to_string());
+            }
+        } else {
+            self.pcg.lines.remove(i);
+        }
+        true
     }
 
     /// Followers: (name, type, race, file).
@@ -962,6 +1871,31 @@ impl Character {
                 ))
             })
             .collect()
+    }
+
+    /// The FOLLOWER lines PCGen keeps when it loads the character:
+    /// those naming the follower, its companion list and a file it
+    /// finds, beside the character's own file or as written.  (PCGen
+    /// also looks in its character directory, which is not known here.)
+    /// A character not read from a file keeps them all.
+    pub fn loaded_followers(&self) -> impl Iterator<Item = &PcgLine> {
+        self.pcg.lines_tagged("FOLLOWER").filter(|l| {
+            let named = l.head().is_some_and(|h| !h.value_text().is_empty());
+            let typed = l.text("TYPE").is_some_and(|t| !t.is_empty());
+            named && typed && l.text("FILE").is_some_and(|f| self.follower_file_found(&f))
+        })
+    }
+
+    /// Does PCGen find a follower file the character names?
+    pub fn follower_file_found(&self, file: &str) -> bool {
+        let Some(path) = &self.path else {
+            return true;
+        };
+        if file.is_empty() {
+            return false;
+        }
+        let beside = path.parent().unwrap_or(Path::new(".")).join(file);
+        beside.exists() || Path::new(file).exists()
     }
 
     pub fn add_follower(&mut self, name: &str, kind: &str, race: &str, file: &str) {
@@ -1030,13 +1964,17 @@ impl Character {
         true
     }
 
-    /// Remove an item from the calculation equipment set.
+    /// Remove an item (and what it holds) from the calculation
+    /// equipment set.
     pub fn unequip(&mut self, name: &str) -> bool {
-        let before = self.pcg.lines.len();
-        self.pcg
-            .lines
-            .retain(|l| !(l.tag() == Some("EQUIPSET") && l.text("VALUE").as_deref() == Some(name)));
-        before != self.pcg.lines.len()
+        let set = self.calc_equip_set();
+        self.unequip_in(&set, name)
+    }
+
+    /// Remove an item (and what it holds) from an equipment set.
+    pub fn unequip_in(&mut self, set: &str, name: &str) -> bool {
+        let prefix = format!("{}.", set);
+        self.remove_set_lines(|id, value| id.starts_with(&prefix) && value == Some(name))
     }
 }
 
@@ -1113,9 +2051,44 @@ DOMAIN:Light|SOURCE:[TYPE:PCClass|NAME:Tinker|LEVEL:1]\n";
             .pcg
             .lines_tagged("SPELLBOOK")
             .any(|l| l.head().unwrap().value_text() == "Gadgets"));
+        // two copies, removed one at a time
         assert!(c.remove_spell("spark", "Tinker", Some("Gadgets")));
+        assert!(c
+            .spells()
+            .contains(&("Spark".into(), "Tinker".into(), "Gadgets".into(), 1, 1)));
+        assert!(c.remove_spell("Spark", "Tinker", None));
         assert!(!c.remove_spell("Spark", "Tinker", None));
         assert_eq!(c.spells().len(), 1);
+    }
+
+    #[test]
+    fn money_amounts() {
+        assert_eq!(money_text(0.0), "0");
+        assert_eq!(money_text(-0.0), "0");
+        assert_eq!(money_text(473.0), "473");
+        assert_eq!(money_text(480.5), "480.5");
+        assert_eq!(money_text(-202.0), "-202");
+        assert_eq!(money_text(0.1 + 0.2), "0.3");
+        assert_eq!(money_text(12.345678), "12.3457");
+        assert_eq!(money_text(1000000.0), "1000000");
+    }
+
+    #[test]
+    fn gold_flags_and_partial_removal() {
+        let mut c = ch();
+        assert_eq!(c.gold(), 0.0);
+        c.set_gold(12.5);
+        assert_eq!(c.gold(), 12.5);
+        assert!(c.pcg.value("MONEY").is_some_and(|m| m == "12.5"));
+        assert!(!c.flag("ALLOWDEBT", false));
+        assert!(c.flag("AUTORESIZEGEAR", true));
+        c.set_flag("ALLOWDEBT", true);
+        assert!(c.flag("ALLOWDEBT", false));
+        assert_eq!(c.reduce_equipment("Rope", 1.0), 1.0);
+        assert_eq!(c.equipment()[0].quantity, 1.0);
+        assert_eq!(c.reduce_equipment("Shiny Sword", 3.0), 1.0);
+        assert!(c.equipped().is_empty());
+        assert_eq!(c.reduce_equipment("Nothing", 1.0), 0.0);
     }
 
     #[test]

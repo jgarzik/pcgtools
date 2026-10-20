@@ -214,28 +214,25 @@ impl GameMode {
     }
 
     /// The experience table with the given name (or the first one).
+    /// Rows before any XPTABLE line form a table named `Default`.
     pub fn level_table(&self, name: Option<&str>) -> Vec<LevelRow> {
         let Some(f) = self.files.get("level.lst") else {
             return Vec::new();
         };
         let mut out = Vec::new();
-        let mut cur: Option<&str> = None;
-        let mut taken: Option<&str> = None;
+        let mut cur = "Default";
+        let mut first: Option<&str> = None;
         for l in &f.lines {
             if l.tag == "XPTABLE" {
-                cur = Some(l.value.as_str());
+                cur = l.value.as_str();
                 continue;
             }
             if l.tag != "LEVEL" {
                 continue;
             }
-            let want = match (name, taken) {
-                (Some(n), _) => cur == Some(n),
-                (None, None) => {
-                    taken = cur;
-                    true
-                }
-                (None, Some(t)) => cur == Some(t),
+            let want = match name {
+                Some(n) => cur == n,
+                None => *first.get_or_insert(cur) == cur,
             };
             if want {
                 out.push(LevelRow {
@@ -349,19 +346,9 @@ impl GameModes {
         let mut out = GameModes::default();
         let default = gamemodes_dir.join("default");
         let default = default.is_dir().then_some(default);
-        let mut dirs: Vec<PathBuf> = match std::fs::read_dir(gamemodes_dir) {
-            Ok(rd) => rd
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir() && p.join("miscinfo.lst").is_file())
-                .collect(),
-            Err(e) => {
-                out.diags
-                    .push(Diagnostic::error(Error::io(gamemodes_dir, e).to_string()));
-                return out;
-            }
+        let Some(dirs) = mode_dirs(gamemodes_dir, &mut out.diags) else {
+            return out;
         };
-        dirs.sort();
         for d in dirs {
             match GameMode::load(&d, default.as_deref()) {
                 Ok(gm) => out.modes.push(gm),
@@ -371,6 +358,43 @@ impl GameModes {
         out
     }
 
+    /// Load only the mode a name refers to: the one whose key it is,
+    /// else one that allows it (ALLOWEDMODES).  Only each mode's
+    /// miscinfo.lst is read to decide.
+    pub fn load_named(gamemodes_dir: &Path, name: &str) -> (Option<GameMode>, Diagnostics) {
+        let mut diags = Diagnostics::default();
+        let Some(dirs) = mode_dirs(gamemodes_dir, &mut diags) else {
+            return (None, diags);
+        };
+        let ids: Vec<(PathBuf, String, Vec<String>)> = dirs
+            .into_iter()
+            .map(|d| {
+                let (key, aliases) = mode_identity(&d);
+                (d, key, aliases)
+            })
+            .collect();
+        let hit = ids
+            .iter()
+            .find(|(_, k, _)| k.eq_ignore_ascii_case(name))
+            .or_else(|| {
+                ids.iter().find(|(_, k, a)| {
+                    k.eq_ignore_ascii_case(name) || a.iter().any(|x| x.eq_ignore_ascii_case(name))
+                })
+            });
+        let Some((dir, _, _)) = hit else {
+            return (None, diags);
+        };
+        let default = gamemodes_dir.join("default");
+        let default = default.is_dir().then_some(default);
+        match GameMode::load(dir, default.as_deref()) {
+            Ok(gm) => (Some(gm), diags),
+            Err(e) => {
+                diags.push(Diagnostic::error(e.to_string()));
+                (None, diags)
+            }
+        }
+    }
+
     /// Find the mode a PCC GAMEMODE value refers to.
     pub fn find(&self, name: &str) -> Option<&GameMode> {
         self.modes
@@ -378,6 +402,52 @@ impl GameModes {
             .find(|m| m.key.eq_ignore_ascii_case(name))
             .or_else(|| self.modes.iter().find(|m| m.matches(name)))
     }
+}
+
+/// Game mode directories (those with a miscinfo.lst), sorted.
+fn mode_dirs(gamemodes_dir: &Path, diags: &mut Diagnostics) -> Option<Vec<PathBuf>> {
+    match std::fs::read_dir(gamemodes_dir) {
+        Ok(rd) => {
+            let mut dirs: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p.join("miscinfo.lst").is_file())
+                .collect();
+            dirs.sort();
+            Some(dirs)
+        }
+        Err(e) => {
+            diags.push(Diagnostic::error(Error::io(gamemodes_dir, e).to_string()));
+            None
+        }
+    }
+}
+
+/// A mode's key (GAMEMODEKEY, else its directory name) and the names
+/// it allows (ALLOWEDMODES), as GameMode::load would find them.
+fn mode_identity(dir: &Path) -> (String, Vec<String>) {
+    let mut key = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut aliases = Vec::new();
+    if let Ok(text) = crate::text::TextFile::read(&dir.join("miscinfo.lst")) {
+        for l in &text.lines {
+            let t = l.text.trim_start();
+            if let Some(k) = t.strip_prefix("GAMEMODEKEY:") {
+                key = k.split('\t').next().unwrap_or(k).trim().to_string();
+            } else if let Some(a) = t.strip_prefix("ALLOWEDMODES:") {
+                aliases = a
+                    .split('\t')
+                    .next()
+                    .unwrap_or(a)
+                    .split('|')
+                    .map(|x| x.trim().to_string())
+                    .collect();
+            }
+        }
+    }
+    (key, aliases)
 }
 
 #[cfg(test)]

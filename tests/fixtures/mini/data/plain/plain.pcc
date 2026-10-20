@@ -1,0 +1,11 @@
+CAMPAIGN:Plain Book
+KEY:PL
+GAMEMODE:Plainmode
+SOURCELONG:Plain Book
+DATACONTROL:pl_datacontrol.lst
+VARIABLE:pl_variables.lst
+GLOBALMODIFIER:pl_global.lst
+RACE:pl_races.lst
+RACE:pl_latin1.lst
+DEITY:pl_deities.lst
+CLASS:pl_classes.lst

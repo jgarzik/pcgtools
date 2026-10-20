@@ -63,6 +63,11 @@ fn objects_and_operations() {
     assert_eq!(vals("CLASSES"), vec!["Tinker=1"]);
     assert_eq!(vals("DESCRIPTOR"), vec!["Fire"]);
     assert!(vals("PRECLASS").is_empty());
+    // .CLEAR.x drops only x from a list, whatever its separator
+    let marsh = ds.get(FileKind::Race, "Marshborn").unwrap();
+    let vals = |tag: &str| marsh.values(tag).collect::<Vec<_>>();
+    assert_eq!(vals("LANGBONUS"), vec!["Old Script,Gear Cant"]);
+    assert_eq!(vals("MONCSKILL"), vec!["Climb", "Jump"]);
 
     // spells: MOD applied, FORGET applied, PRECAMPAIGN-gated file skipped
     let spark = ds.get(FileKind::Spell, "Spark").unwrap();

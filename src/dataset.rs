@@ -151,7 +151,8 @@ impl Object {
 
     /// Append tokens.  Clearing forms drop earlier values:
     /// `TAG:.CLEAR` and `TAG:.CLEARALL` all of them, `TAG:.CLEAR.x` those
-    /// matching x, `TAG:.CLEAR|v` all before adding v, `PRE:.CLEAR` every
+    /// matching x (from a list tag, only the item x), `TAG:.CLEAR|v` all
+    /// before adding v, `PRE:.CLEAR` every
     /// prerequisite.  A single-valued tag replaces its earlier value.
     /// KEY and CATEGORY tokens update identity.
     fn apply_tokens(&mut self, toks: Vec<Tok>) {
@@ -165,7 +166,12 @@ impl Object {
                 self.tokens.retain(|x| x.tag != t.tag);
                 continue;
             }
-            if let Some(what) = t.value.strip_prefix(".CLEAR.") {
+            if let Some(form) = list_form(&t.tag) {
+                match self.clear_list_items(&t.tag, form, &t.value) {
+                    Some(rest) => t.value = rest,
+                    None => continue,
+                }
+            } else if let Some(what) = t.value.strip_prefix(".CLEAR.") {
                 let matches = clear_matcher(what);
                 self.tokens.retain(|x| x.tag != t.tag || !matches(&x.value));
                 continue;
@@ -195,6 +201,47 @@ impl Object {
             }
             self.tokens.push(t);
         }
+    }
+
+    /// Apply the `.CLEAR.x` items of a list token: each drops x from
+    /// the lists earlier tokens of the tag gave (for ABILITY, those of
+    /// the same category and nature), and a token left with no items
+    /// goes.  The token's own remaining value, or None if nothing of it
+    /// remains.
+    fn clear_list_items(&mut self, tag: &str, form: ListForm, value: &str) -> Option<String> {
+        let mut list = ListValue::split(form, value);
+        let mut cleared = Vec::new();
+        list.items.retain(|i| match i.strip_prefix(".CLEAR.") {
+            Some(x) => {
+                cleared.push(x.trim().to_string());
+                false
+            }
+            None => true,
+        });
+        if cleared.is_empty() {
+            return Some(value.to_string());
+        }
+        self.tokens.retain_mut(|x| {
+            if x.tag != tag {
+                return true;
+            }
+            let mut old = ListValue::split(form, &x.value);
+            if !old.head.eq_ignore_ascii_case(&list.head) {
+                return true;
+            }
+            let before = old.items.len();
+            old.items
+                .retain(|i| !cleared.iter().any(|c| c.eq_ignore_ascii_case(i.trim())));
+            if old.items.len() == before {
+                return true;
+            }
+            if !old.has_entries() {
+                return false;
+            }
+            x.value = old.join(form);
+            true
+        });
+        list.has_entries().then(|| list.join(form))
     }
 
     /// Lookup key: category-qualified for abilities, lower case.
@@ -277,8 +324,84 @@ pub fn single_valued(tag: &str) -> bool {
     SINGLE_VALUED.contains(&tag)
 }
 
-/// What `TAG:.CLEAR.x` removes: values equal to x, values listing x
-/// among `|`-separated parts, or values x matches as a pattern.
+/// How a tag whose list items may be `.CLEAR.x` holds its list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListForm {
+    /// items separated by `|`
+    Pipe,
+    /// items separated by `,`, then `|` and prerequisites
+    Comma,
+    /// `CATEGORY|NATURE|` then items separated by `|`
+    Ability,
+}
+
+fn list_form(tag: &str) -> Option<ListForm> {
+    match tag {
+        "CSKILL" | "CCSKILL" | "MONCSKILL" | "MONCCSKILL" | "RACESUBTYPE" | "VISION" => {
+            Some(ListForm::Pipe)
+        }
+        "LANGBONUS" | "DOMAINS" => Some(ListForm::Comma),
+        "ABILITY" => Some(ListForm::Ability),
+        _ => None,
+    }
+}
+
+/// A list token's value taken apart.
+struct ListValue {
+    /// what precedes the items (an ABILITY's category and nature)
+    head: String,
+    items: Vec<String>,
+    /// what follows them (prerequisites after a comma list)
+    tail: String,
+}
+
+impl ListValue {
+    fn split(form: ListForm, value: &str) -> ListValue {
+        let (head, rest) = match form {
+            ListForm::Ability => match value.splitn(3, '|').collect::<Vec<_>>()[..] {
+                [c, n, rest] => (format!("{}|{}", c, n), rest),
+                _ => (value.to_string(), ""),
+            },
+            _ => (String::new(), value),
+        };
+        let (list, tail, sep) = match form {
+            ListForm::Comma => match rest.split_once('|') {
+                Some((l, t)) => (l, format!("|{}", t), ','),
+                None => (rest, String::new(), ','),
+            },
+            _ => (rest, String::new(), '|'),
+        };
+        let items = if list.is_empty() {
+            Vec::new()
+        } else {
+            list.split(sep).map(str::to_string).collect()
+        };
+        ListValue { head, items, tail }
+    }
+
+    /// Is any item left that is not a prerequisite?
+    fn has_entries(&self) -> bool {
+        self.items.iter().any(|i| {
+            !(crate::token::pre::Prereq::is_pre_tag(i.split(':').next().unwrap_or(""))
+                || i.starts_with("!PRE"))
+        })
+    }
+
+    fn join(&self, form: ListForm) -> String {
+        let items = self
+            .items
+            .join(if form == ListForm::Comma { "," } else { "|" });
+        if self.head.is_empty() {
+            format!("{}{}", items, self.tail)
+        } else {
+            format!("{}|{}{}", self.head, items, self.tail)
+        }
+    }
+}
+
+/// What `TAG:.CLEAR.x` removes from a tag that is not a list: values
+/// equal to x, values listing x among `|`-separated parts, or values
+/// x matches as a pattern (as DESC and BENEFIT take it).
 fn clear_matcher(what: &str) -> impl Fn(&str) -> bool {
     let what = what.to_string();
     let re = regex::Regex::new(&what).ok();
@@ -977,7 +1100,7 @@ mod tests {
         ]);
         assert_eq!(vals(&o, "CSKILL"), vec!["Swim"]);
         let o = obj(&[("CSKILL", "Climb|Swim"), ("CSKILL", ".CLEAR.Swim")]);
-        assert!(vals(&o, "CSKILL").is_empty());
+        assert_eq!(vals(&o, "CSKILL"), vec!["Climb"]);
         let o = obj(&[("DESCRIPTOR", "Fire"), ("DESCRIPTOR", ".CLEAR|Cold")]);
         assert_eq!(vals(&o, "DESCRIPTOR"), vec!["Cold"]);
         let o = obj(&[
@@ -988,6 +1111,63 @@ mod tests {
         ]);
         assert!(vals(&o, "PRECLASS").is_empty() && vals(&o, "!PREFEAT").is_empty());
         assert_eq!(vals(&o, "TYPE"), vec!["Arcane"]);
+    }
+
+    #[test]
+    fn clear_one_list_item() {
+        // comma lists
+        let o = obj(&[
+            ("LANGBONUS", "Elven,Dwarven,Orc"),
+            ("LANGBONUS", "Gnome"),
+            ("LANGBONUS", ".CLEAR.dwarven"),
+            ("LANGBONUS", ".CLEAR.Gnome"),
+        ]);
+        assert_eq!(vals(&o, "LANGBONUS"), vec!["Elven,Orc"]);
+        // a removal among additions; DOMAINS keeps its prerequisites
+        let o = obj(&[
+            ("DOMAINS", "Good,Law|PREALIGN:LG"),
+            ("DOMAINS", ".CLEAR.Good,Sun"),
+        ]);
+        assert_eq!(vals(&o, "DOMAINS"), vec!["Law|PREALIGN:LG", "Sun"]);
+        let o = obj(&[("DOMAINS", "Good|PREALIGN:LG"), ("DOMAINS", ".CLEAR.Good")]);
+        assert!(vals(&o, "DOMAINS").is_empty());
+        // pipe lists
+        let o = obj(&[
+            ("CSKILL", "Knowledge (Nature)|Ride"),
+            ("CSKILL", ".CLEAR.Knowledge (Nature)|Knowledge (Religion)"),
+            ("CSKILL", ".CLEAR.Ride|.CLEAR.Swim"),
+        ]);
+        assert_eq!(vals(&o, "CSKILL"), vec!["Knowledge (Religion)"]);
+        // a vision is removed only as written, distance and all
+        let o = obj(&[
+            ("VISION", "Darkvision (60')|Low-light"),
+            ("VISION", ".CLEAR.Darkvision"),
+            ("VISION", ".CLEAR.Low-light"),
+        ]);
+        assert_eq!(vals(&o, "VISION"), vec!["Darkvision (60')"]);
+        // abilities: only from the same category and nature
+        let o = obj(&[
+            ("ABILITY", "FEAT|AUTOMATIC|Alertness|Dodge|PREALIGN:LG"),
+            ("ABILITY", "FEAT|VIRTUAL|Dodge"),
+            ("ABILITY", "Special Ability|AUTOMATIC|Turn Undead"),
+            ("ABILITY", "FEAT|AUTOMATIC|.CLEAR.Dodge|Mobility"),
+            ("ABILITY", "Special Ability|AUTOMATIC|.CLEAR.Turn Undead"),
+        ]);
+        assert_eq!(
+            vals(&o, "ABILITY"),
+            vec![
+                "FEAT|AUTOMATIC|Alertness|PREALIGN:LG",
+                "FEAT|VIRTUAL|Dodge",
+                "FEAT|AUTOMATIC|Mobility"
+            ]
+        );
+        // descriptions are removed by pattern
+        let o = obj(&[
+            ("DESC", "Glows softly."),
+            ("DESC", "Hums."),
+            ("DESC", ".CLEAR.^Glow"),
+        ]);
+        assert_eq!(vals(&o, "DESC"), vec!["Hums."]);
     }
 
     #[test]

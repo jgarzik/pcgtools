@@ -5,3 +5,5 @@ Stonekin	SIZE:M	MOVE:Walk,20	LEVELADJUSTMENT:1	DEFINESTAT:LOCK|MGT|12	BONUS:STAT
 Cogbeast	SIZE:M	MOVE:Walk,30	HITDICEADVANCEMENT:2,4,*	NATURALATTACKS:Gnash,Weapon.Natural.Melee.Piercing,*1,1d6
 Driftborn	SIZE:M	MOVE:Walk,30	AUTO:LANG|Old Script	LANGBONUS:Old Script
 Driftborn.MOD	AUTO:LANG|.CLEAR|Trade Tongue	LANGBONUS:.CLEAR	LANGBONUS:Trade Tongue,Gear Cant
+Marshborn	SIZE:M	MOVE:Walk,30	LANGBONUS:Old Script,Trade Tongue,Gear Cant	MONCSKILL:Climb|Swim
+Marshborn.MOD	LANGBONUS:.CLEAR.Trade Tongue	MONCSKILL:.CLEAR.Swim|Jump

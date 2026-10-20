@@ -194,12 +194,14 @@ impl<'a> Spells<'a> {
             granted_known: BTreeMap::new(),
             item_books: Vec::new(),
         };
+        // books of spell-like abilities come before the lists the file
+        // names, which are read after what the character has
+        let slas = s.spell_likes(calc);
         for l in calc.ch.pcg.lines_tagged("SPELLBOOK") {
             if let Some(n) = l.head().map(|h| h.value_text()) {
                 s.add_book(&n);
             }
         }
-        let slas = s.spell_likes(calc);
         if !slas.is_empty() {
             s.casters.push(Caster::Race);
             s.by_caster.push(slas);

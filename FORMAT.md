@@ -1403,6 +1403,12 @@ automatic spells, domain lists and `SPELLKNOWN` grants.
 | DC | the game mode `SPELLBASEDC` (default `10+SPELLLEVEL+BASESPELLSTAT`) + `DC` bonuses (all spells, spell, class, domain, type, school, subschool, descriptor); blank when the spell allows no save |
 | range | the game mode `SPELLRANGE` formula at the caster level, as `Name (distance)` |
 
+Spell books are numbered in order: known spells, innate, the books of
+spell-like abilities, the character file's lists, then spellbook items.
+With a casting race, the prepared lists leave out the book whose number
+is the position of a caster (race first) with known spells, as PCGen's
+sheet does.
+
 ---
 
 ## Appendix A. A complete small example

@@ -407,6 +407,12 @@ pub fn build(s: &SheetCtx) -> Element {
         mem.push(cim);
     }
     for (b, name) in books.iter().enumerate().skip(2) {
+        // with a casting race, PCGen's sheet leaves out the book whose
+        // number is the position of a caster with known spells (it
+        // means to ask whether the race has spells in the book)
+        if race && b < cx.sp.casters.len() && !cx.sp.spells_in(b, KNOWN_BOOK, None).is_empty() {
+            continue;
+        }
         let mut bk = Element::new("spellbook")
             .attr("number", b)
             .attr("name", name);

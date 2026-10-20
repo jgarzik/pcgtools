@@ -1053,3 +1053,34 @@ fn temporary_copies_in_sets_follow_the_set() {
     mark(&mut s, "Y");
     assert!(session_sheet(&s).contains_key(copy));
 }
+
+#[test]
+fn spell_like_books_come_before_saved_lists() {
+    let mut s = nova();
+    s.exec("set stat MGT 14").unwrap();
+    s.exec("class add Sage").unwrap();
+    s.exec("spell add Sage Ember").unwrap();
+    s.exec("spellbook add Morning").unwrap();
+    s.exec("spell prep Sage Ember Morning").unwrap();
+    s.exec("feat add \"Spark Touched\"").unwrap();
+    let m = sheet_of(&s);
+    let book = "spells[0]/spells_innate[0]/class_innate[0]/spellbook[0]";
+    assert_eq!(at(&m, &format!("{}/@name", book)), "Sparks");
+    assert_eq!(at(&m, &format!("{}/@number", book)), "2");
+    let names = |m: &HashMap<String, String>| {
+        (0..3)
+            .filter_map(|i| {
+                m.get(&format!(
+                    "character/spells[0]/memorized_spells[0]/spellbook[{}]/@name",
+                    i
+                ))
+                .cloned()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&m), ["Sparks", "Morning"]);
+    // PCGen's sheet drops book 2 from the prepared lists once the
+    // caster at position 2 (after the race and Sage) knows spells
+    s.exec("class add Chanter").unwrap();
+    assert_eq!(names(&sheet_of(&s)), ["Morning"]);
+}

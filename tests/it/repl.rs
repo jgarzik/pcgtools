@@ -49,7 +49,7 @@ fn info_and_queries() {
     // copies are made after the definitions of their kind
     assert_eq!(
         ok(&mut s, "ls feat"),
-        "Skill Knack (FEAT)\nSteady Hands (FEAT)\nQuickStep (FEAT)\nIron Fist (FEAT)\nAxe Familiarity (FEAT)\nAxe Grip (FEAT)\nArmor Ease (FEAT)\nOdd Knack (FEAT)\nEven Knack (FEAT)\nLong Arm (FEAT)\nSpell Spring (FEAT)\nFlicker (FEAT)\nWide Spell (FEAT)\nSharp Spell (FEAT)\nSpark Touched (FEAT)\nKeen Nose (FEAT)\nQuicker Step (FEAT)"
+        "Skill Knack (FEAT)\nSteady Hands (FEAT)\nQuickStep (FEAT)\nIron Fist (FEAT)\nAxe Familiarity (FEAT)\nAxe Grip (FEAT)\nArmor Ease (FEAT)\nOdd Knack (FEAT)\nEven Knack (FEAT)\nLong Arm (FEAT)\nSpell Spring (FEAT)\nFlicker (FEAT)\nWide Spell (FEAT)\nSharp Spell (FEAT)\nRope Climber (FEAT)\nSteady Mind (FEAT)\nSpark Touched (FEAT)\nKeen Nose (FEAT)\nQuicker Step (FEAT)"
     );
     assert_eq!(
         ok(&mut s, "ls equipment \"*spoon\" TYPE=Kitchen"),

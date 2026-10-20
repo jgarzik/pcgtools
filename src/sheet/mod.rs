@@ -37,6 +37,8 @@ pub struct SheetCtx<'a> {
     pub calc: Calc<'a>,
     pub sheet: Sheet,
     pub vars: VarSystem<'a>,
+    /// the fuller sheet: situational skill rows and spell concentration
+    pub full: bool,
 }
 
 impl<'a> SheetCtx<'a> {
@@ -50,6 +52,7 @@ impl<'a> SheetCtx<'a> {
             calc,
             sheet,
             vars,
+            full: false,
         }
     }
 }
@@ -265,7 +268,19 @@ pub fn source_text(s: &SheetCtx, o: &Object) -> String {
 
 /// Build the sheet for a character.
 pub fn build(ch: &Character, ctx: &Context) -> Element {
-    let s = SheetCtx::new(ch, ctx);
+    build_with(SheetCtx::new(ch, ctx))
+}
+
+/// Build the fuller sheet for a character: [`build`] plus a row for
+/// each skill situation with a bonus (`Skill (Situation)`, after the
+/// skill) and each spell's concentration, where the game mode has it.
+pub fn build_full(ch: &Character, ctx: &Context) -> Element {
+    let mut s = SheetCtx::new(ch, ctx);
+    s.full = true;
+    build_with(s)
+}
+
+fn build_with(s: SheetCtx) -> Element {
     let mut root = Element::new("character");
     root.push(basics::build(&s));
     for e in combat::build(&s) {

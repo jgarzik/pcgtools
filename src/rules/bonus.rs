@@ -150,6 +150,10 @@ impl BonusTable {
         ) {
             target = target.replace('=', ".");
         }
+        // concentration by spell type: `TYPE=x` is `TYPE.x`
+        if cat == "CONCENTRATION" && target.starts_with("TYPE=") {
+            target = target.replace('=', ".");
+        }
         format!("{}.{}", cat, target)
     }
 
@@ -508,5 +512,24 @@ mod tests {
         assert_eq!(b.total("COMBAT", "ACCHECK"), -2.0);
         assert_eq!(b.total("COMBAT", "TOHIT"), 0.0);
         assert_eq!(b.targets("COMBAT"), vec!["AC", "ACCHECK"]);
+    }
+
+    #[test]
+    fn concentration_by_type_either_spelling() {
+        let mut b = t();
+        b.add("CONCENTRATION", "TYPE=Arcane", None, 1.0);
+        b.add("CONCENTRATION", "TYPE.Arcane", None, 2.0);
+        b.add("CONCENTRATION", "SPELL.Fly=Me", None, 4.0);
+        assert_eq!(b.total("CONCENTRATION", "TYPE.ARCANE"), 3.0);
+        // only a leading TYPE= names a type
+        assert_eq!(b.total("CONCENTRATION", "SPELL.Fly=Me"), 4.0);
+    }
+
+    #[test]
+    fn situations_keep_their_equals_sign() {
+        let mut b = t();
+        b.add("SITUATION", "Climb=On Ropes", None, 2.0);
+        assert_eq!(b.total("SITUATION", "climb=on ropes"), 2.0);
+        assert_eq!(b.total("SITUATION", "Climb.On Ropes"), 0.0);
     }
 }

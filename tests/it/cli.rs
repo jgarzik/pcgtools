@@ -467,3 +467,53 @@ fn stats_warn_when_values_do_not_settle() {
     ]);
     assert!(stderr(&o).contains("did not settle"), "{}", stderr(&o));
 }
+
+#[test]
+fn full_sheet_adds_situations_and_concentration() {
+    let sys = common::fixture("mini/system")
+        .to_string_lossy()
+        .into_owned();
+    let data = data_dir();
+    let out = scratch("full.pcg");
+    let script = format!(
+        "class add Sage\nfeat add \"Rope Climber\"\nspell add Sage Ember\nsave \"{}\"\n",
+        out.display()
+    );
+    let o = pcgtools_stdin(
+        &[
+            "--data-dir",
+            &data,
+            "--system-dir",
+            &sys,
+            "repl",
+            "--new",
+            "--gamemode",
+            "Testmode",
+            "--campaign",
+            "TB",
+        ],
+        &script,
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let path = out.to_string_lossy().into_owned();
+    let sheet = |full: bool| {
+        let mut args = vec!["--data-dir", &data, "--system-dir", &sys, "pcg", "sheet"];
+        if full {
+            args.push("--full");
+        }
+        args.push(&path);
+        stdout(&pcgtools(&args))
+    };
+    let base = sheet(false);
+    assert!(base.contains("<name>Climbing</name>"), "{}", base);
+    assert!(!base.contains("Climbing (Ropes)"), "{}", base);
+    assert!(!base.contains("<concentration>"), "{}", base);
+    let full = sheet(true);
+    assert!(full.contains("<name>Climbing (Ropes)</name>"), "{}", full);
+    // caster level 1, MGT +0
+    assert!(
+        full.contains("<concentration>+1</concentration>"),
+        "{}",
+        full
+    );
+}

@@ -1294,26 +1294,13 @@ pub fn metamagic_suffix(calc: &Calc, info: &SpellInfo) -> String {
 
 /// Save DC for a spell.
 pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
-    let spell = cs.spell;
     if let Some(f) = &info.fixed_dc {
         if info.book.eq_ignore_ascii_case(INNATE_BOOK) || !matches!(cs.owner, Owner::Class(_)) {
             return calc.eval_formula(f) as i64;
         }
     }
-    let b = &calc.bonus;
     let cls = owner_class(calc, cs);
-    let stat_mod = cls
-        .and_then(|c| c.get("SPELLSTAT"))
-        .map(|st| {
-            let score = calc.stat_score(st)
-                + b.total("STAT", "BASESPELLSTAT")
-                + cls
-                    .map(|c| b.total("STAT", &format!("BASESPELLSTAT;CLASS={}", c.key)))
-                    .unwrap_or(0.0)
-                + b.total("STAT", &format!("CAST.{}", st));
-            calc.stat_mod_for(st, score)
-        })
-        .unwrap_or(0.0);
+    let stat_mod = base_spell_stat(calc, cls);
     let formula = calc
         .gm
         .and_then(|g| g.misc("SPELLBASEDC"))
@@ -1328,38 +1315,142 @@ pub fn save_dc(calc: &Calc, cs: &CharSpell, info: &SpellInfo) -> i64 {
         .filter_map(|k| metamagic_feat(calc, k))
         .map(|f| feat_bonus(calc, f, "DC", "FEATBONUS"))
         .sum();
-    let mut dc = meta_dc
+    let dc = meta_dc
         + calc.eval_with(&formula, &|n| match n.to_ascii_uppercase().as_str() {
             "SPELLLEVEL" => Some(level),
             "BASESPELLSTAT" => Some(stat_mod),
             _ => None,
         });
-    dc += b.total("DC", "ALLSPELLS");
+    (dc + spell_bonuses(calc, cs, "DC")) as i64
+}
+
+/// The modifier of a class's spell stat (SPELLSTAT), with the bonuses
+/// to it for casting; 0 without a class or spell stat.
+fn base_spell_stat(calc: &Calc, cls: Option<&Object>) -> f64 {
+    let b = &calc.bonus;
+    let Some((cls, st)) = cls.and_then(|c| Some((c, c.get("SPELLSTAT")?))) else {
+        return 0.0;
+    };
+    let score = calc.stat_score(st)
+        + b.total("STAT", "BASESPELLSTAT")
+        + b.total("STAT", &format!("BASESPELLSTAT;CLASS={}", cls.key))
+        + b.total("STAT", &format!("CAST.{}", st));
+    calc.stat_mod_for(st, score)
+}
+
+/// Bonuses of a category (DC, CONCENTRATION) that apply to a spell:
+/// all spells, the spell's own stat when the caster uses it, and those
+/// for the spell, its domain, class, spell type, schools, subschools
+/// and descriptors.
+fn spell_bonuses(calc: &Calc, cs: &CharSpell, category: &str) -> f64 {
+    let b = &calc.bonus;
+    let spell = cs.spell;
+    let cls = owner_class(calc, cs);
+    let mut t = b.total(category, "ALLSPELLS");
     if cls.is_none() || cls.is_some_and(|c| c.has("USESPELLSPELLSTAT")) {
         if let Some(st) = spell.get("STAT") {
-            dc += calc.stat_mod(st);
+            t += calc.stat_mod(st);
         }
     }
-    dc += b.total("DC", &format!("SPELL.{}", spell.key));
+    if !spell.key.is_empty() {
+        t += b.total(category, &format!("SPELL.{}", spell.key));
+    }
     if let Owner::Domain(d, _) = &cs.owner {
-        dc += b.total("DC", &format!("DOMAIN.{}", d.key));
+        t += b.total(category, &format!("DOMAIN.{}", d.key));
     }
     if let Some(c) = cls {
-        dc += b.total("DC", &format!("CLASS.{}", c.key));
-        if let Some(t) = spell_type(c) {
-            dc += b.total("DC", &format!("TYPE.{}", t));
+        t += b.total(category, &format!("CLASS.{}", c.key));
+        if let Some(st) = spell_type(c) {
+            t += b.total(category, &format!("TYPE.{}", st));
         }
     }
     for s in spell.values("SCHOOL") {
-        dc += b.total("DC", &format!("SCHOOL.{}", s));
+        t += b.total(category, &format!("SCHOOL.{}", s));
     }
     for s in spell.values("SUBSCHOOL") {
-        dc += b.total("DC", &format!("SUBSCHOOL.{}", s));
+        t += b.total(category, &format!("SUBSCHOOL.{}", s));
     }
     for d in spell.values("DESCRIPTOR").flat_map(|v| v.split(',')) {
-        dc += b.total("DC", &format!("DESCRIPTOR.{}", d.trim()));
+        t += b.total(category, &format!("DESCRIPTOR.{}", d.trim()));
     }
-    dc as i64
+    t
+}
+
+/// Concentration for a spell: the game mode's SPELLBASECONCENTRATION
+/// (with the spell's caster level and the caster's spell stat
+/// modifier), plus metamagic feat and CONCENTRATION bonuses.  None
+/// when the game mode has no concentration.
+pub fn concentration(calc: &Calc, sp: &Spells, cs: &CharSpell, info: &SpellInfo) -> Option<i64> {
+    let formula = calc
+        .gm
+        .and_then(|g| g.misc("SPELLBASECONCENTRATION"))
+        .filter(|f| !f.trim().is_empty())?;
+    let cls = owner_class(calc, cs);
+    let stat_mod = base_spell_stat(calc, cls);
+    // without a class the caster level is that of every casting class
+    // for this spell together
+    let cl = if cls.is_some() {
+        caster_level(calc, sp, cs)
+    } else {
+        calc.classes()
+            .iter()
+            .filter(|(c, _)| spell_type(c).is_some())
+            .map(|(c, _)| {
+                let as_class = CharSpell {
+                    owner: Owner::Class(c),
+                    ..cs.clone()
+                };
+                caster_level(calc, sp, &as_class)
+            })
+            .sum()
+    } as f64;
+    let level = (info.level - metamagic_levels(calc, &info.feats)) as f64;
+    let meta: f64 = info
+        .feats
+        .iter()
+        .filter_map(|k| metamagic_feat(calc, k))
+        .map(|f| feat_bonus(calc, f, "CONCENTRATION", "FEATBONUS"))
+        .sum();
+    let base = calc.eval_with(formula, &|n| match n.to_ascii_uppercase().as_str() {
+        "SPELLLEVEL" => Some(level),
+        "BASESPELLSTAT" => Some(stat_mod),
+        "CASTERLEVEL" => Some(cl),
+        _ => None,
+    });
+    Some((base.trunc() + meta + spell_bonuses(calc, cs, "CONCENTRATION")) as i64)
+}
+
+/// A class's own concentration, for no spell in particular.
+pub fn class_concentration(calc: &Calc, sp: &Spells, cls: &Object) -> Option<i64> {
+    let blank = Object {
+        kind: FileKind::Spell,
+        head_tag: None,
+        name: String::new(),
+        key: String::new(),
+        category: None,
+        tokens: Vec::new(),
+        sublines: Vec::new(),
+        children: Vec::new(),
+        source: Vec::new(),
+        origin: cls.origin,
+        history: Vec::new(),
+    };
+    let cs = CharSpell {
+        spell: &blank,
+        owner: Owner::Class(cls),
+        fixed_cl: None,
+        infos: Vec::new(),
+    };
+    let info = SpellInfo {
+        book: String::new(),
+        level: 0,
+        times: 0,
+        unit: String::new(),
+        fixed_dc: None,
+        feats: Vec::new(),
+        pages: 0,
+    };
+    concentration(calc, sp, &cs, &info)
 }
 
 /// The highest spell level slots are counted to.

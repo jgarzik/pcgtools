@@ -4454,6 +4454,32 @@ impl<'a> Calc<'a> {
         self.skill_total(skill) - self.skill_ranks(skill) as i64 - stat
     }
 
+    /// The situations a skill declares (SITUATION) that have a
+    /// `SITUATION|skill=situation` bonus other than zero, in name
+    /// order, with that bonus.
+    pub fn skill_situations(&self, sk: &Object) -> Vec<(String, i64)> {
+        let mut declared: Vec<&str> = Vec::new();
+        for v in sk.values("SITUATION") {
+            for (i, s) in v.split('|').enumerate() {
+                if s == ".CLEARALL" {
+                    if i == 0 {
+                        declared.clear();
+                    }
+                } else if !s.is_empty() && !declared.contains(&s) {
+                    declared.push(s);
+                }
+            }
+        }
+        declared.sort_unstable();
+        declared
+            .into_iter()
+            .filter_map(|s| {
+                let b = self.bonus.total("SITUATION", &format!("{}={}", sk.key, s));
+                (b.abs() > 0.01).then(|| (s.to_string(), b as i64))
+            })
+            .collect()
+    }
+
     /// Armor class of a game-mode AC type (Total, Flatfooted, ...).
     pub fn ac_of_type(&self, name: &str) -> i64 {
         let Some(gm) = self.gm else {

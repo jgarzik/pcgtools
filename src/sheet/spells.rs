@@ -10,13 +10,13 @@
 // SPDX-License-Identifier: MIT
 
 use super::units::Units;
-use super::{describe, output_name, source_text, Element, SheetCtx};
+use super::{describe, output_name, signed, source_text, Element, SheetCtx};
 use crate::dataset::Object;
 use crate::rules::calc::Calc;
 use crate::rules::spells::{
-    cast_per_day, caster_level, default_spell_range, is_specialty, known_at, metamagic_range,
-    metamagic_suffix, owner_class, save_dc, spell_type, Caster, CharSpell, SpellInfo, Spells,
-    INNATE_BOOK, KNOWN_BOOK,
+    cast_per_day, caster_level, class_concentration, concentration, default_spell_range,
+    is_specialty, known_at, metamagic_range, metamagic_suffix, owner_class, save_dc, spell_type,
+    Caster, CharSpell, SpellInfo, Spells, INNATE_BOOK, KNOWN_BOOK,
 };
 
 /// Evaluate parenthesized parts of spell text: `(CASTERLEVEL)` becomes
@@ -177,6 +177,14 @@ impl Ctx<'_, '_> {
         e.add("components", joined(sp, "COMPS"));
         e.add("castingtime", joined(sp, "CASTTIME"));
         e.add("casterlevel", cl);
+        if self.s.full {
+            e.add(
+                "concentration",
+                concentration(c, &self.sp, cs, info)
+                    .map(signed)
+                    .unwrap_or_default(),
+            );
+        }
         let save = joined(sp, "SAVEINFO");
         let dc = if save.is_empty() || save == "None" || save == "No" {
             String::new()
@@ -332,6 +340,14 @@ pub fn build(s: &SheetCtx) -> Element {
             .attr("number", ci)
             .attr("spelllistclass", cx.class_name(ci))
             .attr("spellcastertype", spell_type(cls).unwrap_or(""));
+        if s.full {
+            ce = ce.attr(
+                "concentration",
+                class_concentration(c, &cx.sp, cls)
+                    .map(signed)
+                    .unwrap_or_default(),
+            );
+        }
         let domains_here = s.ch.pcg.lines_tagged("DOMAIN").any(|l| {
             l.get("SOURCE")
                 .and_then(|e| e.children().iter().find(|x| x.tag == "NAME"))

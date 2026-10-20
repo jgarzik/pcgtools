@@ -1233,7 +1233,8 @@ checks every leaf of an expected sheet against the computed one, prints
 each mismatch as path, wanted and got, and fails on any mismatch.
 Leaf paths key a repeated element by its `name` child
 (`skill[Climb]`, `[Name#2]` for a repeat) and an unnamed one by
-position (`para[0]`).
+position (`para[0]`). `--full` builds the fuller sheet, which adds
+situational skill rows (10.4) and spell concentration (10.8).
 
 ### 10.1 Sections
 
@@ -1313,6 +1314,11 @@ heights and weights follow the game mode's default unit set
   (default 2). `unused` is the sum of the character file's remaining
   skill points per class (adjusted per 9.6 under the `RETROSKILL`
   rule); `total` is their sum.
+* Fuller sheet only: after a skill's row, a row `Skill (Situation)` for
+  each situation the skill declares (`SITUATION`, `|`-separated,
+  `.CLEARALL` first clears) whose `SITUATION.<skill key>=<situation>`
+  bonus total is not zero, in name order. Its `mod`, `skill_mod`,
+  `misc_mod` and trained/exclusive totals include that bonus.
 
 ### 10.5 Attacks and weapons
 
@@ -1402,6 +1408,7 @@ automatic spells, domain lists and `SPELLKNOWN` grants.
 | specialty / domain slot | `cast` shows `+N` for specialty spells, `+1` for a divine caster's domain slot |
 | DC | the game mode `SPELLBASEDC` (default `10+SPELLLEVEL+BASESPELLSTAT`) + `DC` bonuses (all spells, spell, class, domain, type, school, subschool, descriptor); blank when the spell allows no save |
 | range | the game mode `SPELLRANGE` formula at the caster level, as `Name (distance)` |
+| concentration | fuller sheet only, signed, blank without a game mode `SPELLBASECONCENTRATION`: that formula (`CASTERLEVEL`, `BASESPELLSTAT`, `SPELLLEVEL`) + metamagic `CONCENTRATION.FEATBONUS` + `CONCENTRATION` bonuses as for DC (`TYPE=x` is `TYPE.x`); a spell without a class has as caster level the sum over every casting class; a class's own concentration (its `known_spells` attribute) is that of a blank spell |
 
 Spell books are numbered in order: known spells, innate, the books of
 spell-like abilities, the character file's lists, then spellbook items.

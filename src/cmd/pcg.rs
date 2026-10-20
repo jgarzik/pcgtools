@@ -165,11 +165,15 @@ pub fn stats(o: &GlobalOpts, file: &Path, verbose: bool, explain: &[String]) -> 
     Ok(true)
 }
 
-pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>) -> CmdResult {
+pub fn sheet(o: &GlobalOpts, file: &Path, compare: Option<&Path>, full: bool) -> CmdResult {
     let c = Character::read(file)?;
     let ctx = Context::for_character(&c, o.dirs(None));
     report(&ctx.diags);
-    let sheet = pcgtools::sheet::build(&c, &ctx);
+    let sheet = if full {
+        pcgtools::sheet::build_full(&c, &ctx)
+    } else {
+        pcgtools::sheet::build(&c, &ctx)
+    };
     warn_unsettled(
         &pcgtools::rules::calc::Calc::new(&ctx.dataset, ctx.gamemode.as_ref(), &c).run(),
     );

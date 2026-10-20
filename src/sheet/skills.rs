@@ -222,34 +222,47 @@ pub fn build(s: &SheetCtx) -> Element {
     );
 
     for r in &rows {
-        let int_ranks = r.ranks as i64;
-        let m = r.total - int_ranks;
-        let mut sk = Element::new("skill");
-        sk.add("name", &r.name);
-        sk.add("ranks", float_text(r.ranks));
-        sk.add("mod", m);
-        sk.add("skill_mod", r.total);
-        sk.add("ability_mod", r.stat_mod);
-        sk.add("misc_mod", m - r.stat_mod);
-        sk.add("ability", r.keystat.unwrap_or(""));
-        sk.add("synergy", &r.name);
-        sk.add("untrained", if r.untrained { "Y" } else { "NO" });
-        sk.add("exclusive", if r.exclusive { "Y" } else { "N" });
-        let trained = if !r.untrained && int_ranks == 0 {
-            0
-        } else {
-            r.total
-        };
-        let excl = if (r.exclusive || !r.untrained) && int_ranks == 0 {
-            0
-        } else {
-            r.total
-        };
-        sk.add("trained_total", trained);
-        sk.add("exclusive_total", excl);
-        skills.push(sk);
+        skills.push(row(r, &r.name, 0));
+        // the fuller sheet follows a skill with its situations
+        if s.full {
+            for (sit, bonus) in c.skill_situations(r.obj) {
+                skills.push(row(r, &format!("{} ({})", r.name, sit), bonus));
+            }
+        }
     }
     skills
+}
+
+/// A skill's row, named `name`, with `extra` added to its totals (a
+/// situation's bonus).
+fn row(r: &Row, name: &str, extra: i64) -> Element {
+    let int_ranks = r.ranks as i64;
+    let total = r.total + extra;
+    let m = total - int_ranks;
+    let mut sk = Element::new("skill");
+    sk.add("name", name);
+    sk.add("ranks", float_text(r.ranks));
+    sk.add("mod", m);
+    sk.add("skill_mod", total);
+    sk.add("ability_mod", r.stat_mod);
+    sk.add("misc_mod", m - r.stat_mod);
+    sk.add("ability", r.keystat.unwrap_or(""));
+    sk.add("synergy", name);
+    sk.add("untrained", if r.untrained { "Y" } else { "NO" });
+    sk.add("exclusive", if r.exclusive { "Y" } else { "N" });
+    let trained = if !r.untrained && int_ranks == 0 {
+        0
+    } else {
+        total
+    };
+    let excl = if (r.exclusive || !r.untrained) && int_ranks == 0 {
+        0
+    } else {
+        total
+    };
+    sk.add("trained_total", trained);
+    sk.add("exclusive_total", excl);
+    sk
 }
 
 #[cfg(test)]

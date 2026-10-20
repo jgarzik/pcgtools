@@ -1,7 +1,8 @@
 SOURCELONG:Test Book	SOURCESHORT:TB
 Tinkering	KEYSTAT:GRC	TYPE:Craft	BONUS:SKILL|Tinkering|3|TYPE=ClassSkill|PRECSKILL:1,Tinkering|PRESKILL:1,Tinkering=1
-Climbing	KEYSTAT:MGT	ACHECK:YES
+Climbing	KEYSTAT:MGT	ACHECK:YES	SITUATION:Walls|Ropes
 Tinkering Flair	KEY:Flair ~ Tinkering	KEYSTAT:GRC	PREVARGT:var("SKILL.Tinkering.MISC"),2
 Gadget Flair	KEY:Flair ~ Gadget	KEYSTAT:GRC	PREVARGT:var("SKILL.Tinkering.MISC"),3
 Swimming	KEYSTAT:MGT	ACHECK:WEIGHT
 Diving	KEYSTAT:MGT	PRESTAT:1,MGT=16
+Climbing.MOD	SITUATION:Cliffs

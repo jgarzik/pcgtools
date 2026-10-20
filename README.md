@@ -101,7 +101,7 @@ modifications of missing objects, duplicates, and unknown game modes.
     pcgtools pcg show HERO.pcg
     pcgtools pcg lint HERO.pcg       # check the character against its data
     pcgtools pcg stats HERO.pcg [-v] [-e SKILL.Stealth -e COMBAT.AC]
-    pcgtools pcg sheet HERO.pcg [--compare EXPECTED.xml]
+    pcgtools pcg sheet HERO.pcg [--full] [--compare EXPECTED.xml]
     pcgtools pcg vars HERO.pcg [-s PC.STAT]
 
 `pcg stats` computes ability scores, base attack bonus, saves, hit
@@ -113,8 +113,10 @@ total by listing every bonus that contributes to it.
 skills, attacks, weapons with to-hit and damage per mode and range,
 protection, equipment and load, feats and special abilities,
 proficiencies, languages, class features, domains, companions and
-spells. `--compare` lists every value that differs from an expected
-sheet. `pcg vars` shows the variables the data declares and their
+spells. `--full` adds what PCGen's fuller sheet shows beyond that: a
+row for each skill situation with a bonus (`Perception (Underwater)`)
+and each spell's concentration. `--compare` lists every value that
+differs from an expected sheet. `pcg vars` shows the variables the data declares and their
 values, by scope.
 
 ### Character editor

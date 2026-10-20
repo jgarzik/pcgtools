@@ -1054,6 +1054,87 @@ fn temporary_copies_in_sets_follow_the_set() {
     assert!(session_sheet(&s).contains_key(copy));
 }
 
+fn full_sheet_of(s: &pcgtools::repl::Session) -> HashMap<String, String> {
+    sheet::build_full(&s.ch, &s.ctx)
+        .flatten()
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn situation_rows_follow_their_skill_in_the_full_sheet() {
+    let mut s = nova();
+    s.exec("set stat MGT 14").unwrap();
+    s.exec("class add Tinker").unwrap();
+    s.exec("feat add \"Rope Climber\"").unwrap();
+    let base = sheet_of(&s);
+    assert_eq!(at(&base, "skills[0]/skill[Climbing]/skill_mod[0]"), "2");
+    assert!(!base.keys().any(|k| k.contains("Climbing (")));
+
+    let m = full_sheet_of(&s);
+    // the skill's own row is unchanged
+    assert_eq!(at(&m, "skills[0]/skill[Climbing]/skill_mod[0]"), "2");
+    let r = "skills[0]/skill[Climbing (Ropes)]";
+    assert_eq!(at(&m, &format!("{}/name[0]", r)), "Climbing (Ropes)");
+    assert_eq!(at(&m, &format!("{}/ranks[0]", r)), "0.0");
+    assert_eq!(at(&m, &format!("{}/skill_mod[0]", r)), "4");
+    assert_eq!(at(&m, &format!("{}/mod[0]", r)), "4");
+    assert_eq!(at(&m, &format!("{}/ability_mod[0]", r)), "2");
+    assert_eq!(at(&m, &format!("{}/misc_mod[0]", r)), "2");
+    assert_eq!(at(&m, &format!("{}/synergy[0]", r)), "Climbing (Ropes)");
+    assert_eq!(at(&m, &format!("{}/trained_total[0]", r)), "4");
+    assert_eq!(
+        at(&m, "skills[0]/skill[Climbing (Walls)]/skill_mod[0]"),
+        "3"
+    );
+    // a declared situation without a bonus gets no row
+    assert!(!m.keys().any(|k| k.contains("Climbing (Cliffs)")));
+
+    // situation rows come right after their skill, in name order
+    let full = sheet::build_full(&s.ch, &s.ctx);
+    let names: Vec<String> = full
+        .child("skills")
+        .unwrap()
+        .children
+        .iter()
+        .filter_map(|c| c.child("name").map(|n| n.text.clone()))
+        .collect();
+    let at_climb = names.iter().position(|n| n == "Climbing").unwrap();
+    assert_eq!(
+        names[at_climb + 1..at_climb + 3],
+        ["Climbing (Ropes)", "Climbing (Walls)"]
+    );
+}
+
+#[test]
+fn spell_concentration_in_the_full_sheet() {
+    let mut s = nova();
+    s.exec("set stat MGT 14").unwrap();
+    s.exec("class add Sage").unwrap();
+    s.exec("class add Sage").unwrap();
+    s.exec("spell add Sage Ember").unwrap();
+    let conc = |m: &HashMap<String, String>| {
+        m.iter()
+            .find(|(k, _)| {
+                k.contains("known_spells") && k.ends_with("spell[Ember]/concentration[0]")
+            })
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(conc(&sheet_of(&s)), None);
+    // caster level 2 + MGT 2
+    assert_eq!(conc(&full_sheet_of(&s)).as_deref(), Some("+4"));
+    let class_conc = |m: &HashMap<String, String>| {
+        m.get("character/spells[0]/known_spells[0]/class[0]/@concentration")
+            .cloned()
+    };
+    assert_eq!(class_conc(&sheet_of(&s)), None);
+    assert_eq!(class_conc(&full_sheet_of(&s)).as_deref(), Some("+4"));
+    // all spells +2, arcane spells +1
+    s.exec("feat add \"Steady Mind\"").unwrap();
+    assert_eq!(conc(&full_sheet_of(&s)).as_deref(), Some("+7"));
+    assert_eq!(class_conc(&full_sheet_of(&s)).as_deref(), Some("+7"));
+}
+
 #[test]
 fn spell_like_books_come_before_saved_lists() {
     let mut s = nova();
@@ -1083,4 +1164,23 @@ fn spell_like_books_come_before_saved_lists() {
     // caster at position 2 (after the race and Sage) knows spells
     s.exec("class add Chanter").unwrap();
     assert_eq!(names(&sheet_of(&s)), ["Morning"]);
+}
+
+#[test]
+fn spell_like_concentration_counts_every_casting_class() {
+    let mut s = nova();
+    s.exec("feat add \"Spark Touched\"").unwrap();
+    s.exec("class add Drifter").unwrap();
+    let conc = |s: &pcgtools::repl::Session| {
+        full_sheet_of(s)
+            .iter()
+            .find(|(k, _)| k.contains("_innate[0]") && k.ends_with("spell[Spark]/concentration[0]"))
+            .map(|(_, v)| v.clone())
+    };
+    // its fixed caster level counts once for each class that casts
+    assert_eq!(conc(&s).as_deref(), Some("+0"));
+    s.exec("class add Sage").unwrap();
+    assert_eq!(conc(&s).as_deref(), Some("+3"));
+    s.exec("class add Chanter").unwrap();
+    assert_eq!(conc(&s).as_deref(), Some("+6"));
 }

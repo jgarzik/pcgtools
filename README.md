@@ -116,8 +116,8 @@ proficiencies, languages, class features, domains, companions and
 spells. `--full` adds what PCGen's fuller sheet shows beyond that: a
 row for each skill situation with a bonus (`Perception (Underwater)`)
 and each spell's concentration. `--compare` lists every value that
-differs from an expected sheet. `pcg vars` shows the variables the data declares and their
-values, by scope.
+differs from an expected sheet. `pcg vars` shows the variables the
+data declares and their values, by scope.
 
 ### Character editor
 
@@ -261,8 +261,11 @@ runtime that can run it:
 
     PCGEN_ROOT=~/src/pcg PCGEN_REF=~/src/pcg/pcgen cargo test --release reference
 
-`REF_ONLY=name` runs one scenario and `REF_VERBOSE=1` prints every
-difference; `PCGEN_JAVA` or `JAVA_HOME` selects the Java runtime.
+A scenario marked `full` is also exported with PCGen's fuller sheet
+template, and the situational skill rows and spell concentration it
+adds must match `pcg sheet --full`; `REF_FULL=1` does this for every
+scenario. `REF_ONLY=name` runs one scenario and `REF_VERBOSE=1` prints
+every difference; `PCGEN_JAVA` or `JAVA_HOME` selects the Java runtime.
 Without their inputs these tests are skipped (with a note on stderr);
 `PCGEN_REQUIRE=root,ref` makes a missing `PCGEN_ROOT` or `PCGEN_REF`
 a failure instead, as continuous integration does.

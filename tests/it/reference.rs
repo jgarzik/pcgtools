@@ -7,6 +7,11 @@
 // PCGen complaints about loading the saved file also fail the test,
 // apart from those it also makes about a bare new character.
 //
+// A scenario with a `full` line is also exported with PCGen's fuller
+// sheet template, and what that sheet adds which pcgtools builds with
+// its fuller sheet (situational skill rows, spell concentration) must
+// match too.  REF_FULL=1 does this for every scenario.
+//
 // Runs only when PCGEN_ROOT names the data checkouts and PCGEN_REF a
 // built PCGen tree (with build/libs, and JavaFX jars in mods/lib);
 // PCGEN_REQUIRE=root,ref makes their absence a failure.
@@ -19,6 +24,7 @@ use pcgtools::pcc::resolve::DataDirs;
 use pcgtools::pcg::character::Character;
 use pcgtools::repl::Session;
 use pcgtools::sheet::{self, Element};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -32,6 +38,8 @@ struct Scenario {
     differs: Vec<(String, String)>,
     /// sheet paths where PCGen's own value changes from run to run
     varies: Vec<String>,
+    /// also compare the fuller sheet's additions
+    full: bool,
 }
 
 /// Parse the scenario file: `== name` starts a scenario, `gamemode`
@@ -50,6 +58,7 @@ fn scenarios(text: &str) -> Vec<Scenario> {
                 commands: Vec::new(),
                 differs: Vec::new(),
                 varies: Vec::new(),
+                full: false,
             });
             continue;
         }
@@ -58,6 +67,8 @@ fn scenarios(text: &str) -> Vec<Scenario> {
             s.gamemode = g.trim().to_string();
         } else if let Some(c) = line.strip_prefix("campaign ") {
             s.campaigns.push(c.trim().to_string());
+        } else if line == "full" {
+            s.full = true;
         } else if let Some(d) = line.strip_prefix("differs ") {
             let (path, why) = d.split_once(" -- ").unwrap_or((d, ""));
             s.differs
@@ -82,13 +93,18 @@ fn java() -> PathBuf {
     "java".into()
 }
 
-/// Export a character's sheet with PCGen: the sheet, and the problems
-/// PCGen reported after loading the character.
+/// PCGen's sheet template for its tests, and its fuller sheet template.
+const BASE_TEMPLATE: &str = "code/testsuite/base-xml.ftl";
+const FULL_TEMPLATE: &str = "outputsheets/base.xml.ftl";
+
+/// Export a character's sheet with PCGen and a sheet template: the
+/// sheet, and the problems PCGen reported after loading the character.
 fn pcgen_sheet(
     reference: &Path,
     data: &Path,
     pcg: &Path,
     work: &Path,
+    template: &str,
 ) -> Result<(Element, Vec<String>), String> {
     let settings = work.join("settings");
     std::fs::create_dir_all(&settings).map_err(|e| e.to_string())?;
@@ -111,11 +127,7 @@ fn pcgen_sheet(
         .arg("pcgen.system.Main")
         .arg("--character")
         .arg(pcg)
-        .args([
-            "--exportsheet",
-            "code/testsuite/base-xml.ftl",
-            "--outputfile",
-        ])
+        .args(["--exportsheet", template, "--outputfile"])
         .arg(&out)
         .arg("--settingsdir")
         .arg(&settings)
@@ -176,8 +188,8 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
         problems.push(format!("save: {}", e));
         return (problems, 0, 0);
     }
-    let (expected, complaints) = match pcgen_sheet(reference, &root.join("pcgen/data"), &pcg, work)
-    {
+    let data = root.join("pcgen/data");
+    let (expected, complaints) = match pcgen_sheet(reference, &data, &pcg, work, BASE_TEMPLATE) {
         Ok(x) => x,
         Err(e) => {
             problems.push(e);
@@ -191,7 +203,7 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
     let bare_pcg = bare.join("bare.pcg");
     let mut b = Session::create(&s.gamemode, &s.campaigns, "bare", dirs.clone());
     let baseline = match b.exec(&format!("save \"{}\"", bare_pcg.display())) {
-        Ok(_) => pcgen_sheet(reference, &root.join("pcgen/data"), &bare_pcg, &bare)
+        Ok(_) => pcgen_sheet(reference, &data, &bare_pcg, &bare, BASE_TEMPLATE)
             .map(|(_, c)| c)
             .unwrap_or_default(),
         Err(_) => Vec::new(),
@@ -205,7 +217,21 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
     // our sheet is built from the saved file, as PCGen's is
     let ch = Character::read(&pcg).unwrap();
     let ctx = Context::for_character(&ch, dirs);
-    let diff = sheet::compare(&expected, &sheet::build(&ch, &ctx));
+    let ours = sheet::build(&ch, &ctx);
+    let mut diff = sheet::compare(&expected, &ours);
+    if s.full || std::env::var_os("REF_FULL").is_some() {
+        let full = work.join("full");
+        std::fs::create_dir_all(&full).unwrap();
+        match pcgen_sheet(reference, &data, &pcg, &full, FULL_TEMPLATE) {
+            Ok((fuller, _)) => {
+                let ours_full = sheet::build_full(&ch, &ctx);
+                let d = compare_additions(&expected, &fuller, &ours, &ours_full);
+                diff.total += d.total;
+                diff.mismatches.extend(d.mismatches);
+            }
+            Err(e) => problems.push(format!("fuller sheet: {}", e)),
+        }
+    }
     for (p, want, got) in &diff.mismatches {
         if !s.differs.iter().any(|(d, _)| d == p) && !s.varies.contains(p) {
             problems.push(format!("{} want {:?} got {:?}", p, want, got));
@@ -221,6 +247,74 @@ fn run(s: &Scenario, root: &Path, reference: &Path, work: &Path) -> (Vec<String>
         }
     }
     (problems, diff.matched(), diff.total)
+}
+
+/// The name of the skill row a sheet path is in.
+fn skill_row(path: &str) -> Option<&str> {
+    path.strip_prefix("character/skills[0]/skill[")?
+        .split_once("]/")
+        .map(|(n, _)| n)
+}
+
+/// The skill rows of a sheet.
+fn skill_rows(sheet: &Element) -> HashSet<String> {
+    sheet
+        .flatten()
+        .iter()
+        .filter_map(|(p, _)| skill_row(p).map(str::to_string))
+        .collect()
+}
+
+/// Compare what PCGen's fuller sheet adds to its base sheet with what
+/// ours adds: skill rows for situations, and spell concentration.
+fn compare_additions(
+    base: &Element,
+    fuller: &Element,
+    ours_base: &Element,
+    ours: &Element,
+) -> sheet::Diff {
+    let base_rows = skill_rows(base);
+    // the values of the added skill rows we also show for a skill's
+    // own row, and concentration wherever it is
+    let added = |p: &str| match skill_row(p) {
+        Some(n) => {
+            !base_rows.contains(n) && !p.ends_with("/classes[0]") && !p.ends_with("/type[0]")
+        }
+        None => {
+            p.starts_with("character/spells[0]/")
+                && (p.ends_with("/concentration[0]") || p.ends_with("/@concentration"))
+        }
+    };
+    let ours = ours.flatten();
+    let got: HashMap<&str, &str> = ours.iter().map(|(p, v)| (p.as_str(), v.as_str())).collect();
+    let mut d = sheet::Diff::default();
+    let mut rows: HashSet<String> = HashSet::new();
+    for (p, want) in fuller.flatten().into_iter().filter(|(p, _)| added(p)) {
+        if let Some(n) = skill_row(&p) {
+            rows.insert(n.to_string());
+        }
+        d.total += 1;
+        let g = got.get(p.as_str()).copied();
+        if g != Some(want.as_str()) {
+            d.mismatches.push((p, want, g.map(str::to_string)));
+        }
+    }
+    // a situation row of ours that PCGen does not show
+    let ours_rows = skill_rows(ours_base);
+    let extra: BTreeSet<&str> = ours
+        .iter()
+        .filter_map(|(p, _)| skill_row(p))
+        .filter(|n| !ours_rows.contains(*n) && !rows.contains(*n))
+        .collect();
+    for n in extra {
+        d.total += 1;
+        d.mismatches.push((
+            format!("character/skills[0]/skill[{}]", n),
+            String::new(),
+            Some("a row PCGen does not show".into()),
+        ));
+    }
+    d
 }
 
 #[test]

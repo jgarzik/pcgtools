@@ -6,11 +6,13 @@
 # campaign KEY       a campaign to use (repeatable)
 # differs PATH -- WHY  a sheet value where PCGen is known to be wrong
 # varies PATH -- WHY   one where PCGen is only sometimes wrong
+# full               also compare what PCGen's fuller sheet adds
 # anything else      an editor command, as typed in `pcgtools repl`
 
 == fighter_35e
 gamemode 35e
 campaign 3.5 RSRD - Campaign Set - Core Books I - III
+full
 set stat STR 16
 set stat DEX 13
 set stat CON 14
@@ -209,6 +211,7 @@ class add Soldier
 == cleric_pf
 gamemode Pathfinder
 campaign Core Rulebook
+full
 set stat WIS 16
 set stat CON 14
 set stat STR 12
@@ -233,6 +236,7 @@ equip wear Longsword
 == monk_pf
 gamemode Pathfinder
 campaign Core Rulebook
+full
 set stat DEX 16
 set stat WIS 16
 set stat STR 14
@@ -269,6 +273,7 @@ template add "Inherent Strength Bonus +2"
 == rogue_pf_levels
 gamemode Pathfinder
 campaign Core Rulebook
+full
 set stat DEX 17
 set stat INT 14
 race Halfling
@@ -644,6 +649,7 @@ spell prep Cleric Guidance
 == wizard_metamagic_pf
 gamemode Pathfinder
 campaign Core Rulebook
+full
 set stat INT 17
 race Human
 set align LN
@@ -919,3 +925,37 @@ campaign Fantasy Craft Core Rulebook (Demo)
 set stat INT 14
 race Human
 class add Sage --subclass "Sage 1st" --choose Acrobatics --choose Athletics --choose Bluff --choose Impress
+
+== situations_pf
+gamemode Pathfinder
+campaign Core Rulebook
+full
+set stat WIS 14
+set stat DEX 14
+race Dwarf
+set align NG
+class add Ranger
+class add Ranger
+class add Ranger
+skill Survival 3
+skill Acrobatics 2
+equip add "Ring of Jumping"
+equip wear "Ring of Jumping"
+
+== concentration_pf
+gamemode Pathfinder
+campaign Core Rulebook
+campaign Ultimate Magic
+full
+set stat CHA 17
+set stat INT 14
+race Gnome
+set align CG
+class add Sorcerer
+class add Sorcerer
+class add Wizard
+feat add "Combat Casting"
+feat add "Uncanny Concentration"
+spell add Sorcerer "Magic Missile"
+spell add Wizard "Mage Armor"
+spell prep Wizard "Mage Armor"

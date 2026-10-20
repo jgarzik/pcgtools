@@ -334,13 +334,18 @@ impl Session {
     /// character: it lowers a roll above the hit die plus the HD|MAX
     /// bonuses of the class's own line and of its levels below this
     /// one (so a bonus a class grants at level 1 first counts at 2).
+    ///
+    /// `work` is the character already holding the new level.
     fn hit_point_range(&self, work: &Character, cls: &Object, hd: i64) -> (i64, i64) {
         if hd <= 0 {
             return (0, 0);
         }
-        let mut next = work.clone();
-        let level = next.add_level(&cls.key, 0, 0.0);
-        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), &next);
+        let level = work
+            .classes()
+            .iter()
+            .find(|x| x.name.eq_ignore_ascii_case(&cls.key))
+            .map_or(1, |x| x.level);
+        let mut c = Calc::new(&self.ctx.dataset, self.ctx.gamemode.as_ref(), work);
         c.run();
         let b = |t: &str| {
             let own = format!("{};CLASS.{}", t, cls.key);

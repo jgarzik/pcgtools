@@ -902,3 +902,10 @@ equip add "Ring of Sustenance"
 equip wear "Ring of Sustenance"
 equip add "Ring of Swimming"
 equip wear "Ring of Swimming"
+
+== sage_autorank_fantasycraft
+gamemode FantasyCraft
+campaign Fantasy Craft Core Rulebook (Demo)
+set stat INT 14
+race Human
+class add Sage --subclass "Sage 1st" --choose Acrobatics --choose Athletics --choose Bluff --choose Impress

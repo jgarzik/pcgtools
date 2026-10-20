@@ -2071,6 +2071,25 @@ impl Session {
             .flat_map(|sl| adds(&sl.tokens))
             .map(|t| (false, t))
             .collect();
+        // the chosen subclass's own line for this level adds to it
+        let sub = self.calc().subclass_of(o).map(|s| s.key.clone());
+        if let Some(sub) = sub.and_then(|k| o.children.iter().find(|c| c.key == k)) {
+            tokens.extend(
+                sub.sublines
+                    .iter()
+                    .filter(|sl| {
+                        sl.tag == "SUBCLASSLEVEL"
+                            && sl
+                                .value
+                                .split(':')
+                                .next()
+                                .and_then(|v| v.trim().parse().ok())
+                                == Some(level)
+                    })
+                    .flat_map(|sl| adds(&sl.tokens))
+                    .map(|t| (false, t)),
+            );
+        }
         if level == 1 {
             tokens.extend(adds(&o.tokens).into_iter().map(|t| (true, t)));
         }
@@ -2181,12 +2200,67 @@ impl Session {
                         self.ch.add_ability_as(category, &cat, k, nature, &[]);
                     }
                     AddKind::Language => self.ch.add_language(k),
-                    AddKind::ClassSkills => {}
+                    AddKind::ClassSkills => {
+                        if let Some(n) = add.auto_rank() {
+                            if self.buy_auto_ranks(class, k, n) {
+                                done.push(format!("{} ({}, {} ranks)", k, add.set_name(), n));
+                                continue;
+                            }
+                        }
+                    }
                 }
                 done.push(format!("{} ({})", k, add.set_name()));
             }
         }
         Ok(done)
+    }
+
+    /// Buy `n` ranks of a skill just made a class skill of `class` by
+    /// ADD:CLASSSKILLS with AUTORANK, as an ordinary purchase: only if
+    /// the character qualifies for the skill, the class has the points
+    /// at class skill cost, and the ranks stay within the maximum
+    /// (unless the game mode's SKILLMAX rule lifts it).  Otherwise the
+    /// skill is only a class skill, as in PCGen.  Whether ranks were
+    /// bought.
+    fn buy_auto_ranks(&mut self, class: &str, skill: &str, n: u32) -> bool {
+        let Some(sk) = self.ctx.dataset.get(FileKind::Skill, skill) else {
+            return false;
+        };
+        let key = sk.key.clone();
+        let n = f64::from(n);
+        let cost = self
+            .ctx
+            .gamemode
+            .as_ref()
+            .and_then(|g| g.misc("SKILLCOST_CLASS"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(1.0);
+        let (qualifies, within) = {
+            let mut c = self.calc();
+            c.run();
+            let within = c.rule("SKILLMAX")
+                || c.max_ranks(&key)
+                    .is_none_or(|m| c.base_ranks(&key) + c.bonus.total("SKILLRANK", &key) + n <= m);
+            (c.failing_prereqs(sk).is_empty(), within)
+        };
+        if !qualifies || !within || self.ch.skill_points_left(class) < n * cost {
+            return false;
+        }
+        let had: f64 = self
+            .ch
+            .skills()
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(&key))
+            .and_then(|e| {
+                e.ranks
+                    .iter()
+                    .find(|(c, _)| c.eq_ignore_ascii_case(class))
+                    .map(|(_, r)| *r)
+            })
+            .unwrap_or(0.0);
+        self.ch.set_skill_ranks(&key, class, had + n, true);
+        self.ch.spend_skill_points(class, n * cost);
+        true
     }
 
     /// Check choices against what the ability's CHOOSE offers.

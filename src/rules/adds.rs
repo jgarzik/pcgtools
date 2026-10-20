@@ -218,6 +218,19 @@ impl AddToken {
         })
     }
 
+    /// Ranks bought in each skill chosen through ADD:CLASSSKILLS
+    /// (AUTORANK=n), if any.
+    pub fn auto_rank(&self) -> Option<u32> {
+        if self.kind != AddKind::ClassSkills {
+            return None;
+        }
+        self.items
+            .iter()
+            .find_map(|it| it.strip_prefix("AUTORANK="))
+            .and_then(|n| n.trim().parse().ok())
+            .filter(|n| *n > 0)
+    }
+
     /// How many to choose.
     pub fn count(&self, calc: &Calc) -> usize {
         match self.count.trim().parse::<f64>() {
@@ -532,6 +545,17 @@ mod tests {
             lst("LANGUAGE|Orc,Elven,Naru-Toma,Naru"),
             "Elven,Naru,Naru-Toma,Orc"
         );
+    }
+
+    #[test]
+    fn auto_ranks() {
+        let rank = |v: &str| AddToken::parse(v).unwrap().auto_rank();
+        assert_eq!(rank("CLASSSKILLS|4|CROSSCLASSSKILLS,AUTORANK=2"), Some(2));
+        assert_eq!(rank("CLASSSKILLS|AUTORANK=1,Climb"), Some(1));
+        assert_eq!(rank("CLASSSKILLS|2|ANY"), None);
+        assert_eq!(rank("CLASSSKILLS|ANY,AUTORANK=0"), None);
+        assert_eq!(rank("CLASSSKILLS|ANY,AUTORANK=x"), None);
+        assert_eq!(rank("LANGUAGE|AUTORANK=2"), None);
     }
 
     #[test]

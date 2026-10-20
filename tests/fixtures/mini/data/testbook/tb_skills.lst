@@ -4,3 +4,4 @@ Climbing	KEYSTAT:MGT	ACHECK:YES
 Tinkering Flair	KEY:Flair ~ Tinkering	KEYSTAT:GRC	PREVARGT:var("SKILL.Tinkering.MISC"),2
 Gadget Flair	KEY:Flair ~ Gadget	KEYSTAT:GRC	PREVARGT:var("SKILL.Tinkering.MISC"),3
 Swimming	KEYSTAT:MGT	ACHECK:WEIGHT
+Diving	KEYSTAT:MGT	PRESTAT:1,MGT=16

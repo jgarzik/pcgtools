@@ -1454,6 +1454,42 @@ fn resized_containers_scale_their_capacity() {
 }
 
 #[test]
+fn class_skills_chosen_with_auto_ranks() {
+    let mut s = Session::create("Testmode", &["TB".into()], "Pat", dirs());
+    // the subclass's level line offers three class skills with two
+    // ranks each, bought from the level's 4 points while they last;
+    // Diving's prerequisite fails, so it is only made a class skill
+    let out = ok(
+        &mut s,
+        "class add Warden --subclass Pathwarden --choose Diving --choose Climbing --choose Swimming",
+    );
+    assert!(
+        out.contains("chose Climbing (CLASSSKILLS, 2 ranks)"),
+        "{}",
+        out
+    );
+    assert!(out.contains("chose Diving (CLASSSKILLS)\n"), "{}", out);
+    assert_eq!(
+        lines(&s, "CLASSABILITIESLEVEL:Warden=1")[0]
+            .split("|ADD:")
+            .nth(1)
+            .unwrap(),
+        "[CLASSSKILLS:Climbing,Diving,Swimming,Tinkering|CHOICE:Diving|CHOICE:Climbing|CHOICE:Swimming]|SKILLSGAINED:4|SKILLSREMAINING:0"
+    );
+    assert_eq!(
+        lines(&s, "SKILL:"),
+        [
+            "SKILL:Climbing|OUTPUTORDER:1|CLASSBOUGHT:[CLASS:Warden|RANKS:2.0|COST:1|CLASSSKILL:Y]",
+            "SKILL:Swimming|OUTPUTORDER:2|CLASSBOUGHT:[CLASS:Warden|RANKS:2.0|COST:1|CLASSSKILL:Y]"
+        ]
+    );
+    let mut c = Calc::new(&s.ctx.dataset, s.ctx.gamemode.as_ref(), &s.ch);
+    c.run();
+    assert!(c.is_class_skill_for("Diving", "Warden"));
+    assert_eq!(c.base_ranks("Climbing"), 2.0);
+}
+
+#[test]
 fn hit_points_rolled_within_bonus_bounds() {
     let mut s = Session::create("Testmode", &["TB".into()], "Hale", dirs());
     let hp = |s: &Session, cls: &str, n: u32| {

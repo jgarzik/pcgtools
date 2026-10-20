@@ -43,3 +43,13 @@ SKILL:Tongues	RANK:1	SELECTION:Gear Cant,Trade Tongue
 
 STARTPACK:Knack Kit
 ABILITY:CATEGORY=FEAT|Skill Knack(Climbing)
+
+STARTPACK:Veteran Kit
+CLASS:Tinker	LEVEL:6
+CLASS:Drifter	LEVEL:7
+CLASS:Sentinel	LEVEL:1
+
+STARTPACK:Mystic Kit
+CLASS:Chanter	LEVEL:1
+CLASS:Mystic	LEVEL:1
+CLASS:Warden	LEVEL:1

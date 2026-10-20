@@ -497,6 +497,48 @@ fn kit_class_levels_count_like_class_add() {
 }
 
 #[test]
+fn kit_class_levels_follow_class_add() {
+    // a kit's levels are gained as levels added by hand are when no
+    // one is there to choose: what an ADD token grants without a
+    // choice is taken, stat increases wait in the pool, a class stops
+    // at its MAXLEVEL and is not taken without its prerequisites
+    let saved = |cmds: &[&str]| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        let out: Vec<String> = cmds.iter().map(|c| ok(&mut s, c)).collect();
+        let mut l = lines(&s, "CLASS");
+        l.extend(lines(&s, "POOLPOINTS"));
+        (l, out.join("\n"))
+    };
+    let mut by_hand = vec!["class add Tinker --force"; 6];
+    by_hand.extend(vec!["class add Drifter --force"; 5]);
+    let (want, _) = saved(&by_hand);
+    assert!(want.contains(&"POOLPOINTS:2".to_string()), "{:?}", want);
+    let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    assert!(err(&mut s, "class add Sentinel").contains("does not qualify"));
+    for _ in 0..5 {
+        ok(&mut s, "class add Drifter");
+    }
+    let e = err(&mut s, "class add Drifter");
+    assert!(e.contains("Drifter cannot rise above level 5"), "{}", e);
+    let (got, out) = saved(&["kit apply \"Veteran Kit\""]);
+    assert_eq!(got, want);
+    assert!(out.contains("Drifter cannot rise above level 5"), "{}", out);
+    assert!(out.contains("does not qualify for Sentinel"), "{}", out);
+    let (want, _) = saved(&[
+        "class add Chanter",
+        "class add Mystic --force",
+        "class add Warden",
+    ]);
+    assert!(
+        want.iter()
+            .any(|l| l.contains("SPELLCASTER:ANY|CHOICE:Chanter")),
+        "{:?}",
+        want
+    );
+    assert_eq!(saved(&["kit apply \"Mystic Kit\""]).0, want);
+}
+
+#[test]
 fn kit_abilities_carry_their_choice() {
     // the choice is written straight after the name
     let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());

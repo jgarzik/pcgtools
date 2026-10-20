@@ -680,6 +680,18 @@ impl Session {
                 "add" => {
                     let o = self.find(FileKind::Class, arg(2)?)?;
                     let key = o.key.clone();
+                    let level = self
+                        .ch
+                        .classes()
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(&key))
+                        .map_or(0, |c| c.level);
+                    if let Some(m) = self.level_cap(o).filter(|m| level >= *m && !force) {
+                        return Err(Error::Other(format!(
+                            "{} cannot rise above level {} (use --force)",
+                            key, m
+                        )));
+                    }
                     // stat increases the level grants, and those chosen
                     let mut raise = Vec::new();
                     for (i, _) in w.iter().enumerate().filter(|(_, x)| **x == "--stat") {
@@ -2225,6 +2237,47 @@ impl Session {
         true
     }
 
+    /// The highest level a class may reach (MAXLEVEL); none for a
+    /// monster class or one without a limit.
+    fn level_cap(&self, cls: &Object) -> Option<u32> {
+        let mut c = self.calc();
+        c.run();
+        if c.is_monster_class(cls) {
+            return None;
+        }
+        cls.get("MAXLEVEL")?.trim().parse().ok()
+    }
+
+    /// Gain a level of `class` for a kit, as `class add` gains one when
+    /// nobody is there to choose: the most hit points the hit die
+    /// allows, the level's stat increases left in the pool, and of its
+    /// ADD tokens only what they grant without a choice.  Returns what
+    /// was chosen, or None if the class is at its highest level.
+    fn kit_level(&mut self, class: &str) -> Result<Option<Vec<String>>> {
+        let Some(o) = self.ctx.dataset.get(FileKind::Class, class) else {
+            return Ok(None);
+        };
+        let level = self
+            .ch
+            .classes()
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(class))
+            .map_or(0, |c| c.level);
+        if self.level_cap(o).is_some_and(|m| level >= m) {
+            return Ok(None);
+        }
+        let grants = self.stat_increases_for_new_level(o);
+        let (hd, skills, work) = self.new_level_worth(o, &[]);
+        let (_, hp) = self.hit_point_range(&work, o, hd);
+        let lvl = self.ch.add_level(class, hp, skills);
+        if grants > 0 {
+            let n = self.ch.pool_points() + i64::from(grants);
+            self.ch.set_pool_points(n);
+        }
+        let chosen = self.level_choices(class, lvl, &mut VecDeque::new(), true)?;
+        Ok(Some(chosen))
+    }
+
     /// Skill points a rank costs: of a class skill, or another.
     fn rank_cost(&self, class_skill: bool) -> f64 {
         let (tag, d) = if class_skill {
@@ -2676,15 +2729,36 @@ impl Session {
                             kit.key, key
                         )));
                     }
-                    // each level is gained as one added by hand is
-                    for _ in 0..levels {
-                        let (hd, skills, _) = {
-                            let o = self.find(FileKind::Class, &key)?;
-                            self.new_level_worth(o, &[])
-                        };
-                        self.ch.add_level(&key, hd, skills);
+                    let (qualifies, cap) = {
+                        let o = self.find(FileKind::Class, &key)?;
+                        let has = self
+                            .ch
+                            .classes()
+                            .iter()
+                            .any(|c| c.name.eq_ignore_ascii_case(&key));
+                        (has || self.failing(o).is_empty(), self.level_cap(o))
+                    };
+                    if !qualifies {
+                        short.push(format!("the character does not qualify for {}", key));
+                        continue;
                     }
-                    done.push(format!("{} {}", key, levels));
+                    // each level is gained as one added by hand is
+                    let mut gained = 0;
+                    for _ in 0..levels {
+                        let Some(chosen) = self.kit_level(&key)? else {
+                            short.push(format!(
+                                "{} cannot rise above level {}",
+                                key,
+                                cap.unwrap_or(0)
+                            ));
+                            break;
+                        };
+                        gained += 1;
+                        done.extend(chosen);
+                    }
+                    if gained > 0 {
+                        done.push(format!("{} {}", key, gained));
+                    }
                 }
                 _ => {}
             }

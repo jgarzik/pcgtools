@@ -571,6 +571,9 @@ impl Session {
                     if int_before {
                         raise_stats(&mut work, &raise);
                     }
+                    // the level is held while it is counted, so what the
+                    // class defines (a variable its points read) applies
+                    work.add_level(&key, 0, 0.0);
                     // the hit die as the rules adjust it (a class without
                     // one gains no rolled hit points) and the skill points
                     // this level is worth, as the rules count them now

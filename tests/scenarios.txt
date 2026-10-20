@@ -124,6 +124,19 @@ race Human
 class add Strong
 class add Strong
 
+# the class's points come from a variable it defines, so they count
+# only with the level held; the ranks bought need all of them
+== fast_hero_pulp
+gamemode Modern
+campaign Pulp Fantasy Roleplaying Game
+set stat DEX 15
+race Human
+class add Fast
+class add Fast
+skill Balance 5
+skill Hide 5
+skill Tumble 5
+
 == fighter_5e
 gamemode 5e
 campaign 5e - System Reference Document

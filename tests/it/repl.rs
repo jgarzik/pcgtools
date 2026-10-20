@@ -426,6 +426,23 @@ fn bonus_skill_points_for_class_and_character_levels() {
 }
 
 #[test]
+fn skill_points_count_variables_the_class_defines() {
+    // a class whose points come from a variable it defines is counted
+    // with the new level held; this game mode never recounts them, so
+    // the saved pool must be right as gained
+    let gained = |class: &str| {
+        let mut s = Session::create("Testmode", &["TB".into()], "Nova", dirs());
+        ok(&mut s, &format!("class add {}", class));
+        let saved = Character::from_pcg(PcgFile::parse(&pcg_text(&s)));
+        saved.skill_points_left(class)
+    };
+    // Drillmaster's 3 points are one fewer than Tinker's STARTSKILLPTS:4
+    let tinker = gained("Tinker");
+    assert!(tinker >= 2.0, "{}", tinker);
+    assert_eq!(gained("Drillmaster"), tinker - 1.0);
+}
+
+#[test]
 fn monster_skill_points() {
     // skill points gained by each level of a class, after some commands
     let gains = |class: &str, setup: &[&str], n: usize| {

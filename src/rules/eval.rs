@@ -159,7 +159,7 @@ fn call(name: &str, args: &[Expr], env: &dyn Env) -> f64 {
 /// and whose every name resolves is evaluated normally.  Otherwise
 /// (an unknown name, even in a branch not taken, an unknown function,
 /// or text that does not parse) PCGen falls back to its older reader,
-/// reproduced by [`legacy`]: unknown names are reported as usual and
+/// reproduced by `legacy`: unknown names are reported as usual and
 /// then count as zero, and operators no longer have precedence.
 /// (PCGen also caches the result; that is not modeled.)
 pub fn eval_str(s: &str, env: &dyn Env) -> f64 {

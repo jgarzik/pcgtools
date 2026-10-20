@@ -46,7 +46,8 @@ struct Scenario {
 }
 
 /// Parse the scenario file: `== name` starts a scenario, `gamemode`
-/// and `campaign` lines set it up, other lines are editor commands.
+/// and `campaign` lines set it up, `differs`, `varies`, `full` and
+/// `warns` lines adjust the checks, other lines are editor commands.
 fn scenarios(text: &str) -> Vec<Scenario> {
     let mut out: Vec<Scenario> = Vec::new();
     for line in text.lines().map(str::trim) {

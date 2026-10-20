@@ -1041,6 +1041,20 @@ impl Character {
         }
     }
 
+    /// Record a choice made with a skill's ranks (a language, say).
+    pub fn add_skill_choice(&mut self, skill: &str, choice: &str) {
+        let Some(i) = self.pcg.indices("SKILL").into_iter().find(|&i| {
+            self.pcg.lines[i]
+                .head()
+                .is_some_and(|h| h.value_text().eq_ignore_ascii_case(skill))
+        }) else {
+            return;
+        };
+        let mut elems = self.pcg.lines[i].elems.clone().unwrap_or_default();
+        elems.push(Elem::text("ASSOCIATEDDATA", choice));
+        self.pcg.lines[i].set_elems(elems);
+    }
+
     /// Record choices made for an ADD token of a class level:
     /// `ADD:[SET:what|CHOICE:...]`, placed before the level's stat
     /// changes and skill points.

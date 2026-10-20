@@ -888,19 +888,7 @@ impl Session {
                 let per_rank = {
                     let mut c = self.calc();
                     c.run();
-                    let cost = |tag: &str, d: f64| {
-                        self.ctx
-                            .gamemode
-                            .as_ref()
-                            .and_then(|g| g.misc(tag))
-                            .and_then(|v| v.trim().parse().ok())
-                            .unwrap_or(d)
-                    };
-                    if c.is_class_skill_for(&key, &class) {
-                        cost("SKILLCOST_CLASS", 1.0)
-                    } else {
-                        cost("SKILLCOST_CROSSCLASS", 2.0)
-                    }
+                    self.rank_cost(c.is_class_skill_for(&key, &class))
                 };
                 let had: f64 = self
                     .ch
@@ -2237,6 +2225,195 @@ impl Session {
         true
     }
 
+    /// Skill points a rank costs: of a class skill, or another.
+    fn rank_cost(&self, class_skill: bool) -> f64 {
+        let (tag, d) = if class_skill {
+            ("SKILLCOST_CLASS", 1.0)
+        } else {
+            ("SKILLCOST_CROSSCLASS", 2.0)
+        };
+        self.ctx
+            .gamemode
+            .as_ref()
+            .and_then(|g| g.misc(tag))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(d)
+    }
+
+    /// Buy the ranks of a kit's SKILL line, as a level's skill points
+    /// are spent: RANK ranks (one by default) in each of its first
+    /// COUNT skills (one by default; nobody is asked to choose), paid
+    /// from the points of the class the line names (CLASS) and then of
+    /// each class in turn, at that class's cost and within the maximum
+    /// ranks.  A free line (FREE:YES) costs no points.  A skill the
+    /// character does not qualify for, or an exclusive one the class
+    /// lacks, is not bought.  A skill that chooses languages takes
+    /// those of SELECTION it offers, one a rank.
+    fn kit_skill(
+        &mut self,
+        sl: &crate::dataset::SubLine,
+        done: &mut Vec<String>,
+        short: &mut Vec<String>,
+    ) -> Result<()> {
+        let tok = |t: &str| {
+            sl.tokens
+                .iter()
+                .find(|x| x.tag == t)
+                .map(|x| x.value.trim().to_string())
+        };
+        let want: f64 = tok("RANK")
+            .and_then(|v| v.parse().ok())
+            .filter(|n: &f64| n.is_finite() && *n >= 0.0)
+            .unwrap_or(1.0);
+        let free = tok("FREE").is_some_and(|v| v.to_ascii_uppercase().starts_with('Y'));
+        let count: usize = tok("COUNT").and_then(|v| v.parse().ok()).unwrap_or(1);
+        let mut skills: Vec<String> = Vec::new();
+        for part in sl.value.split('|').map(str::trim) {
+            if let Some(t) = part
+                .strip_prefix("TYPE=")
+                .or_else(|| part.strip_prefix("TYPE."))
+            {
+                for o in self.ctx.dataset.objects(FileKind::Skill) {
+                    if t.split('.').all(|x| o.is_type(x)) && !skills.contains(&o.key) {
+                        skills.push(o.key.clone());
+                    }
+                }
+            } else {
+                let key = self.find(FileKind::Skill, part)?.key.clone();
+                if !skills.contains(&key) {
+                    skills.push(key);
+                }
+            }
+        }
+        skills.truncate(count.max(1));
+        // the named class pays first
+        let mut classes: Vec<String> = Vec::new();
+        if let Some(c) = tok("CLASS") {
+            match self
+                .ch
+                .classes()
+                .into_iter()
+                .find(|x| x.name.eq_ignore_ascii_case(&c))
+            {
+                Some(x) => classes.push(x.name),
+                None => short.push(format!("the character has no {} levels to buy skills", c)),
+            }
+        }
+        for x in self.ch.classes() {
+            if !classes.contains(&x.name) {
+                classes.push(x.name);
+            }
+        }
+        for key in skills {
+            let mut left = want;
+            for class in &classes {
+                if left <= 0.0 {
+                    break;
+                }
+                let pool = self.ch.skill_points_left(class);
+                if !free && pool <= 0.0 {
+                    continue;
+                }
+                let (class_skill, room, ok) = {
+                    let mut c = self.calc();
+                    c.run();
+                    let sk = self.ctx.dataset.get(FileKind::Skill, &key);
+                    let class_skill = c.is_class_skill_for(&key, class);
+                    let exclusive =
+                        sk.is_some_and(|s| s.get("EXCLUSIVE").is_some_and(|v| v == "YES"));
+                    let qualifies = sk.is_none_or(|s| c.failing_prereqs(s).is_empty());
+                    let room = match c.max_ranks(&key) {
+                        Some(m) if !c.rule("SKILLMAX") => {
+                            m - c.base_ranks(&key) - c.bonus.total("SKILLRANK", &key)
+                        }
+                        _ => f64::INFINITY,
+                    };
+                    (class_skill, room, qualifies && (class_skill || !exclusive))
+                };
+                if !ok {
+                    continue;
+                }
+                let cost = self.rank_cost(class_skill);
+                let mut n = left.min(room);
+                if !free && cost > 0.0 {
+                    n = n.min((pool / cost).floor());
+                }
+                if n <= 0.0 {
+                    continue;
+                }
+                let had: f64 = self
+                    .ch
+                    .skills()
+                    .iter()
+                    .find(|e| e.name.eq_ignore_ascii_case(&key))
+                    .and_then(|e| {
+                        e.ranks
+                            .iter()
+                            .find(|(c, _)| c.eq_ignore_ascii_case(class))
+                            .map(|(_, r)| *r)
+                    })
+                    .unwrap_or(0.0);
+                self.ch.set_skill_ranks(&key, class, had + n, class_skill);
+                if !free {
+                    self.ch.spend_skill_points(class, n * cost);
+                }
+                left -= n;
+            }
+            let bought = want - left;
+            if left > 0.0 {
+                short.push(format!("could not add {} ranks to {}", left, key));
+            }
+            if bought <= 0.0 {
+                continue;
+            }
+            done.push(format!("{} {}", key, bought));
+            if let Some(sel) = tok("SELECTION") {
+                self.kit_skill_languages(&key, &sel, bought);
+            }
+        }
+        Ok(())
+    }
+
+    /// Languages a kit chooses with ranks in a skill that offers them
+    /// (CHOOSE:LANG): those listed that it offers and the character
+    /// lacks, one a rank.
+    fn kit_skill_languages(&mut self, skill: &str, list: &str, ranks: f64) {
+        let offered = {
+            let mut c = self.calc();
+            c.run();
+            self.ctx
+                .dataset
+                .get(FileKind::Skill, skill)
+                .filter(|s| {
+                    s.get("CHOOSE")
+                        .is_some_and(|v| v.to_ascii_uppercase().starts_with("LANG"))
+                })
+                .and_then(|s| crate::rules::pools::candidates(&c, s))
+                .unwrap_or_default()
+        };
+        let mut limit = ranks.floor() as usize;
+        for name in list.split(',').map(str::trim) {
+            if limit == 0 {
+                break;
+            }
+            let Some(lang) = offered.iter().find(|x| x.eq_ignore_ascii_case(name)) else {
+                continue;
+            };
+            if self
+                .ch
+                .languages()
+                .iter()
+                .any(|l| l.eq_ignore_ascii_case(lang))
+            {
+                continue;
+            }
+            let lang = lang.clone();
+            self.ch.add_language(&lang);
+            self.ch.add_skill_choice(skill, &lang);
+            limit -= 1;
+        }
+    }
+
     /// Check choices against what the ability's CHOOSE offers.
     fn check_choices(&self, o: &Object, choices: &[String], force: bool) -> Result<()> {
         let Some(choose) = o.get("CHOOSE") else {
@@ -2447,16 +2624,7 @@ impl Session {
                         done.push(key);
                     }
                 }
-                "SKILL" => {
-                    let ranks: f64 = tok("RANK").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-                    if let Some(class) = self.ch.levels().last().map(|l| l.class.clone()) {
-                        for k in val.split('|') {
-                            let key = self.find(FileKind::Skill, k)?.key.clone();
-                            self.ch.set_skill_ranks(&key, &class, ranks, true);
-                            done.push(format!("{} {}", key, ranks));
-                        }
-                    }
-                }
+                "SKILL" => self.kit_skill(sl, &mut done, &mut short)?,
                 "LANGUAGE" | "LANGAUTO" => {
                     for k in val.split('|') {
                         let key = self.find(FileKind::Language, k)?.key.clone();

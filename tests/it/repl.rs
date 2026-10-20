@@ -497,6 +497,70 @@ fn kit_class_levels_count_like_class_add() {
 }
 
 #[test]
+fn kit_skills_draw_from_the_skill_pool() {
+    let new = || Session::create("Testmode", &["TB".into()], "Nova", dirs());
+    let ranks = |s: &Session| -> Vec<(String, Vec<(String, f64)>)> {
+        s.ch.skills()
+            .into_iter()
+            .map(|e| (e.name, e.ranks))
+            .collect()
+    };
+    let r = |k: &str, c: &str, n: f64| (k.to_string(), vec![(c.to_string(), n)]);
+    let gained = |class: &str| {
+        let mut s = new();
+        ok(&mut s, &format!("class add {}", class));
+        s.ch.skill_points_left(class)
+    };
+    let tinker = gained("Tinker");
+    assert!(tinker >= 4.0, "{}", tinker);
+    // a class skill costs a point a rank, another skill two; a free
+    // line costs nothing
+    let mut s = new();
+    ok(&mut s, "kit apply \"Study Kit\"");
+    assert_eq!(s.ch.skill_points_left("Tinker"), tinker - 4.0);
+    assert_eq!(
+        ranks(&s),
+        [
+            r("Tinkering", "Tinker", 2.0),
+            r("Climbing", "Tinker", 1.0),
+            r("Swimming", "Tinker", 1.0)
+        ]
+    );
+    let sk = lines(&s, "SKILL:");
+    assert!(sk[0].contains("COST:1|CLASSSKILL:Y"), "{:?}", sk);
+    assert!(sk[1].contains("COST:2|CLASSSKILL:N"), "{:?}", sk);
+    // only the ranks the points pay for
+    let drill = gained("Drillmaster");
+    let mut s = new();
+    let out = ok(&mut s, "kit apply \"Cram Kit\"");
+    let bought = (drill / 2.0).floor().min(2.0);
+    assert!(bought < 2.0, "{}", drill);
+    assert_eq!(ranks(&s), [r("Climbing", "Drillmaster", bought)]);
+    assert_eq!(s.ch.skill_points_left("Drillmaster"), drill - 2.0 * bought);
+    assert!(out.contains("could not add"), "{}", out);
+    // CLASS: names the class whose points pay, at its cost
+    let mut s = new();
+    ok(&mut s, "class add Tinker");
+    ok(&mut s, "class add Drillmaster");
+    ok(&mut s, "kit apply \"Second Kit\"");
+    assert_eq!(ranks(&s), [r("Tinkering", "Drillmaster", 1.0)]);
+    assert_eq!(s.ch.skill_points_left("Drillmaster"), drill - 2.0);
+    assert_eq!(s.ch.skill_points_left("Tinker"), tinker);
+    // one of several skills (the first, as no one chooses); none the
+    // character does not qualify for; a skill's languages from those
+    // listed, one a rank
+    let mut s = new();
+    ok(&mut s, "kit apply \"Pick Kit\"");
+    assert_eq!(
+        ranks(&s),
+        [r("Climbing", "Tinker", 1.0), r("Tongues", "Tinker", 1.0)]
+    );
+    assert_eq!(s.ch.skills()[1].associated.as_deref(), Some("Gear Cant"));
+    assert!(s.ch.languages().contains(&"Gear Cant".to_string()));
+    assert!(!s.ch.languages().contains(&"Trade Tongue".to_string()));
+}
+
+#[test]
 fn monster_skill_points() {
     // skill points gained by each level of a class, after some commands
     let gains = |class: &str, setup: &[&str], n: usize| {

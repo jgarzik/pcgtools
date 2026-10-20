@@ -21,3 +21,22 @@ STARTPACK:Drill Kit	APPLY:INSTANT
 CLASS:Drillmaster	LEVEL:2
 STARTPACK:Legion Kit
 CLASS:Tinker	LEVEL:1000000000
+
+STARTPACK:Study Kit
+CLASS:Tinker	LEVEL:1
+SKILL:Tinkering	RANK:2
+SKILL:Climbing	RANK:1
+SKILL:Swimming	RANK:1	FREE:YES
+
+STARTPACK:Cram Kit
+CLASS:Drillmaster	LEVEL:1
+SKILL:Climbing	RANK:2
+
+STARTPACK:Second Kit
+SKILL:Tinkering	RANK:1	CLASS:Drillmaster
+
+STARTPACK:Pick Kit
+CLASS:Tinker	LEVEL:1
+SKILL:Climbing|Swimming	RANK:1
+SKILL:Diving	RANK:1
+SKILL:Tongues	RANK:1	SELECTION:Gear Cant,Trade Tongue

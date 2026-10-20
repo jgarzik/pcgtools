@@ -528,11 +528,18 @@ earlier tokens before (or instead of) being added:
 | `TAG:.CLEAR|value` | remove every earlier `TAG` token, then add `TAG:value` |
 | `PRE:.CLEAR` | remove every earlier prerequisite token (`PRExxx` and `!PRExxx`) |
 
-For `.CLEAR.x`, an earlier value matches when it equals *x*, when one
-of its `|`-separated parts equals *x* (both ignoring case), or when *x*
-read as a regular expression matches somewhere in it. So after
-`CSKILL:Climb|Swim`, the token `CSKILL:.CLEAR.Swim` removes the whole
-`Climb|Swim` token, not only `Swim`.
+In list tags, `.CLEAR.x` is one item of the list and may sit among
+items being added; it removes just the item *x* (ignoring case) from
+earlier tokens of the tag, dropping a token left empty. The list tags
+are `CSKILL`, `CCSKILL`, `MONCSKILL`, `MONCCSKILL`, `RACESUBTYPE` and
+`VISION` (items separated by `|`), `LANGBONUS` and `DOMAINS` (by `,`,
+before any `|` prerequisites), and `ABILITY` (by `|` after the category
+and nature, clearing only abilities of the same category and nature).
+So after `CSKILL:Climb|Swim`, the token `CSKILL:.CLEAR.Swim` leaves
+`CSKILL:Climb`. For other tags an earlier value matches when it
+equals *x*, when one of its `|`-separated parts equals *x* (both
+ignoring case), or when *x* read as a regular expression matches
+somewhere in it, and the whole token is removed.
 
 A `KEY` token changes the object's key; an `ABB` token does so for
 sizes, stats and alignments; a `CATEGORY` token changes an ability's
@@ -985,6 +992,7 @@ Unknown `&...;` sequences are left as they are.
 | `CALCEQUIPSET:id` | the equipment set used for calculations |
 | `DEITY:key|...`, `DOMAIN:key|...` | deity and domains |
 | `SPELLBOOK`, `SPELLNAME`, `SPELLLIST` | spells known and prepared |
+| `FOLLOWER:name|TYPE:list|RACE:key|FILE:path|...` | a follower or companion; PCGen keeps it only when it has a name and list and its file is found (beside the character's file, or as written), so the sheet leaves out the others and `pcg lint` warns of them |
 | `NOTE`, `CHARACTERBIO`, `CHARACTERDESC`, ... | notes and descriptions |
 
 Objects are referred to by key; abilities by category and key.
@@ -1197,26 +1205,36 @@ is printed as JSON.
 
 **Ability pools.** Each ability category (from data and from the game
 mode, with `FEAT` always present) is a pool. Its size is the
-`ABILITYPOOL.<category>` bonus total; the `FEAT` pool adds the level
-feats below. Points spent are, over the abilities chosen (`NORMAL`)
+`ABILITYPOOL.<category>` bonus total. The `FEAT` pool is instead
+`FEAT.POOL` + the level feats below (with `FEAT.PCPOOL` added to the
+feat schedule's fraction before rounding down) + `FEAT.MONSTERPOOL`
+rounded down + `ABILITYPOOL.FEAT` rounded down, the sum rounded down.
+Points spent are, over the abilities chosen (`NORMAL`)
 from that pool, the ability's `COST` (default 1) times its number of
 choices (at least 1). Level feats are:
 
 * the race's `STARTFEATS`;
 * for each class with `LEVELSPERFEAT:p` (p > 0), floor(level / p);
   `LEVELSPERFEAT:0` gives none;
-* for each game mode `BONUSFEATLEVELSTARTINTERVAL:start|interval`, over
-  the levels of classes without `LEVELSPERFEAT`: none below *start*,
-  else (levels − start) / interval + 1 (just 1 when *interval* is 0).
+* for the game mode's first `BONUSFEATLEVELSTARTINTERVAL:start|interval`,
+  over the levels of classes without `LEVELSPERFEAT`: none below
+  *start*, else (levels − start) / interval + 1 (just 1 when *interval*
+  is 0).
 
 **Skill points per level** (for a class level gained at character
 level *n*):
 
 1. *sp* = the class's `STARTSKILLPTS` formula + `SKILLPOINTS.NUMBER`.
+   For a monster class, a positive `MONSKILLPTS.LOCKNUMBER` replaces
+   *sp*; otherwise at level 1 a nonzero `MONSKILLPTS.NUMBER` (plus the
+   class's `MONSKILL` while the character has one level) does. Levels
+   after the first up to the `MONNONSKILLHD.NUMBER` total (with the
+   classes' `MONNONSKILLHD`) get 0.
 2. Unless the class has `MODTOSKILLS:NO`, add the stats'
    `MODSKILLPOINTS.NUMBER` bonuses; at least 1.
 3. Add the race's `XTRASKILLPTSPERLVL`; at least 1 if step 1 was
-   positive, else at least 0.
+   positive, else at least 0. Then add the templates'
+   `BONUSSKILLPOINTS`.
 4. If `MINCLASSSKILLPOINTS.NUMBER` is positive and the class and stat
    part falls below it, raise that part to the minimum.
 5. Multiply by the race's `SKILLMULT` at level 1, else by the game
@@ -1277,6 +1295,7 @@ heights and weights follow the game mode's default unit set
 | `bab` | `COMBAT.BASEAB` |
 | `alignment` | blank unless `ALIGNMENTFEATURE` is `YES` (7.4) |
 | `experience/next_level` | minimum experience for the next level |
+| `experience/factor`, `penalty` | 100% less 20% for each class with an experience penalty (its subclass when chosen; class types with `XPPENALTY:NO` are exempt) that is not favored and is more than one level below the highest such class; with any class favored (`HIGHESTLEVELCLASS`), the highest is passed over too; cut to a whole percent |
 | `face` | the last race/template `FACE` (default 5), or the `FACE` control variable (or a data-declared `Face`); squares by the game mode `SQUARESIZE` (default 5) |
 | `race` | the race's output name; without a race, that of the race whose `GROUP` is `Unselected` |
 | `deity` | the chosen deity, else the data's default (`DEFAULTVARIABLEVALUE:DEITY`); a default naming no loaded deity shows that name with every other field blank |
@@ -1350,6 +1369,7 @@ second head (`ALTTYPE`) after a `/`.
 | `num_attacks` | length of the attack sequence + natural extra attacks + `WEAPON.ATTACKS` |
 | `feat/hit`, `feat/damage` | weapon bonuses from feats; for a weapon with no proficiency object, also feat bonuses to `WEAPONPROF=` its name |
 | wield category | `WIELD` adjusted for size, then stepped along the `WIELDCATEGORY` `UP`/`DOWN` lists by `WEAPONPROF=key\|WIELDCATEGORY`, the most negative `WEAPONPROF=TYPE.x\|WIELDCATEGORY` over the item's types, and the item's `WEAPON\|WIELDCATEGORY` |
+| unarmed damage | the best of 1d2, the race's 1d3 scaled by size, the `UDAM` of the race, templates and abilities, and each class's `UDAM` from its last level line at or below its level moved by `UDAM.CLASS.x` bonus levels |
 | two-handed weapon not held in two hands | `N/A` |
 | game mode with no `Light` or `OneHanded` wield category | to-hit and damage empty for the unarmed strike and weapons with a proficiency (PCGen cannot tell how they are wielded) |
 
@@ -1407,7 +1427,7 @@ automatic spells, domain lists and `SPELLKNOWN` grants.
 | stat limit | when the casting stat (`MAXLEVELSTAT`) is too low for a level, only bonuses count |
 | specialty / domain slot | `cast` shows `+N` for specialty spells, `+1` for a divine caster's domain slot |
 | DC | the game mode `SPELLBASEDC` (default `10+SPELLLEVEL+BASESPELLSTAT`) + `DC` bonuses (all spells, spell, class, domain, type, school, subschool, descriptor); blank when the spell allows no save |
-| range | the game mode `SPELLRANGE` formula at the caster level, as `Name (distance)` |
+| range | the game mode `SPELLRANGE` formula at the caster level (for close, medium and long ranges without one, 25 + 5 per two levels, 100 + 10, 400 + 40 per level), as `Name (distance)`; a prepared spell's metamagic feats in turn add their `SPELL.RANGE` and multiply by their `SPELL.RANGEMULT` |
 | concentration | fuller sheet only, signed, blank without a game mode `SPELLBASECONCENTRATION`: that formula (`CASTERLEVEL`, `BASESPELLSTAT`, `SPELLLEVEL`) + metamagic `CONCENTRATION.FEATBONUS` + `CONCENTRATION` bonuses as for DC (`TYPE=x` is `TYPE.x`); a spell without a class has as caster level the sum over every casting class; a class's own concentration (its `known_spells` attribute) is that of a blank spell |
 
 Spell books are numbered in order: known spells, innate, the books of
